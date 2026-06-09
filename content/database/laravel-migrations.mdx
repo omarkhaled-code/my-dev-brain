@@ -1,0 +1,853 @@
+---
+title: "Laravel Migrations"
+description: "How to create, modify, and manage database tables in Laravel using migrations — covering column types, indexes, foreign keys, rollbacks, and SQLite vs MySQL differences."
+category: database
+tools: [laravel, mysql, sqlite]
+tags: [migrations, laravel, database, mysql, sqlite, schema, foreign-keys, indexes]
+difficulty: beginner
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+Migrations are version control for your database. Instead of manually creating tables in phpMyAdmin or a SQL client, you write PHP classes that describe your table structure. Laravel runs these classes in order and tracks which ones have been executed.
+
+**Mental model:** Think of migrations like Git commits for your database. Each migration is a commit that changes the database structure. You can go forward (`migrate`) or backward (`migrate:rollback`) just like `git checkout`.
+```tsx
+php artisan migrate          ← runs all pending migrations (git push)
+php artisan migrate:rollback ← undoes the last batch (git revert)
+php artisan migrate:fresh    ← drops everything and starts over (git reset --hard)
+php artisan migrate:status   ← shows which migrations ran (git log)
+```
+
+**Migration file anatomy:**
+```tsx
+database/migrations/
+├── 2024_01_01_000000_create_users_table.php
+├── 2024_01_01_000001_create_posts_table.php
+├── 2024_06_01_120000_add_bio_to_users_table.php
+└── 2024_06_15_093000_create_order_items_table.php
+↑ timestamp     ↑ descriptive name
+
+```
+
+<Callout type="note">
+  **SQLite vs MySQL:** SQLite is a file-based database — perfect for local
+  development and testing because it needs zero setup. MySQL is a full server
+  database used in production. Most Laravel migrations work identically on
+  both, but there are a few differences covered in the SQLite vs MySQL section
+  below.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **Team collaboration:** Everyone runs `php artisan migrate` and gets the exact same database structure.
+- **Version control:** Database changes live in Git alongside your code — no more "works on my machine."
+- **Rollback safety:** Made a mistake? `migrate:rollback` undoes it cleanly.
+- **Environment consistency:** Same migrations run on local SQLite, staging MySQL, and production MySQL.
+
+---
+
+## Real-World Use Cases
+
+- **New project:** Create `users`, `posts`, `categories` tables from scratch.
+- **Adding a feature:** Add a `bio` column to `users` without touching existing data.
+- **Fixing a mistake:** Rollback a bad migration before it reaches production.
+- **Renaming a column:** Add a new column, copy data, drop old column — safely.
+- **Performance fix:** Add an index to a frequently queried column.
+
+---
+
+## Code Examples
+
+### Create a Migration
+
+```bash
+# Create a new table
+php artisan make:migration create_posts_table
+
+# Add a column to existing table
+php artisan make:migration add_bio_to_users_table
+
+# Naming convention matters:
+# create_{table}_table       → Laravel suggests $table->id() and timestamps()
+# add_{column}_to_{table}    → descriptive, tells you what it does
+# drop_{column}_from_{table} → for removing columns
+# rename_{table}_table       → for renaming tables
+```
+
+---
+
+### Basic Migration Structure
+
+```php
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    // Runs when you do: php artisan migrate
+    public function up(): void
+    {
+        Schema::create('posts', function (Blueprint $table) {
+            $table->id();                    // BIGINT unsigned auto-increment primary key
+            $table->string('title');         // VARCHAR(255)
+            $table->text('body');            // TEXT
+            $table->timestamps();            // created_at + updated_at DATETIME
+        });
+    }
+
+    // Runs when you do: php artisan migrate:rollback
+    public function down(): void
+    {
+        Schema::dropIfExists('posts');
+    }
+};
+```
+
+---
+
+### Real-Life Example — Full Users Table
+
+```php
+// database/migrations/2024_01_01_000000_create_users_table.php
+public function up(): void
+{
+    Schema::create('users', function (Blueprint $table) {
+        $table->id();
+        $table->string('name');
+        $table->string('email')->unique();
+        $table->timestamp('email_verified_at')->nullable();
+        $table->string('password');
+        $table->enum('role', ['admin', 'editor', 'user'])->default('user');
+        $table->string('avatar')->nullable();
+        $table->text('bio')->nullable();
+        $table->string('phone', 20)->nullable();
+        $table->boolean('is_active')->default(true);
+        $table->rememberToken();             // remember_token VARCHAR(100)
+        $table->timestamps();
+        $table->softDeletes();               // deleted_at — for soft delete
+    });
+}
+```
+
+---
+
+### Real-Life Example — Posts Table with Foreign Key
+
+```php
+// database/migrations/2024_01_02_000000_create_posts_table.php
+public function up(): void
+{
+    Schema::create('posts', function (Blueprint $table) {
+        $table->id();
+        $table->foreignId('user_id')
+              ->constrained()              // references id on users table
+              ->cascadeOnDelete();         // delete posts when user is deleted
+
+        $table->foreignId('category_id')
+              ->nullable()
+              ->constrained()
+              ->nullOnDelete();            // set null when category is deleted
+
+        $table->string('title');
+        $table->string('slug')->unique();
+        $table->text('excerpt')->nullable();
+        $table->longText('body');
+        $table->string('cover_image')->nullable();
+        $table->enum('status', ['draft', 'published', 'archived'])->default('draft');
+        $table->unsignedInteger('views')->default(0);
+        $table->timestamp('published_at')->nullable();
+        $table->timestamps();
+        $table->softDeletes();
+
+        // Indexes for frequently queried columns
+        $table->index('status');
+        $table->index('published_at');
+        $table->index(['user_id', 'status']); // composite index
+    });
+}
+```
+
+---
+
+### Real-Life Example — Orders + Order Items Tables
+
+```php
+// database/migrations/2024_01_03_000000_create_orders_table.php
+public function up(): void
+{
+    Schema::create('orders', function (Blueprint $table) {
+        $table->id();
+        $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+        $table->string('order_number')->unique();
+        $table->enum('status', [
+            'pending',
+            'processing',
+            'shipped',
+            'delivered',
+            'cancelled'
+        ])->default('pending');
+        $table->decimal('subtotal', 10, 2);   // up to 99,999,999.99
+        $table->decimal('tax', 10, 2)->default(0);
+        $table->decimal('total', 10, 2);
+        $table->string('shipping_address');
+        $table->string('payment_method');
+        $table->string('payment_id')->nullable();
+        $table->timestamp('paid_at')->nullable();
+        $table->timestamps();
+
+        $table->index('status');
+        $table->index('order_number');
+    });
+}
+```
+
+```php
+// database/migrations/2024_01_04_000000_create_order_items_table.php
+public function up(): void
+{
+    Schema::create('order_items', function (Blueprint $table) {
+        $table->id();
+        $table->foreignId('order_id')->constrained()->cascadeOnDelete();
+        $table->foreignId('product_id')->constrained()->cascadeOnDelete();
+        $table->string('product_name');       // snapshot of name at time of order
+        $table->decimal('price', 10, 2);      // snapshot of price at time of order
+        $table->unsignedInteger('quantity');
+        $table->decimal('total', 10, 2);
+        $table->timestamps();
+    });
+}
+```
+
+---
+
+### All Column Types You Actually Use
+
+```php
+Schema::create('examples', function (Blueprint $table) {
+    // Primary key
+    $table->id();                            // BIGINT unsigned auto-increment
+    $table->uuid('uuid')->unique();          // UUID string
+
+    // Strings
+    $table->string('name');                  // VARCHAR(255)
+    $table->string('code', 10);             // VARCHAR(10) — custom length
+    $table->char('country_code', 2);        // CHAR(2) — fixed length
+    $table->text('description');             // TEXT
+    $table->mediumText('content');           // MEDIUMTEXT
+    $table->longText('body');               // LONGTEXT
+
+    // Numbers
+    $table->integer('count');               // INT
+    $table->unsignedInteger('views');       // INT unsigned (no negatives)
+    $table->bigInteger('large_number');     // BIGINT
+    $table->tinyInteger('rating');          // TINYINT (-128 to 127)
+    $table->float('score', 5, 2);          // FLOAT(5,2)
+    $table->decimal('price', 10, 2);       // DECIMAL(10,2) — use for money
+    $table->double('latitude', 10, 8);     // DOUBLE
+
+    // Boolean
+    $table->boolean('is_active');           // TINYINT(1)
+
+    // Dates and times
+    $table->date('birth_date');             // DATE
+    $table->time('opens_at');              // TIME
+    $table->dateTime('scheduled_at');      // DATETIME
+    $table->timestamp('verified_at');      // TIMESTAMP
+    $table->timestamps();                  // created_at + updated_at
+    $table->softDeletes();                 // deleted_at
+
+    // Enum and Set
+    $table->enum('status', ['active', 'inactive', 'banned']);
+    $table->set('permissions', ['read', 'write', 'delete']);
+
+    // JSON
+    $table->json('metadata')->nullable();  // JSON column — great for flexible data
+
+    // Foreign keys
+    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+
+    // Nullable
+    $table->string('phone')->nullable();
+    $table->text('bio')->nullable();
+
+    // Default values
+    $table->boolean('is_verified')->default(false);
+    $table->integer('points')->default(0);
+    $table->string('currency')->default('USD');
+});
+```
+
+---
+
+### Modifying Existing Tables — Add Columns
+
+```php
+// database/migrations/2024_06_01_000000_add_bio_to_users_table.php
+public function up(): void
+{
+    Schema::table('users', function (Blueprint $table) {
+        $table->text('bio')->nullable()->after('email');
+        $table->string('phone', 20)->nullable()->after('bio');
+        $table->string('website')->nullable()->after('phone');
+    });
+}
+
+public function down(): void
+{
+    Schema::table('users', function (Blueprint $table) {
+        $table->dropColumn(['bio', 'phone', 'website']);
+    });
+}
+```
+
+---
+
+### Modifying Existing Tables — Change Column Type
+
+```bash
+# Install doctrine/dbal for column modification
+composer require doctrine/dbal
+```
+
+```php
+// database/migrations/2024_06_02_000000_change_body_column_in_posts_table.php
+public function up(): void
+{
+    Schema::table('posts', function (Blueprint $table) {
+        // Change TEXT to LONGTEXT
+        $table->longText('body')->change();
+
+        // Make a column nullable
+        $table->string('subtitle')->nullable()->change()
+
+        // Change default value
+        $table->enum('status', ['draft', 'published', 'archived'])
+              ->default('draft')
+              ->change();
+    });
+}
+
+public function down(): void
+{
+    Schema::table('posts', function (Blueprint $table) {
+        $table->text('body')->change();
+        $table->string('subtitle')->nullable(false)->change();
+    });
+}
+```
+
+---
+
+### Modifying Existing Tables — Add Indexes
+
+```php
+// database/migrations/2024_06_03_000000_add_indexes_to_posts_table.php
+public function up(): void
+{
+    Schema::table('posts', function (Blueprint $table) {
+        // Single column index
+        $table->index('status');
+        $table->index('slug');
+
+        // Composite index — for queries filtering by both columns
+        $table->index(['user_id', 'status']);
+        $table->index(['status', 'published_at']);
+
+        // Unique index
+        $table->unique('slug'); // if not already unique
+    });
+}
+
+public function down(): void
+{
+    Schema::table('posts', function (Blueprint $table) {
+        $table->dropIndex(['status']);
+        $table->dropIndex(['slug']);
+        $table->dropIndex(['user_id', 'status']);
+    });
+}
+```
+
+---
+
+### Rename and Drop
+
+```php
+public function up(): void
+{
+    Schema::table('users', function (Blueprint $table) {
+        // Rename column
+        $table->renameColumn('bio', 'biography');
+
+        // Drop column
+        $table->dropColumn('old_field');
+
+        // Drop multiple columns
+        $table->dropColumn(['field_one', 'field_two']);
+
+        // Drop foreign key then column
+        $table->dropForeign(['category_id']);
+        $table->dropColumn('category_id');
+    });
+
+    // Rename entire table
+    Schema::rename('old_table_name', 'new_table_name');
+}
+```
+
+---
+
+### Foreign Key Behaviors
+
+```php
+Schema::create('posts', function (Blueprint $table) {
+    // cascadeOnDelete — delete post when user is deleted
+    $table->foreignId('user_id')
+          ->constrained()
+          ->cascadeOnDelete();
+
+    // nullOnDelete — set category_id to NULL when category is deleted
+    $table->foreignId('category_id')
+          ->nullable()
+          ->constrained()
+          ->nullOnDelete();
+
+    // restrictOnDelete — prevent deleting user if they have posts
+    $table->foreignId('author_id')
+          ->constrained('users')    // custom table name
+          ->restrictOnDelete();
+
+    // No action on delete — do nothing (dangerous, avoid)
+    $table->foreignId('reviewer_id')
+          ->nullable()
+          ->constrained('users');
+});
+```
+
+---
+
+### SQLite vs MySQL Differences
+
+```php
+// config/database.php — switch between SQLite and MySQL via .env
+
+// .env for local SQLite:
+// DB_CONNECTION=sqlite
+// DB_DATABASE=/absolute/path/to/database/database.sqlite
+
+// .env for MySQL:
+// DB_CONNECTION=mysql
+// DB_HOST=127.0.0.1
+// DB_PORT=3306
+// DB_DATABASE=myapp
+// DB_USERNAME=root
+// DB_PASSWORD=secret
+```
+
+```php
+// Differences to watch out for:
+
+// 1. ENUM columns — SQLite does not support ENUM
+//    SQLite stores it as VARCHAR — validation is not enforced at DB level
+//    MySQL enforces it — inserting invalid value throws error
+$table->enum('status', ['active', 'inactive']); // works in both, enforced only in MySQL
+
+// 2. Modifying columns — SQLite has very limited ALTER TABLE support
+//    In SQLite you CANNOT: change column type, add constraints, drop columns (older versions)
+//    Laravel handles this by recreating the table internally for SQLite
+//    Always test migrations on MySQL before production
+
+// 3. Foreign key constraints — SQLite has them but they are OFF by default
+//    Enable in AppServiceProvider for local dev:
+use Illuminate\Support\Facades\DB;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function boot(): void
+    {
+        // Enable foreign key constraints for SQLite
+        if (DB::getDriverName() === 'sqlite') {
+            DB::statement('PRAGMA foreign_keys = ON');
+        }
+    }
+}
+
+// 4. JSON columns — both support JSON
+//    MySQL has native JSON type with JSON functions
+//    SQLite stores JSON as TEXT — works for storage but no JSON SQL functions
+
+// 5. Unsigned integers — SQLite ignores UNSIGNED
+//    $table->unsignedInteger('views') — enforced in MySQL, ignored in SQLite
+
+// 6. String length — SQLite ignores VARCHAR length
+//    $table->string('code', 5) — enforced in MySQL, ignored in SQLite
+```
+
+---
+
+### Common Artisan Commands
+
+```bash
+# Run all pending migrations
+php artisan migrate
+
+# Run migrations and seed the database
+php artisan migrate --seed
+
+# Rollback the last batch of migrations
+php artisan migrate:rollback
+
+# Rollback specific number of steps
+php artisan migrate:rollback --step=3
+
+# Drop all tables and re-run all migrations
+php artisan migrate:fresh
+
+# Drop all tables, re-run migrations, and seed
+php artisan migrate:fresh --seed
+
+# Show migration status
+php artisan migrate:status
+
+# Create a new migration file
+php artisan make:migration create_posts_table
+php artisan make:migration add_bio_to_users_table --table=users
+php artisan make:migration create_posts_table --create=posts
+
+# Run migrations for a specific path
+php artisan migrate --path=/database/migrations/2024_06_01_000000_add_bio_to_users_table.php
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Not adding nullable() to optional columns — causes issues when inserting
+Schema::create('users', function (Blueprint $table) {
+    $table->string('phone');    // ❌ NOT NULL — every insert must include phone
+    $table->text('bio');        // ❌ NOT NULL — crashes if bio is not provided
+});
+```
+</Wrong>
+<Right>
+```php
+Schema::create('users', function (Blueprint $table) {
+    $table->string('phone')->nullable();  // ✅ optional
+    $table->text('bio')->nullable();      // ✅ optional
+});
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Using float for money — floating point precision errors
+$table->float('price');   // ❌ 19.99 might be stored as 19.990000000001
+```
+</Wrong>
+<Right>
+```php
+// Always use decimal for money
+$table->decimal('price', 10, 2); // ✅ exact — stores 19.99 as 19.99
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Dropping a foreign key column without dropping the constraint first
+Schema::table('posts', function (Blueprint $table) {
+    $table->dropColumn('user_id'); // ❌ foreign key constraint still exists — error!
+});
+```
+</Wrong>
+<Right>
+```php
+Schema::table('posts', function (Blueprint $table) {
+    $table->dropForeign(['user_id']); // ✅ drop constraint first
+    $table->dropColumn('user_id');    // ✅ then drop column
+});
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Editing an already-run migration — breaks team database state
+// In create_users_table.php (already migrated):
+$table->string('name');
+$table->string('bio'); // ❌ added after migration ran — other devs won't get this
+```
+</Wrong>
+<Right>
+```php
+// Create a new migration for changes
+// In add_bio_to_users_table.php:
+Schema::table('users', function (Blueprint $table) {
+    $table->string('bio')->nullable()->after('name'); // ✅ new migration
+});
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** Never run `migrate:fresh` on production — it drops ALL tables and ALL data. Use `migrate` only. Reserve `migrate:fresh` for local development and CI pipelines.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- One migration per logical change — do not combine unrelated changes
+- Always write the `down()` method — even if you think you will never rollback
+- Name migrations descriptively: `add_stripe_customer_id_to_users_table` not `update_users`
+- Store snapshots of product name/price in order items — never rely on joins for historical data
+
+**Performance tips**
+```php
+// Add indexes to columns you filter or sort by frequently
+$table->index('status');              // WHERE status = 'published'
+$table->index('created_at');          // ORDER BY created_at DESC
+$table->index(['user_id', 'status']); // WHERE user_id = 1 AND status = 'published'
+
+// For full-text search columns add fullText index
+$table->fullText(['title', 'body']);  // MySQL only — for MATCH AGAINST queries
+
+// Foreign keys are automatically indexed by constrained()
+// No need to add an extra index for foreign key columns
+```
+
+**Security considerations**
+- Never store plain text passwords — Laravel's `$casts = ['password' => 'hashed']` handles this
+- Use `softDeletes()` for user data — hard delete loses audit trail
+- Add `unique()` to email columns — prevents duplicate accounts at database level
+- Index columns used in WHERE clauses — unindexed queries on large tables are a security/performance risk (slow queries can be used for DoS)
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between migrate:fresh and migrate:rollback?"
+  difficulty="easy"
+>
+  `migrate:rollback` undoes only the last batch of migrations — it calls the
+  `down()` method on each migration in that batch. Your data in other tables
+  is untouched. `migrate:fresh` drops every single table in the database
+  regardless of migrations, then re-runs all migrations from scratch. It is
+  destructive — all data is lost. Use `migrate:rollback` when you made a
+  mistake in recent migrations. Never use `migrate:fresh` on production.
+</InterviewQ>
+
+<InterviewQ
+  question="Why should you use decimal instead of float for storing money?"
+  difficulty="easy"
+>
+  Floating point numbers (float, double) cannot represent all decimal values
+  exactly in binary. For example, 0.1 + 0.2 in floating point is
+  0.30000000000000004, not 0.3. For financial calculations this causes
+  rounding errors that compound over time. DECIMAL stores numbers as exact
+  strings of digits — `decimal(10, 2)` stores exactly two decimal places with
+  no precision loss. Always use decimal for prices, totals, taxes, and
+  any financial value.
+</InterviewQ>
+
+<InterviewQ
+  question="What does cascadeOnDelete mean on a foreign key and when would you use nullOnDelete instead?"
+  difficulty="mid"
+>
+  `cascadeOnDelete` means when the parent record is deleted, all child records
+  are automatically deleted too. Use it when the child records have no meaning
+  without the parent — like order items without an order, or posts without a
+  user (if you want to delete all content when a user is deleted).
+  `nullOnDelete` sets the foreign key column to NULL instead of deleting the
+  row. Use it when the child record can exist independently — like a post that
+  can exist without a category, or a comment that should survive if its parent
+  comment is deleted.
+</InterviewQ>
+
+<InterviewQ
+  question="Why should you never edit a migration that has already been run?"
+  difficulty="mid"
+>
+  Laravel tracks which migrations have run in the `migrations` table. If you
+  edit a migration file that is already marked as run, Laravel will not re-run
+  it — your change is invisible to everyone who already migrated. Other
+  developers and your production server will have a different database
+  structure than your local environment. Always create a new migration for
+  any change to an already-run migration. The only exception is during initial
+  project setup before any team member has run the migrations.
+</InterviewQ>
+
+<InterviewQ
+  question="How do you handle a column rename safely in production without losing data?"
+  difficulty="hard"
+>
+  Never rename a column directly in production in one step — your application
+  code reads the old name and will break instantly. The safe pattern is:
+  Step 1 — add the new column alongside the old one. Step 2 — deploy code
+  that writes to both columns. Step 3 — run a data migration to copy all
+  existing data from old column to new column. Step 4 — deploy code that
+  reads from the new column only. Step 5 — drop the old column. This zero-
+  downtime approach ensures the app never reads a column that does not exist.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The most painful production mistake I made: running `migrate:fresh` thinking
+  I was on local. Always double-check your `.env` `DB_CONNECTION` and
+  `DB_DATABASE` before running any destructive command. I now keep production
+  env variables in a separate `.env.production` file and never touch it during
+  local development.
+</MyNotes>
+
+<MyNotes>
+  Foreign key constraint errors are confusing when SQLite is involved because
+  SQLite does not enforce them by default. Everything works locally, then
+  breaks in production on MySQL. Always enable SQLite foreign keys in
+  `AppServiceProvider` for local dev — it catches these bugs early.
+</MyNotes>
+
+<MyNotes>
+  The order items table pattern — storing `product_name` and `price` as
+  snapshots at the time of purchase — is something I learned the hard way.
+  If you just store `product_id` and join to the products table, changing a
+  product price changes the price on all historical orders. Always snapshot
+  financial data at the time of transaction.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Common Table Patterns
+
+```php
+// Pivot table for many-to-many (e.g. posts ↔ tags)
+Schema::create('post_tag', function (Blueprint $table) {
+    $table->foreignId('post_id')->constrained()->cascadeOnDelete()
+    $table->foreignId('tag_id')->constrained()->cascadeOnDelete();
+    $table->primary(['post_id', 'tag_id']); // composite primary key
+    $table->timestamps();
+});
+
+// Settings / key-value table
+Schema::create('settings', function (Blueprint $table) {
+    $table->id();
+    $table->string('key')->unique();
+    $table->text('value')->nullable();
+    $table->string('group')->default('general')->index();
+    $table->timestamps();
+});
+
+// Activity log / audit table
+Schema::create('activity_logs', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
+    $table->string('action');           // 'created', 'updated', 'deleted'
+    $table->string('model_type');       // 'App\Models\Post'
+    $table->unsignedBigInteger('model_id');
+    $table->json('old_values')->nullable();
+    $table->json('new_values')->nullable();
+    $table->string('ip_address', 45)->nullable();
+    $table->timestamps();
+
+    $table->index(['model_type', 'model_id']);
+    $table->index('user_id');
+});
+
+// Media / files table
+Schema::create('media', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+    $table->string('model_type')->nullable(); // polymorphic
+    $table->unsignedBigInteger('model_id')->nullable();
+    $table->string('collection')->default('default');
+    $table->string('name');
+    $table->string('file_name');
+    $table->string('mime_type');
+    $table->string('disk')->default('public');
+    $table->string('path');
+    $table->unsignedBigInteger('size');
+    $table->timestamps();
+
+    $table->index(['model_type', 'model_id']);
+});
+```
+
+---
+
+### Enable SQLite Foreign Keys — AppServiceProvider
+
+```php
+// app/Providers/AppServiceProvider.php
+<?php
+
+namespace App\Providers;
+
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function boot(): void
+    {
+        // Enable foreign key constraints for SQLite
+        if (DB::getDriverName() === 'sqlite') {
+            DB::statement('PRAGMA foreign_keys = ON');
+        }
+    }
+}
+```
+
+---
+
+### Switch Database in .env
+
+```env
+# Local development — SQLite (zero setup)
+DB_CONNECTION=sqlite
+DB_DATABASE=/absolute/path/to/laravel/database/database.sqlite
+
+# Local development — MySQL
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=myapp_local
+DB_USERNAME=root
+DB_PASSWORD=secret
+
+# Production — MySQL
+DB_CONNECTION=mysql
+DB_HOST=your-db-host
+DB_PORT=3306
+DB_DATABASE=myapp_production
+DB_USERNAME=myapp_user
+DB_PASSWORD=strong_random_password
+```
+
+```bash
+# Create SQLite database file for local dev
+touch database/database.sqlite
+php artisan migrate
+```
+
+---
+
+*Tags: `laravel` `migrations` `database` `mysql` `sqlite` `schema` `foreign-keys` `indexes` `beginner`*

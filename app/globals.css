@@ -1,26 +1,91 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+/* ── Code blocks from rehype-pretty-code ───────────────────────────────── */
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light dark;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* The outer wrapper */
+figure[data-rehype-pretty-code-figure] {
+  margin: 1.5rem 0;
 }
 
+/* The filename tab (optional) */
+figcaption[data-rehype-pretty-code-title] {
+  background-color: #1e1e2e;
+  color: #a6adc8;
+  padding: 0.4rem 1rem;
+  font-size: 0.75rem;
+  font-family: var(--font-mono, monospace);
+  border-radius: 0.75rem 0.75rem 0 0;
+  border: 1px solid #313244;
+  border-bottom: none;
+}
+
+/* The <pre> block */
+pre[data-theme],
+pre {
+  overflow-x: auto;
+  border-radius: 0.75rem;
+  padding: 1.25rem 1.5rem;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  border: 1px solid #313244;
+}
+
+/* When there's a title above, remove top radius */
+figcaption[data-rehype-pretty-code-title] + pre {
+  border-radius: 0 0 0.75rem 0.75rem;
+}
+
+/* The <code> inside pre — reset any prose overrides */
+pre code {
+  background: transparent !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* Individual token colors — shiki puts these as CSS vars */
+code[data-theme],
+pre[data-theme] {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+}
+
+/* Dark mode token colors */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  code[data-theme],
+  pre[data-theme] {
+    color: var(--shiki-dark);
+    background-color: var(--shiki-dark-bg);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Highlighted lines */
+span[data-highlighted-line] {
+  background-color: rgba(99, 102, 241, 0.15);
+  border-left: 2px solid #6366f1;
+  padding-left: calc(1.5rem - 2px);
+  margin-left: -1.5rem;
 }
+
+/* Line numbers (optional) */
+code[data-line-numbers] {
+  counter-reset: line;
+}
+
+code[data-line-numbers] > span[data-line]::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  width: 1rem;
+  margin-right: 1.5rem;
+  text-align: right;
+  color: #4a4a6a;
+  font-size: 0.75rem;
+}
+

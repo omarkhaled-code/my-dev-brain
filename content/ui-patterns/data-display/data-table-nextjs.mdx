@@ -1,0 +1,445 @@
+---
+title: "Data Table with Next.js + Tailwind CSS"
+description: "How to build a reusable, sortable, and searchable data table in Next.js App Router with pagination, loading skeleton, empty state, and row actions using Tailwind CSS"
+category: ui-patterns
+tools: [nextjs, tailwind]
+tags: [table, data-table, sortable, searchable, pagination, app-router]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - ui-patterns/data-table-vue
+  - ui-patterns/pagination-nextjs
+---
+
+## Concept explanation
+
+A data table in Next.js is a `"use client"` component that uses `useState` for search, sort, and pagination state, and `useMemo` to derive filtered and sorted data efficiently. The table component is fully reusable — you pass columns config and data as props, and use render props for custom cell content.
+
+<Callout type="note">
+  **Next.js vs React difference:** This component works identically in plain React (Vite). No Next.js-specific APIs are used — just `useState` and `useMemo`. Copy it into any React project and it works.
+</Callout>
+
+## Why it's used
+
+- Displays large datasets in a scannable, organized format
+- Client-side sorting and search avoids unnecessary API calls for small datasets
+- Reusable column config makes it work for users, orders, products, or any data shape
+- Loading skeleton prevents layout shift while data fetches
+
+## Real-world use cases
+
+- Users list in an admin dashboard
+- Orders table in an e-commerce backend
+- Products inventory management
+- Transaction history in a finance app
+- Logs viewer in a DevOps dashboard
+
+## Code example
+
+### Basic sortable and searchable table
+
+```tsx
+// components/DataTable.tsx
+"use client";
+
+import { useState, useMemo } from "react";
+import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+
+type SortDirection = "asc" | "desc" | null;
+
+export type Column<T> = {
+  key: keyof T;
+  label: string;
+  sortable?: boolean;
+  render?: (value: T[keyof T], row: T) => React.ReactNode;
+};
+
+type Props<T> = {
+  columns: Column<T>[];
+  data: T[];
+  loading?: boolean;
+  emptyMessage?: string;
+  perPage?: number;
+};
+
+export function DataTable<T extends Record<string, unknown>>({
+  columns,
+  data,
+  loading = false,
+  emptyMessage = "No data found",
+  perPage = 10,
+}: Props<T>) {
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<keyof T | null>(null);
+  const [sortDir, setSortDir] = useState<SortDirection>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Filter by search
+  const filtered = useMemo(() => {
+    if (!search.trim()) return data;
+    const q = search.toLowerCase();
+    return data.filter((row) =>
+      Object.values(row).some((val) =>
+        String(val).toLowerCase().includes(q)
+      )
+    );
+  }, [data, search]);
+
+  // Sort filtered data
+  const sorted = useMemo(() => {
+    if (!sortKey || !sortDir) return filtered;
+    return [...filtered].sort((a, b) => {
+      const aVal = a[sortKey];
+      const bVal = b[sortKey];
+      const result = String(aVal).localeCompare(String(bVal), undefined, {
+        numeric: true,
+      });
+      return sortDir === "asc" ? result : -result;
+    });
+  }, [filtered, sortKey, sortDir]);
+
+  // Paginate
+  const totalPages = Math.ceil(sorted.length / perPage);
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * perPage;
+    return sorted.slice(start, start + perPage);
+  }, [sorted, currentPage, perPage]);
+
+  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearch(e.target.value);
+    setCurrentPage(1);
+  };
+
+  const toggleSort = (key: keyof T) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDir("asc");
+    } else if (sortDir === "asc") {
+      setSortDir("desc");
+    } else {
+      setSortKey(null);
+      setSortDir(null);
+    }
+    setCurrentPage(1);
+  };
+
+  const SortIcon = ({ colKey }: { colKey: keyof T }) => {
+    if (sortKey !== colKey) return <ChevronsUpDown size={14} className="text-neutral-400" />;
+    if (sortDir === "asc") return <ChevronUp size={14} className="text-blue-500" />;
+    return <ChevronDown size={14} className="text-blue-500" />;
+  };
+
+  return (
+    <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden">
+
+      {/* Toolbar */}
+      <div className="flex items-center justify-between gap-4 px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
+        <input
+          type="text"
+          value={search}
+          onChange={handleSearch}
+          placeholder="Search..."
+          className="w-64 px-3 py-1.5 text-sm border border-neutral-200 dark:border-neutral-700 rounded-lg bg-transparent focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-neutral-100"
+        />
+        <p className="text-xs text-neutral-400">
+          {sorted.length} result{sorted.length !== 1 ? "s" : ""}
+        </p>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+
+          {/* Head */}
+          <thead className="bg-neutral-50 dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
+            <tr>
+              {columns.map((col) => (
+                <th
+                  key={String(col.key)}
+                  onClick={() => col.sortable && toggleSort(col.key)}
+                  className={`
+                    px-4 py-3 text-left text-xs font-semibold text-neutral-500
+                    dark:text-neutral-400 uppercase tracking-wider
+                    ${col.sortable ? "cursor-pointer hover:text-neutral-900 dark:hover:text-neutral-100 select-none" : ""}
+                  `}
+                >
+                  <span className="flex items-center gap-1.5">
+                    {col.label}
+                    {col.sortable && <SortIcon colKey={col.key} />}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+
+          {/* Body */}
+          <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+
+            {/* Loading skeleton */}
+            {loading && Array.from({ length: perPage }).map((_, i) => (
+              <tr key={i}>
+                {columns.map((col) => (
+                  <td key={String(col.key)} className="px-4 py-3">
+                    <div className="h-4 bg-neutral-100 dark:bg-neutral-800 rounded animate-pulse" />
+                  </td>
+                ))}
+              </tr>
+            ))}
+
+            {/* Empty state */}
+            {!loading && paginated.length === 0 && (
+              <tr>
+                <td colSpan={columns.length} className="px-4 py-12 text-center">
+                  <p className="text-2xl mb-2">📭</p>
+                  <p className="text-sm text-neutral-400">{emptyMessage}</p>
+                </td>
+              </tr>
+            )}
+
+            {/* Data rows */}
+            {!loading && paginated.map((row, i) => (
+              <tr
+                key={i}
+                className="hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
+              >
+                {columns.map((col) => (
+                  <td
+                    key={String(col.key)}
+                    className="px-4 py-3 text-neutral-700 dark:text-neutral-300"
+                  >
+                    {col.render
+                      ? col.render(row[col.key], row)
+                      : String(row[col.key] ?? "")
+                    }
+                  </td>
+                ))}
+              </tr>
+            ))}
+
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between px-4 py-3 border-t border-neutral-200 dark:border-neutral-800">
+          <p className="text-xs text-neutral-400">
+            Page {currentPage} of {totalPages} · {sorted.length} total
+          </p>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setCurrentPage((p) => p - 1)}
+              disabled={currentPage === 1}
+              className="px-3 py-1.5 text-xs rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              ← Prev
+            </button>
+            <button
+              onClick={() => setCurrentPage((p) => p + 1)}
+              disabled={currentPage === totalPages}
+              className="px-3 py-1.5 text-xs rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+```
+
+### How to use it in any page
+
+```tsx
+// app/users/page.tsx
+"use client";
+
+import { useState } from "react";
+import { DataTable } from "@/components/DataTable";
+import type { Column } from "@/components/DataTable";
+
+type User = {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  status: "active" | "inactive";
+};
+
+const users: User[] = [
+  { id: 1, name: "Omar Hassan",   email: "omar@example.com",  role: "Admin",  status: "active" },
+  { id: 2, name: "Ahmed Ali",     email: "ahmed@example.com", role: "Editor", status: "active" },
+  { id: 3, name: "Sara Mohamed",  email: "sara@example.com",  role: "Viewer", status: "inactive" },
+];
+
+const columns: Column<User>[] = [
+  { key: "id",     label: "#",       sortable: true },
+  { key: "name",   label: "Name",    sortable: true },
+  { key: "email",  label: "Email",   sortable: true },
+  { key: "role",   label: "Role",    sortable: true },
+  {
+    key: "status",
+    label: "Status",
+    render: (value) => (
+      <span className={`
+        inline-flex px-2 py-0.5 rounded-full text-xs font-medium
+        ${value === "active"
+          ? "bg-green-100 text-green-700"
+          : "bg-neutral-100 text-neutral-500"
+        }
+      `}>
+        {String(value)}
+      </span>
+    ),
+  },
+  {
+    key: "id",
+    label: "Actions",
+    render: (_, row) => (
+      <div className="flex items-center gap-2">
+        <button className="text-xs text-blue-600 hover:underline">Edit</button>
+        <button className="text-xs text-red-600 hover:underline">Delete</button>
+      </div>
+    ),
+  },
+];
+
+export default function UsersPage() {
+  const [loading] = useState(false);
+
+  return (
+    <div>
+      <h1 className="text-2xl font-bold mb-6">Users</h1>
+      <DataTable
+        columns={columns}
+        data={users}
+        loading={loading}
+        emptyMessage="No users found"
+        perPage={10}
+      />
+    </div>
+  );
+}
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```tsx
+// Filtering and sorting inside render — recalculates on every
+// keystroke and re-render, kills performance on large datasets
+export function DataTable({ data }) {
+  const [search, setSearch] = useState("")
+
+  // ❌ runs on every render
+  const filtered = data.filter(row =>
+    Object.values(row).some(val =>
+      String(val).toLowerCase().includes(search.toLowerCase())
+    )
+  )
+}
+```
+</Wrong>
+<Right>
+```tsx
+// Always wrap expensive computations in useMemo
+// Only recalculates when dependencies actually change
+export function DataTable({ data }) {
+  const [search, setSearch] = useState("")
+
+  // ✅ only recalculates when data or search changes
+  const filtered = useMemo(() =>
+    data.filter(row =>
+      Object.values(row).some(val =>
+        String(val).toLowerCase().includes(search.toLowerCase())
+      )
+    ),
+  [data, search])
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Forgetting to reset page on search or sort change
+// User searches, stays on page 5, sees empty table
+const handleSearch = (e) => {
+  setSearch(e.target.value)
+  // ❌ no page reset
+}
+```
+</Wrong>
+<Right>
+```tsx
+// Always reset to page 1 when search or sort changes
+const handleSearch = (e) => {
+  setSearch(e.target.value)
+  setCurrentPage(1) // ✅
+}
+
+const toggleSort = (key) => {
+  // ...sort logic
+  setCurrentPage(1) // ✅
+}
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Wrap filter, sort, and pagination logic in `useMemo` — prevents expensive recalculation on every render
+- Reset `currentPage` to 1 whenever search or sort changes
+- Always spread `[...filtered]` before sorting — never mutate the original array
+- Use a `render` prop on columns for custom cell content — keeps the table reusable
+- Show a loading skeleton instead of a spinner — prevents layout shift
+- Show an empty state with a helpful message when no rows match the search
+- Add `select-none` to sortable headers so text doesn't get selected on click
+
+<Callout type="tip">
+  For server-side sorting and pagination, lift the state up and pass handlers as props:
+```tsx
+  <DataTable
+    data={data}
+    columns={columns}
+    onSort={(key, dir) => fetchData({ sort: key, dir })}
+    onPageChange={(page) => fetchData({ page })}
+    onSearch={(q) => fetchData({ search: q })}
+  />
+```
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is useMemo and when should you use it?" difficulty="mid">
+  `useMemo` memoizes the result of an expensive computation and only recalculates it when its dependencies change. Use it when you have a calculation that runs on every render and is either slow (filtering/sorting large arrays) or produces a new reference on every render (causing unnecessary child re-renders). Don't use it for everything — it has its own overhead and adds complexity.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between client-side and server-side pagination?" difficulty="mid">
+  Client-side pagination loads all data at once and slices it in the browser — simple but slow for large datasets. Server-side pagination fetches only the current page from the API — faster initial load, works for millions of rows, but requires the server to support `page`, `perPage`, and `total` in the response. Use client-side for under ~500 rows, server-side for anything larger.
+</InterviewQ>
+
+<InterviewQ question="How would you make this table work with server-side data in Next.js?" difficulty="hard">
+  Convert it to a Server Component that accepts `searchParams` from the URL. Read `page`, `sort`, and `search` from `searchParams`, fetch data from the database with those params, and pass the result to the table. For interactivity, use `useRouter` and `router.push` to update the URL when the user sorts or searches — this makes the state shareable via URL and works with the browser back button.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The `render` prop pattern on columns is the key to making this table truly reusable. Instead of passing complex config objects or render functions in a separate prop, just define it inline in the columns array:
+
+```tsx
+  { key: "status", label: "Status", render: (val) => <Badge>{val}</Badge> }
+```
+
+  This works for status badges, action buttons, avatars, links — anything.
+
+  **Vue vs Next.js difference:** Vue uses named slots (`#status`) for custom cells. React uses the `render` prop on the column config. Both achieve the same result — the table component stays generic and the parent controls how each cell looks.
+
+  For Next.js server-side tables, check out the URL-based approach — put `page`, `sort`, and `search` in the URL as search params. It makes the table state shareable and bookmarkable for free.
+</MyNotes>

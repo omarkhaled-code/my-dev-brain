@@ -1,0 +1,548 @@
+---
+title: "Database & MySQL Interview Questions"
+description: "The most common database interview questions with short, clear answers — covering SQL fundamentals, joins, indexes, transactions, normalization, and MySQL-specific concepts."
+category: interviews
+tags: [database, mysql, sql, interview, backend]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## SQL Fundamentals
+
+<InterviewQ question="What is the difference between WHERE and HAVING?" difficulty="easy">
+  `WHERE` filters rows **before** grouping. `HAVING` filters groups **after** `GROUP BY`.
+  You can't use aggregate functions (`COUNT`, `SUM`, `AVG`) in `WHERE` — use `HAVING` for that.
+
+  ```sql
+  -- WHERE: filter individual rows before grouping
+  SELECT category_id, COUNT(*) as total
+  FROM products
+  WHERE is_active = 1          -- filters rows first
+  GROUP BY category_id
+
+  -- HAVING: filter groups after aggregation
+  SELECT category_id, COUNT(*) as total
+  FROM products
+  GROUP BY category_id
+  HAVING COUNT(*) > 10         -- only categories with more than 10 products
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is the difference between DELETE, TRUNCATE, and DROP?" difficulty="easy">
+  - `DELETE` — removes rows one by one, can have `WHERE`, fires triggers, can be rolled back.
+  - `TRUNCATE` — removes all rows instantly, resets auto-increment, can't have `WHERE`, faster than DELETE.
+  - `DROP` — removes the entire table structure and data permanently.
+
+  ```sql
+  DELETE FROM orders WHERE status = 'cancelled';  -- selective, slow on large tables
+  TRUNCATE TABLE sessions;                         -- wipe all, reset ID counter
+  DROP TABLE temp_data;                            -- table is gone completely
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is the difference between UNION and UNION ALL?" difficulty="easy">
+  `UNION` combines results and removes duplicates (slower — has to compare rows).
+  `UNION ALL` combines results and keeps all duplicates (faster — no deduplication).
+  Use `UNION ALL` unless you specifically need deduplication.
+
+  ```sql
+  SELECT email FROM users
+  UNION
+  SELECT email FROM admins    -- removes duplicate emails
+
+  SELECT email FROM users
+  UNION ALL
+  SELECT email FROM admins    -- keeps all emails including duplicates
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is the difference between IN and EXISTS?" difficulty="mid">
+  `IN` evaluates the subquery first and compares values against the result list.
+  `EXISTS` checks if the subquery returns any rows and stops as soon as it finds one (short-circuits).
+  `EXISTS` is generally faster for large datasets because it stops early.
+
+  ```sql
+  -- IN: gets all category IDs first, then filters
+  SELECT * FROM products
+  WHERE category_id IN (SELECT id FROM categories WHERE is_active = 1)
+
+  -- EXISTS: stops as soon as it finds a match — faster on large tables
+  SELECT * FROM products p
+  WHERE EXISTS (
+    SELECT 1 FROM categories c
+    WHERE c.id = p.category_id AND c.is_active = 1
+  )
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is a subquery and what are its types?" difficulty="mid">
+  A subquery is a query nested inside another query. Types:
+
+  - **Scalar subquery** — returns a single value, used in SELECT or WHERE.
+  - **Row subquery** — returns one row with multiple columns.
+  - **Table subquery** — returns multiple rows, used with IN, EXISTS, or as a derived table in FROM.
+  - **Correlated subquery** — references columns from the outer query, runs once per outer row.
+
+  ```sql
+  -- Scalar: single value
+  SELECT name, (SELECT COUNT(*) FROM orders WHERE user_id = u.id) as order_count
+  FROM users u
+
+  -- Derived table (table subquery in FROM)
+  SELECT * FROM (
+    SELECT user_id, COUNT(*) as total FROM orders GROUP BY user_id
+  ) as order_counts
+  WHERE total > 5
+
+  -- Correlated: references outer query (u.id)
+  SELECT * FROM users u
+  WHERE (SELECT COUNT(*) FROM orders WHERE user_id = u.id) > 3
+  ```
+</InterviewQ>
+
+---
+
+## JOINs
+
+<InterviewQ question="Explain all types of JOINs." difficulty="easy">
+  ```sql
+  -- INNER JOIN: only rows that match in BOTH tables
+  SELECT * FROM orders o
+  INNER JOIN users u ON u.id = o.user_id
+  -- orders without a user → excluded
+  -- users without orders → excluded
+
+  -- LEFT JOIN: all rows from LEFT table + matching from right (NULL if no match)
+  SELECT * FROM users u
+  LEFT JOIN orders o ON o.user_id = u.id
+  -- all users included, orders columns are NULL if user has no orders
+
+  -- RIGHT JOIN: all rows from RIGHT table + matching from left (rarely used)
+  SELECT * FROM users u
+  RIGHT JOIN orders o ON o.user_id = u.id
+
+  -- CROSS JOIN: every combination of both tables (cartesian product)
+  SELECT * FROM sizes CROSS JOIN colors
+  -- 3 sizes × 4 colors = 12 rows
+
+  -- SELF JOIN: join a table to itself
+  SELECT e.name as employee, m.name as manager
+  FROM employees e
+  LEFT JOIN employees m ON m.id = e.manager_id
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is the difference between LEFT JOIN and INNER JOIN?" difficulty="easy">
+  `INNER JOIN` returns only rows where the condition matches in **both** tables.
+  `LEFT JOIN` returns **all rows from the left table** plus matching rows from the right —
+  if no match, the right side columns are `NULL`.
+  Use `LEFT JOIN` when you want results even if the relationship doesn't exist.
+
+  ```sql
+  -- INNER JOIN: users who have at least one order
+  SELECT u.name, o.id FROM users u
+  INNER JOIN orders o ON o.user_id = u.id
+
+  -- LEFT JOIN: ALL users, even those with no orders
+  SELECT u.name, o.id FROM users u
+  LEFT JOIN orders o ON o.user_id = u.id
+  -- users with no orders → o.id is NULL
+  ```
+</InterviewQ>
+
+<InterviewQ question="How do you find rows in Table A that have NO match in Table B?" difficulty="mid">
+  Use a `LEFT JOIN` and filter where the right side is `NULL`.
+  This is called an anti-join and is more efficient than `NOT IN` with a subquery.
+
+  ```sql
+  -- Users who have never placed an order
+  SELECT u.*
+  FROM users u
+  LEFT JOIN orders o ON o.user_id = u.id
+  WHERE o.id IS NULL          -- no matching order found
+  ```
+</InterviewQ>
+
+---
+
+## Indexes
+
+<InterviewQ question="What is a database index and how does it work?" difficulty="easy">
+  An index is a separate data structure (usually a B-Tree) that MySQL maintains to find rows
+  quickly without scanning every row. Think of it like a book's index — instead of reading
+  every page, you jump directly to the right page.
+  The trade-off: faster reads, slightly slower writes (index must be updated), more disk space.
+
+  ```sql
+  -- Without index: full table scan — checks every row
+  SELECT * FROM orders WHERE user_id = 42   -- scans 1,000,000 rows
+
+  -- With index on user_id: B-Tree lookup — jumps directly
+  CREATE INDEX idx_orders_user_id ON orders(user_id);
+  SELECT * FROM orders WHERE user_id = 42   -- finds rows in milliseconds
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is the difference between a clustered and non-clustered index?" difficulty="mid">
+  A **clustered index** determines the physical order of rows in the table — the data IS
+  the index. In MySQL InnoDB, the primary key is always the clustered index. There can only
+  be one per table.
+
+  A **non-clustered index** is a separate structure that stores the indexed column values
+  and a pointer back to the actual row. A table can have many non-clustered indexes.
+
+  ```sql
+  -- Clustered: PRIMARY KEY — rows are physically sorted by id
+  PRIMARY KEY (id)
+
+  -- Non-clustered: separate index with pointer to row
+  CREATE INDEX idx_email ON users(email);
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is a composite index and what is the left-prefix rule?" difficulty="mid">
+  A composite index covers multiple columns. The left-prefix rule means MySQL can only use
+  the index starting from the leftmost column — it can't skip columns.
+
+  ```sql
+  CREATE INDEX idx_cat_active ON products(category_id, is_active, price);
+
+  -- ✅ Uses index (starts from left)
+  WHERE category_id = 5
+  WHERE category_id = 5 AND is_active = 1
+  WHERE category_id = 5 AND is_active = 1 AND price < 100
+
+  -- ❌ Does NOT use index (skips category_id)
+  WHERE is_active = 1
+  WHERE price < 100
+  ```
+</InterviewQ>
+
+<InterviewQ question="What columns should you index?" difficulty="mid">
+  Index columns that are frequently used in:
+  - `WHERE` clause filters
+  - `JOIN` conditions (foreign keys)
+  - `ORDER BY` columns
+  - `GROUP BY` columns
+
+  Don't index columns with very low cardinality (like a boolean — only 2 values),
+  columns that are rarely queried, or tables with very few rows (full scan is fine).
+
+  ```sql
+  -- Always index foreign keys
+  CREATE INDEX idx_orders_user_id    ON orders(user_id);
+  CREATE INDEX idx_orders_product_id ON order_items(product_id);
+
+  -- Index columns you filter on frequently
+  CREATE INDEX idx_products_status ON products(status);
+
+  -- Low cardinality — index is often useless
+  CREATE INDEX idx_users_is_active ON users(is_active);  -- only true/false
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is EXPLAIN and how do you use it?" difficulty="mid">
+  `EXPLAIN` shows how MySQL executes a query — which indexes it uses, how many rows it scans,
+  and what join type it performs. Use it to identify slow queries and missing indexes.
+
+  ```sql
+  EXPLAIN SELECT * FROM orders WHERE user_id = 42;
+
+  -- Key columns to look at:
+  -- type:         ALL = full scan (bad), ref/range/const = index used (good)
+  -- key:          which index MySQL chose (NULL = no index used)
+  -- rows:         estimated rows MySQL will scan (lower is better)
+  -- Extra:        "Using filesort" or "Using temporary" = potential performance issues
+
+  -- type values from best to worst:
+  -- const → eq_ref → ref → range → index → ALL
+  ```
+</InterviewQ>
+
+---
+
+## Transactions
+
+<InterviewQ question="What is a transaction and what are ACID properties?" difficulty="mid">
+  A transaction is a group of SQL operations that execute as a single unit — either all succeed
+  or all fail together. ACID stands for:
+
+  - **Atomicity** — all operations succeed or none do (no partial updates).
+  - **Consistency** — database moves from one valid state to another.
+  - **Isolation** — concurrent transactions don't interfere with each other.
+  - **Durability** — committed data survives crashes (written to disk).
+
+  ```sql
+  START TRANSACTION;
+
+  UPDATE accounts SET balance = balance - 500 WHERE id = 1;  -- debit
+  UPDATE accounts SET balance = balance + 500 WHERE id = 2;  -- credit
+
+  -- If both succeed:
+  COMMIT;
+
+  -- If anything fails:
+  ROLLBACK;   -- both updates are undone — no money lost
+  ```
+</InterviewQ>
+
+<InterviewQ question="What are transaction isolation levels?" difficulty="hard">
+  Isolation levels control how much concurrent transactions see each other's uncommitted data.
+  From least to most isolated:
+
+  ```
+  READ UNCOMMITTED  → can read uncommitted changes from other transactions (dirty reads) — almost never use
+  READ COMMITTED    → only reads committed data — default in PostgreSQL
+  REPEATABLE READ   → same query returns same results within a transaction — default in MySQL InnoDB
+  SERIALIZABLE      → transactions run as if sequential — safest, slowest
+  ```
+
+  Problems each level prevents:
+  ```
+  Level              | Dirty Read | Non-repeatable Read | Phantom Read
+  READ UNCOMMITTED   |     ❌     |         ❌          |      ❌
+  READ COMMITTED     |     ✅     |         ❌          |      ❌
+  REPEATABLE READ    |     ✅     |         ✅          |      ❌
+  SERIALIZABLE       |     ✅     |         ✅          |      ✅
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is a deadlock?" difficulty="mid">
+  A deadlock happens when two transactions each hold a lock the other needs, so both wait
+  forever. MySQL detects deadlocks automatically and kills one transaction (the victim)
+  to let the other proceed.
+
+  ```sql
+  -- Transaction A                  -- Transaction B
+  UPDATE orders SET ...             UPDATE products SET ...
+  WHERE id = 1;      -- locks row 1  WHERE id = 2;   -- locks row 2
+
+  UPDATE products SET ...           UPDATE orders SET ...
+  WHERE id = 2;  -- waiting row 2    WHERE id = 1; -- waiting row 1
+                 -- DEADLOCK! ☠️
+  ```
+
+  Prevention: always access tables and rows in the same order across all transactions.
+</InterviewQ>
+
+<InterviewQ question="How do you handle transactions in Laravel?" difficulty="easy">
+  ```php
+  use Illuminate\Support\Facades\DB;
+
+  // Automatic — rolls back on any exception
+  DB::transaction(function () use ($order, $items) {
+      $order = Order::create([...]);
+
+      foreach ($items as $item) {
+          $order->items()->create($item);
+          Product::find($item['product_id'])->decrement('stock', $item['quantity']);
+      }
+  });
+
+  // Manual — more control
+  DB::beginTransaction();
+  try {
+      $order = Order::create([...]);
+      $order->items()->createMany($items);
+      DB::commit();
+  } catch (\Exception $e) {
+      DB::rollBack();
+      throw $e;
+  }
+  ```
+</InterviewQ>
+
+---
+
+## Normalization & Design
+
+<InterviewQ question="What are the first three normal forms?" difficulty="mid">
+  - **1NF** — each column holds one atomic value. No repeating groups or arrays in a cell.
+  - **2NF** — every non-key column depends on the **full** primary key (no partial dependencies).
+  - **3NF** — every non-key column depends **only** on the primary key, not on other non-key columns (no transitive dependencies).
+
+  ```sql
+  -- 1NF violation: multiple phones in one column
+  | id | name  | phones          |
+  | 1  | Ahmed | 010, 011, 012   |  ❌ → split to user_phones table
+
+  -- 2NF violation: product_name depends only on product_id, not full key (order_id + product_id)
+  order_items: order_id, product_id, product_name, quantity
+  ❌ → move product_name to products table
+
+  -- 3NF violation: city depends on zip_code, not on user id
+  users: id, zip_code, city
+  ❌ → move to zip_codes table or remove city
+  ```
+</InterviewQ>
+
+<InterviewQ question="When would you intentionally break normalization (denormalize)?" difficulty="mid">
+  When read performance is critical and data changes rarely. Denormalization trades
+  data duplication for faster queries by avoiding expensive JOINs.
+
+  Common cases:
+  - Storing `order total` on the orders table instead of summing order_items every time.
+  - Storing `comment_count` on posts instead of counting on every page load.
+  - Storing `user_name` on orders as a snapshot (because names can change).
+
+  Rule: normalize first, denormalize only when you have a measured performance problem.
+</InterviewQ>
+
+---
+
+## MySQL Specific
+
+<InterviewQ question="What is the difference between InnoDB and MyISAM?" difficulty="mid">
+  InnoDB is the default MySQL storage engine and the one you should always use.
+
+  | Feature       | InnoDB            | MyISAM         |
+  |---------------|-------------------|----------------|
+  | Transactions  | ✅ Yes            | ❌ No          |
+  | Foreign keys  | ✅ Yes            | ❌ No          |
+  | Row locking   | ✅ Row-level      | ❌ Table-level |
+  | Crash recovery| ✅ Yes            | ❌ No          |
+  | Full-text search | ✅ Yes (5.6+) | ✅ Yes         |
+
+  MyISAM is legacy — only use InnoDB.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between CHAR and VARCHAR?" difficulty="easy">
+  `CHAR(n)` is fixed-length — always stores exactly n characters, padding with spaces if shorter.
+  `VARCHAR(n)` is variable-length — stores only the actual characters plus 1-2 bytes for length.
+
+  ```sql
+  CHAR(10)    → 'Ahmed     ' (10 chars, padded — always same storage)
+  VARCHAR(10) → 'Ahmed'      (5 chars + 1 byte length — variable storage)
+
+  -- Use CHAR for fixed-length data: country codes, UUIDs, phone formats
+  -- Use VARCHAR for everything else
+  country_code CHAR(2)       -- always 'EG', 'US', 'GB'
+  name         VARCHAR(100)  -- variable length
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is the difference between DATETIME and TIMESTAMP?" difficulty="easy">
+  `DATETIME` stores date and time as-is, no timezone — range: 1000-01-01 to 9999-12-31.
+  `TIMESTAMP` stores as UTC and converts to server timezone on retrieval — range: 1970-2038.
+  `TIMESTAMP` updates automatically when a row changes (useful for `updated_at`).
+  Use `DATETIME` for birthdates and historical dates. Use `TIMESTAMP` for `created_at`/`updated_at`.
+
+  ```sql
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  birthdate  DATE       -- no time needed
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is an auto-increment and what happens when you delete rows?" difficulty="easy">
+  `AUTO_INCREMENT` automatically assigns the next integer ID when a row is inserted.
+  When you delete rows, the IDs are **not reused** — the counter keeps increasing.
+  This is intentional: reusing IDs of deleted rows causes confusion and potential security issues
+  (a cached link to /orders/42 might point to a different order after deletion).
+
+  ```sql
+  INSERT INTO users (name) VALUES ('Ahmed');  -- gets id = 1
+  INSERT INTO users (name) VALUES ('Sara');   -- gets id = 2
+  DELETE FROM users WHERE id = 2;
+  INSERT INTO users (name) VALUES ('Omar');   -- gets id = 3, NOT 2
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is the N+1 query problem?" difficulty="easy">
+  The N+1 problem happens when you load a list of records (1 query) and then query a
+  related record for each one inside a loop (N queries). For 100 posts that's 101 queries.
+
+  ```php
+  // ❌ N+1: 1 query for posts + 1 per post for user = 101 queries
+  $posts = Post::all();
+  foreach ($posts as $post) {
+      echo $post->user->name;  // new query every iteration
+  }
+
+  // ✅ Eager loading: 2 queries total regardless of count
+  $posts = Post::with('user')->get();
+  foreach ($posts as $post) {
+      echo $post->user->name;  // already loaded
+  }
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is a stored procedure and when would you use it?" difficulty="mid">
+  A stored procedure is a saved SQL routine stored in the database that you call by name.
+  It can accept parameters, contain logic, and run multiple statements.
+
+  Use cases: complex reports, batch operations, enforcing business logic at the DB level.
+  Downsides: hard to version control, logic scattered between app and DB, hard to test.
+
+  ```sql
+  DELIMITER //
+  CREATE PROCEDURE GetUserOrders(IN userId INT)
+  BEGIN
+    SELECT o.*, SUM(oi.subtotal) as total
+    FROM orders o
+    JOIN order_items oi ON oi.order_id = o.id
+    WHERE o.user_id = userId
+    GROUP BY o.id;
+  END //
+  DELIMITER ;
+
+  -- Call it
+  CALL GetUserOrders(42);
+  ```
+
+  In modern Laravel apps — avoid stored procedures. Keep logic in PHP where it's testable and version-controlled.
+</InterviewQ>
+
+---
+
+## Performance & Optimization
+
+<InterviewQ question="What are some common ways to optimize a slow SQL query?" difficulty="mid">
+  1. Run `EXPLAIN` to see if indexes are being used.
+  2. Add missing indexes on `WHERE`, `JOIN`, and `ORDER BY` columns.
+  3. Select only needed columns — `SELECT id, name` not `SELECT *`.
+  4. Avoid `SELECT *` — fetches unnecessary data.
+  5. Avoid functions on indexed columns in `WHERE` — they prevent index usage.
+  6. Use `LIMIT` — never return unbounded result sets.
+  7. Rewrite correlated subqueries as JOINs.
+  8. Use `UNION ALL` instead of `UNION` when duplicates are acceptable.
+
+  ```sql
+  -- ❌ Function on indexed column — can't use index on email
+  WHERE LOWER(email) = 'ahmed@mail.com'
+
+  -- ✅ Store email lowercase, query directly
+  WHERE email = 'ahmed@mail.com'
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is query caching and why was it removed from MySQL 8?" difficulty="hard">
+  MySQL's query cache stored the exact result of SELECT queries and returned them instantly
+  for identical queries. It was removed in MySQL 8 because it caused more problems than it
+  solved — the cache was invalidated on every write to any involved table, causing massive
+  lock contention on write-heavy applications. For caching, use application-level caching
+  (Redis via Laravel's Cache facade) which gives you full control over invalidation strategy.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  `EXPLAIN` is the single most useful tool for database debugging. Every time a query feels slow,
+  run `EXPLAIN` first. Look for `type: ALL` (full table scan) and `key: NULL` (no index used).
+  Those are your immediate red flags.
+</MyNotes>
+
+<MyNotes>
+  The interview question I got asked most: "what is the N+1 problem?" — know it cold.
+  Interviewers love it because it tests whether you think about database performance or
+  just write code that works. The answer must include eager loading as the solution.
+</MyNotes>
+
+<MyNotes>
+  For money — always `DECIMAL(10, 2)`, never `FLOAT`. Float has rounding errors.
+  `19.99 * 3` in FLOAT might be `59.970000001`. In DECIMAL it's exactly `59.97`.
+  This one mistake causes real financial bugs in production.
+</MyNotes>

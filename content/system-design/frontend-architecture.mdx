@@ -1,0 +1,506 @@
+---
+title: "Frontend Architecture"
+description: "How to structure large Vue/Nuxt and React/Next.js projects — folder structure, component design principles, separation of concerns, and patterns that scale."
+category: system-design
+tools: [vue, nuxt, react, next, typescript]
+tags: [architecture, folder-structure, components, design-patterns, frontend, system-design]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## Concept Explanation
+
+Frontend architecture is the set of decisions that determine how your codebase is organized,
+how components communicate, and how features are added without creating chaos.
+
+A good architecture means:
+- A new developer can find any file in under 30 seconds.
+- Adding a new feature doesn't require touching 10 unrelated files.
+- Components are small, focused, and reusable.
+- Business logic is separate from UI logic.
+
+```
+Bad architecture signs:
+  ❌ 500-line component files
+  ❌ API calls scattered inside components
+  ❌ The same logic copy-pasted in 5 places
+  ❌ Props passed through 6 layers of components
+  ❌ One giant "utils.ts" file with everything in it
+
+Good architecture signs:
+  ✅ Components under 150 lines
+  ✅ API calls in composables / hooks / services
+  ✅ Logic reused through composables or hooks
+  ✅ Stores for shared state, props for local data
+  ✅ Feature-based folder structure
+```
+
+---
+
+## Why It's Used
+
+- **Scalability:** Feature-based structure grows naturally without becoming a maze.
+- **Maintainability:** Small focused files are easy to read, test, and change.
+- **Team collaboration:** Clear conventions mean less merge conflicts and code review arguments.
+- **Reusability:** Composables and hooks extract logic that can be shared across components.
+
+---
+
+## Folder Structures
+
+### Nuxt Project Structure
+
+```
+my-nuxt-app/
+├── assets/               ← raw assets (fonts, global CSS, SVG icons)
+│   ├── css/
+│   │   └── main.css
+│   └── fonts/
+│
+├── components/           ← reusable UI components
+│   ├── ui/               ← generic: Button, Input, Modal, Card, Badge
+│   │   ├── AppButton.vue
+│   │   ├── AppInput.vue
+│   │   ├── AppModal.vue
+│   │   └── AppCard.vue
+│   ├── layout/           ← layout-specific: Navbar, Sidebar, Footer
+│   │   ├── AppNavbar.vue
+│   │   ├── AppSidebar.vue
+│   │   └── AppFooter.vue
+│   └── features/         ← feature-specific components
+│       ├── products/
+│       │   ├── ProductCard.vue
+│       │   ├── ProductGrid.vue
+│       │   └── ProductFilters.vue
+│       ├── cart/
+│       │   ├── CartDrawer.vue
+│       │   └── CartItem.vue
+│       └── auth/
+│           ├── LoginForm.vue
+│           └── RegisterForm.vue
+│
+├── composables/          ← reusable logic (Vue's version of hooks)
+│   ├── useProducts.ts
+│   ├── useCart.ts
+│   ├── useAuth.ts
+│   ├── useToast.ts
+│   └── useForm.ts
+│
+├── layouts/              ← page wrapper layouts
+│   ├── default.vue
+│   ├── auth.vue
+│   └── dashboard.vue
+│
+├── middleware/           ← route guards
+│   ├── auth.ts
+│   └── guest.ts
+│
+├── pages/                ← file-based routing
+│   ├── index.vue
+│   ├── login.vue
+│   ├── products/
+│   │   ├── index.vue
+│   │   └── [id].vue
+│   └── dashboard/
+│       ├── index.vue
+│       └── orders.vue
+│
+├── plugins/              ← Nuxt plugins (axios, toast, etc.)
+│   └── api.client.ts
+│
+├── server/               ← Nuxt server routes (API)
+│   └── api/
+│       └── products.get.ts
+│
+├── stores/               ← Pinia stores
+│   ├── auth.ts
+│   ├── cart.ts
+│   └── ui.ts
+│
+├── types/                ← TypeScript types and interfaces
+│   ├── index.ts          ← re-export everything
+│   ├── user.ts
+│   ├── product.ts
+│   └── order.ts
+│
+└── utils/                ← pure utility functions (no Vue dependencies)
+    ├── format.ts         ← formatPrice, formatDate, truncate
+    ├── validate.ts       ← email regex, phone validation
+    └── constants.ts      ← API_URL, STATUS_LABELS, etc.
+```
+
+### Next.js Project Structure
+
+```
+my-next-app/
+├── public/               ← static files (favicon, robots.txt)
+│
+├── src/
+│   ├── app/              ← App Router (Next.js 13+)
+│   │   ├── layout.tsx    ← root layout
+│   │   ├── page.tsx      ← homepage
+│   │   ├── (auth)/       ← route group (no URL segment)
+│   │   │   ├── login/page.tsx
+│   │   │   └── register/page.tsx
+│   │   ├── products/
+│   │   │   ├── page.tsx
+│   │   │   └── [id]/page.tsx
+│   │   └── dashboard/
+│   │       ├── layout.tsx
+│   │       └── page.tsx
+│   │
+│   ├── components/
+│   │   ├── ui/           ← Button, Input, Modal, Card
+│   │   ├── layout/       ← Navbar, Sidebar, Footer
+│   │   └── features/     ← ProductCard, CartDrawer, LoginForm
+│   │
+│   ├── hooks/            ← custom React hooks
+│   │   ├── useProducts.ts
+│   │   ├── useCart.ts
+│   │   └── useDebounce.ts
+│   │
+│   ├── lib/              ← third-party config, API client setup
+│   │   ├── api.ts
+│   │   └── axios.ts
+│   │
+│   ├── stores/           ← Zustand stores
+│   │   ├── auth.ts
+│   │   └── cart.ts
+│   │
+│   ├── types/
+│   │   ├── index.ts
+│   │   └── api.ts
+│   │
+│   └── utils/
+│       ├── format.ts
+│       └── constants.ts
+```
+
+---
+
+## Component Design Principles
+
+### Single Responsibility — One Component, One Job
+
+```vue
+<!-- ❌ Bad: one component doing too much -->
+<script setup>
+// fetches data, handles auth, formats output, manages modal, sends email
+const { data } = await useFetch('/products')
+const auth     = useAuthStore()
+// ... 200 lines
+</script>
+
+<!-- ✅ Good: split into focused components -->
+<!-- ProductPage.vue     → fetches data, coordinates -->
+<!-- ProductGrid.vue     → displays the grid -->
+<!-- ProductCard.vue     → displays one product -->
+<!-- ProductFilters.vue  → handles filter UI -->
+```
+
+### Smart vs Dumb Components
+
+```vue
+<!-- Dumb (Presentational) Component — just UI, no logic -->
+<!-- components/ui/ProductCard.vue -->
+<script setup lang="ts">
+defineProps<{
+  name:  string
+  price: number
+  image: string
+  inStock: boolean
+}>()
+
+defineEmits<{
+  addToCart: []
+  viewDetails: []
+}>()
+</script>
+
+<template>
+  <div class="card">
+    <img :src="image" :alt="name" />
+    <h3>{{ name }}</h3>
+    <p>{{ price }}</p>
+    <button :disabled="!inStock" @click="$emit('addToCart')">Add to Cart</button>
+  </div>
+</template>
+```
+
+```vue
+<!-- Smart (Container) Component — fetches data, uses store, contains logic -->
+<!-- pages/products/index.vue -->
+<script setup lang="ts">
+const { products, isLoading } = useProducts()
+const cart = useCartStore()
+
+function handleAddToCart(product: Product) {
+  cart.addItem(product)
+  toast.success(`${product.name} added to cart`)
+}
+</script>
+
+<template>
+  <div>
+    <LoadingSpinner v-if="isLoading" />
+    <ProductCard
+      v-for="product in products"
+      :key="product.id"
+      v-bind="product"
+      @add-to-cart="handleAddToCart(product)"
+    />
+  </div>
+</template>
+```
+
+### Composables — Extract Reusable Logic (Vue/Nuxt)
+
+```typescript
+// composables/useProducts.ts
+// All product-fetching logic in one place — reusable across pages
+
+import type { Product, ProductFilters } from '@/types'
+
+export function useProducts(initialFilters?: ProductFilters) {
+  const products  = ref<Product[]>([])
+  const isLoading = ref(false)
+  const error     = ref<string | null>(null)
+  const filters   = reactive({ page: 1, per_page: 20, ...initialFilters })
+
+  async function fetchProducts() {
+    isLoading.value = true
+    error.value     = null
+    try {
+      const { data } = await useApi('/products', { params: filters })
+      products.value  = data.data
+    } catch (e: any) {
+      error.value = e.message
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  function setFilter(key: keyof ProductFilters, value: any) {
+    filters[key]  = value
+    filters.page  = 1   // reset page when filter changes
+    fetchProducts()
+  }
+
+  onMounted(fetchProducts)
+
+  return { products, isLoading, error, filters, setFilter, fetchProducts }
+}
+
+// Usage in any component or page:
+const { products, isLoading, setFilter } = useProducts({ category_id: 5 })
+```
+
+```typescript
+// composables/useForm.ts — reusable form validation logic
+export function useForm<T extends Record<string, any>>(initialValues: T) {
+  const values  = reactive({ ...initialValues })
+  const errors  = reactive<Partial<Record<keyof T, string>>>({})
+  const loading = ref(false)
+
+  function setError(field: keyof T, message: string) {
+    errors[field] = message
+  }
+
+  function clearErrors() {
+    Object.keys(errors).forEach(key => delete errors[key as keyof T])
+  }
+
+  async function handleSubmit(fn: () => Promise<void>) {
+    clearErrors()
+    loading.value = true
+    try {
+      await fn()
+    } catch (e: any) {
+      if (e.response?.data?.errors) {
+        Object.assign(errors, e.response.data.errors)
+      }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  return { values, errors, loading, setError, clearErrors, handleSubmit }
+}
+```
+
+### Custom Hooks — Extract Reusable Logic (React/Next.js)
+
+```typescript
+// hooks/useProducts.ts
+export function useProducts(filters?: ProductFilters) {
+  const [products,  setProducts]  = useState<Product[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [error,     setError]     = useState<string | null>(null)
+
+  useEffect(() => {
+    async function fetch() {
+      setIsLoading(true)
+      try {
+        const res  = await api.get('/products', { params: filters })
+        setProducts(res.data.data)
+      } catch (e: any) {
+        setError(e.message)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    fetch()
+  }, [JSON.stringify(filters)])
+
+  return { products, isLoading, error }
+}
+```
+
+### API Layer — Centralize All API Calls
+
+```typescript
+// lib/api/products.ts
+// All product API calls in one place — not scattered in components
+
+import { api } from '@/lib/api'
+import type { Product, CreateProductDTO, UpdateProductDTO } from '@/types'
+
+export const productsApi = {
+  getAll:  (params?: object)              => api.get<Product[]>('/products', { params }),
+  getOne:  (id: number)                   => api.get<Product>(`/products/${id}`),
+  create:  (data: CreateProductDTO)       => api.post<Product>('/products', data),
+  update:  (id: number, data: UpdateProductDTO) => api.patch<Product>(`/products/${id}`, data),
+  delete:  (id: number)                   => api.delete(`/products/${id}`),
+}
+
+// Usage in composable or component:
+const { data } = await productsApi.getAll({ category_id: 5 })
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- 400-line component doing everything -->
+<script setup>
+// API calls, store management, form handling, validation,
+// business logic, formatting... all in one file ❌
+const { data } = await useFetch('/products')
+const auth = useAuthStore()
+// ... 350 more lines
+</script>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Small, focused component — delegates to composables -->
+<script setup>
+const { products, isLoading } = useProducts()   // ✅ logic extracted
+const { addItem } = useCartStore()
+</script>
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```
+// Type-by-type folder structure — breaks down at scale
+src/
+├── components/    ← 50+ components in one folder
+├── hooks/         ← 30+ hooks for different features
+├── utils/         ← everything dumped here
+└── types/         ← all types mixed together
+```
+</Wrong>
+<Right>
+```
+// Feature-based — related files live together
+src/
+├── features/
+│   ├── products/
+│   │   ├── ProductCard.vue
+│   │   ├── useProducts.ts
+│   │   ├── products.api.ts
+│   │   └── product.types.ts
+│   └── cart/
+│       ├── CartDrawer.vue
+│       ├── useCart.ts
+│       └── cart.types.ts
+└── components/ui/   ← truly generic components only
+```
+</Right>
+</WrongRight>
+
+---
+
+## Best Practices
+
+- Keep components under 150 lines — if longer, split it.
+- Separate smart (container) components from dumb (presentational) ones.
+- Put all API calls in composables or a dedicated API layer — never directly in components.
+- Use a feature-based folder structure as the project grows past 20 components.
+- Name composables with `use` prefix: `useProducts`, `useAuth`, `useForm`.
+- Keep `utils/` for pure functions only — no Vue/React dependencies.
+- Co-locate types with the feature that uses them.
+- Use barrel files (`index.ts`) to clean up imports.
+
+```typescript
+// types/index.ts — barrel file
+export type { User }    from './user'
+export type { Product } from './product'
+export type { Order }   from './order'
+
+// Now import from one place:
+import type { User, Product, Order } from '@/types'
+```
+
+---
+
+## Interview Questions
+
+<InterviewQ question="What is the difference between a smart and a dumb component?" difficulty="easy">
+  A dumb (presentational) component only receives props and emits events — it has no
+  knowledge of stores, APIs, or business logic. It's pure UI. A smart (container) component
+  fetches data, talks to stores, and contains business logic — it passes data down to dumb
+  components as props. This separation makes dumb components highly reusable and testable,
+  and keeps smart components focused on orchestration rather than UI details.
+</InterviewQ>
+
+<InterviewQ question="What is a composable in Vue and how is it different from a utility function?" difficulty="mid">
+  A composable is a function that uses Vue's Composition API (ref, computed, watch, lifecycle hooks)
+  to encapsulate and reuse stateful logic. A utility function is a plain JavaScript function with
+  no Vue dependencies — it transforms data but holds no reactive state. Use composables for
+  logic that needs reactivity or lifecycle (fetching data, tracking mouse position, managing a timer).
+  Use utility functions for pure transformations (formatting a price, validating an email).
+</InterviewQ>
+
+<InterviewQ question="When would you choose feature-based folder structure over type-based?" difficulty="mid">
+  Type-based (components/, hooks/, utils/ at root) works fine for small projects under ~20
+  components. Feature-based (features/products/, features/cart/) scales better for larger apps
+  because related files live together — when working on the products feature, everything you
+  need is in one folder instead of scattered across components/, hooks/, types/, and utils/.
+  A good rule: start type-based, switch to feature-based when you have 3+ developers or
+  the project exceeds 30+ components.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The composable pattern changed how I write Vue apps. Before, I had massive page components
+  mixing API calls, reactive state, computed values, and template logic. Now each concern
+  lives in its own composable — `useProducts()`, `useFilters()`, `usePagination()` —
+  and the page component just composes them. Files are small, focused, and testable.
+</MyNotes>
+
+<MyNotes>
+  I always create a dedicated API layer (`lib/api/products.ts`) even in small projects.
+  The moment you hardcode `/api/products` in 10 components, changing the endpoint or adding
+  auth headers means finding and editing all 10 files. One API file means one place to change.
+</MyNotes>

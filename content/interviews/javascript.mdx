@@ -1,0 +1,224 @@
+---
+title: "JavaScript Interview Questions"
+description: "Quick-review JavaScript interview questions and answers — closures, async/await, event loop, prototypes, ES6+, and common gotchas"
+category: interviews
+tags: [javascript, interview, closures, async, event-loop, es6]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - interviews/typescript
+  - interviews/react-nextjs
+---
+
+## Core Concepts
+
+<InterviewQ question="What is the difference between var, let, and const?" difficulty="easy">
+  `var` is function-scoped, hoisted, and can be redeclared. `let` is block-scoped, not hoisted to usable state, and cannot be redeclared. `const` is block-scoped like `let` but cannot be reassigned — though objects and arrays declared with `const` are still mutable (their properties can change). Always prefer `const`, use `let` when reassignment is needed, avoid `var`.
+</InterviewQ>
+
+<InterviewQ question="What is hoisting?" difficulty="easy">
+  Hoisting moves variable and function declarations to the top of their scope before code executes. `var` declarations are hoisted and initialized as `undefined`. Function declarations are fully hoisted — you can call them before they appear in the code. `let` and `const` are hoisted but not initialized — accessing them before declaration throws a `ReferenceError` (temporal dead zone).
+</InterviewQ>
+
+<InterviewQ question="What is a closure?" difficulty="mid">
+  A closure is a function that remembers the variables from its outer scope even after the outer function has finished executing. Every function in JavaScript is a closure. Common use cases: data privacy, factory functions, memoization, and event handlers that need access to loop variables.
+
+```js
+  function counter() {
+    let count = 0;
+    return () => ++count; // remembers count
+  }
+  const inc = counter();
+  inc(); // 1
+  inc(); // 2
+```
+</InterviewQ>
+
+<InterviewQ question="What is the difference between == and ===?" difficulty="easy">
+  `==` is loose equality — it performs type coercion before comparing (`0 == '0'` is `true`). `===` is strict equality — no coercion, both value and type must match (`0 === '0'` is `false`). Always use `===` to avoid unexpected coercion bugs.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between null and undefined?" difficulty="easy">
+  `undefined` means a variable has been declared but not assigned a value — JavaScript sets it automatically. `null` is an intentional absence of value — explicitly assigned by a developer. `typeof undefined` is `"undefined"`. `typeof null` is `"object"` — a famous JavaScript bug.
+</InterviewQ>
+
+<InterviewQ question="What is the typeof operator and what are its possible return values?" difficulty="easy">
+  `typeof` returns a string describing the type of a value. Possible values: `"undefined"`, `"boolean"`, `"number"`, `"bigint"`, `"string"`, `"symbol"`, `"function"`, `"object"`. Note: `typeof null` returns `"object"` (historical bug) and `typeof function(){}` returns `"function"` even though functions are objects.
+</InterviewQ>
+
+---
+
+## Functions & Scope
+
+<InterviewQ question="What is the difference between a regular function and an arrow function?" difficulty="mid">
+  Arrow functions don't have their own `this` — they inherit `this` from the surrounding lexical scope. Regular functions have their own `this` determined by how they are called. Arrow functions also can't be used as constructors, don't have `arguments` object, and can't be used as generator functions. Use arrow functions for callbacks and methods that need lexical `this`. Use regular functions when you need `this` to be dynamic.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between call, apply, and bind?" difficulty="mid">
+  All three set the `this` context of a function. `call(thisArg, arg1, arg2)` invokes the function immediately with args passed individually. `apply(thisArg, [args])` invokes immediately with args as an array. `bind(thisArg, arg1)` returns a new function with `this` permanently set — doesn't invoke immediately. Use `bind` when you need to pass a function as a callback with a fixed `this`.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between function declaration and function expression?" difficulty="easy">
+  Function declarations (`function foo() {}`) are fully hoisted — you can call them before they appear in code. Function expressions (`const foo = function() {}`) are not hoisted — calling before declaration throws a `ReferenceError`. Arrow functions are always expressions. Named function expressions help with stack traces in debugging.
+</InterviewQ>
+
+<InterviewQ question="What is an IIFE and when would you use it?" difficulty="mid">
+  An IIFE (Immediately Invoked Function Expression) is a function that runs as soon as it's defined — `(function() { ... })()`. It creates a private scope, preventing variables from polluting the global scope. Mostly replaced by ES modules and block scoping with `let`/`const` in modern JavaScript, but still seen in older codebases and some patterns like the module pattern.
+</InterviewQ>
+
+---
+
+## Async JavaScript
+
+<InterviewQ question="What is the event loop?" difficulty="hard">
+  JavaScript is single-threaded. The event loop continuously checks if the call stack is empty. If empty, it picks the next task from the task queue (macrotasks: setTimeout, setInterval, I/O) or the microtask queue (Promises, queueMicrotask). Microtasks always run before macrotasks. This is why `Promise.resolve().then()` runs before `setTimeout(() => {}, 0)`.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between microtasks and macrotasks?" difficulty="hard">
+  Macrotasks (task queue): `setTimeout`, `setInterval`, `setImmediate`, I/O, UI rendering. Microtasks (microtask queue): `Promise.then/catch/finally`, `queueMicrotask`, `MutationObserver`. After each macrotask, the engine drains the entire microtask queue before picking the next macrotask. So all pending Promises resolve before the next `setTimeout` callback fires.
+</InterviewQ>
+
+<InterviewQ question="What is a Promise and what states can it be in?" difficulty="easy">
+  A Promise is an object representing the eventual completion or failure of an async operation. Three states: `pending` (initial), `fulfilled` (completed successfully with a value), `rejected` (failed with a reason). Once settled (fulfilled or rejected) a Promise cannot change state. Chain with `.then()`, `.catch()`, `.finally()`.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Promise.all, Promise.allSettled, Promise.race, and Promise.any?" difficulty="mid">
+  `Promise.all([...])` — resolves when ALL resolve, rejects immediately if ANY rejects. Use for parallel operations that all must succeed.
+  `Promise.allSettled([...])` — waits for ALL to settle (fulfill or reject), never rejects. Returns array of `{status, value/reason}` objects.
+  `Promise.race([...])` — resolves/rejects as soon as the FIRST one settles.
+  `Promise.any([...])` — resolves with the FIRST fulfillment, rejects only if ALL reject.
+</InterviewQ>
+
+<InterviewQ question="What is async/await and how does it relate to Promises?" difficulty="easy">
+  `async/await` is syntactic sugar over Promises. An `async` function always returns a Promise. `await` pauses execution of the async function until the Promise resolves — without blocking the main thread. Under the hood it's the same as `.then()` chaining. Use `try/catch` to handle rejections with `async/await`.
+</InterviewQ>
+
+<InterviewQ question="What happens if you use await without try/catch?" difficulty="mid">
+  If the awaited Promise rejects and there's no `try/catch`, the rejection propagates up as an unhandled Promise rejection. In Node.js this can crash the process. In browsers it shows a console warning. Always wrap `await` calls in `try/catch` or add a `.catch()` to the async function call site.
+</InterviewQ>
+
+---
+
+## Objects & Prototypes
+
+<InterviewQ question="What is prototypal inheritance?" difficulty="mid">
+  Every JavaScript object has a hidden `[[Prototype]]` link to another object. When you access a property not found on the object, JavaScript looks up the prototype chain until it finds it or reaches `null`. `Object.create(proto)` creates an object with a specific prototype. ES6 `class` syntax is syntactic sugar over prototypal inheritance — it doesn't add classical inheritance.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Object.freeze and Object.seal?" difficulty="mid">
+  `Object.freeze()` makes an object completely immutable — no adding, removing, or modifying properties. `Object.seal()` prevents adding or removing properties but allows modifying existing ones. Both are shallow — nested objects are not affected. Use `freeze` for true constants, `seal` when structure must be fixed but values can change.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between shallow copy and deep copy?" difficulty="mid">
+  A shallow copy copies the top-level properties — nested objects/arrays are still referenced. Methods: `Object.assign({}, obj)`, spread `{...obj}`, `[...arr]`. A deep copy copies everything recursively — no shared references. Methods: `structuredClone(obj)` (modern, built-in), `JSON.parse(JSON.stringify(obj))` (doesn't handle functions, dates, undefined), or lodash `_.cloneDeep()`.
+</InterviewQ>
+
+<InterviewQ question="What is optional chaining (?.) and nullish coalescing (??)?" difficulty="easy">
+  Optional chaining `?.` safely accesses nested properties — returns `undefined` instead of throwing if any part of the chain is `null` or `undefined`. `user?.address?.city` won't throw if `address` is null. Nullish coalescing `??` returns the right side only if the left side is `null` or `undefined` — unlike `||` which also triggers for `0`, `''`, and `false`. `user.name ?? 'Anonymous'` returns `'Anonymous'` only if name is `null`/`undefined`.
+</InterviewQ>
+
+---
+
+## Arrays & Iteration
+
+<InterviewQ question="What is the difference between map, filter, and reduce?" difficulty="easy">
+  `map` transforms each element and returns a new array of the same length. `filter` returns a new array with only elements that pass a test. `reduce` accumulates elements into a single value (sum, object, flat array, etc.). All three are pure — they don't mutate the original array.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between forEach and map?" difficulty="easy">
+  `forEach` iterates over an array and returns `undefined` — used for side effects (logging, DOM updates). `map` iterates and returns a new array of transformed values — used when you need the result. Never use `map` if you're ignoring the returned array — use `forEach` instead.
+</InterviewQ>
+
+<InterviewQ question="What is array destructuring and what is object destructuring?" difficulty="easy">
+  Destructuring extracts values from arrays or objects into variables. Array: `const [first, second] = [1, 2]`. Object: `const { name, age } = user`. You can rename: `const { name: userName } = user`. Set defaults: `const { role = 'viewer' } = user`. Rest syntax: `const { id, ...rest } = user` puts remaining props in `rest`.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between find and filter?" difficulty="easy">
+  `find` returns the first element that matches the condition — or `undefined` if none match. `filter` returns a new array of ALL matching elements — or an empty array if none match. Use `find` when you need one result. Use `filter` when you need all matches.
+</InterviewQ>
+
+---
+
+## ES6+ Features
+
+<InterviewQ question="What are template literals?" difficulty="easy">
+  Template literals use backticks and allow embedded expressions with `${}`, multi-line strings without `\n`, and tagged templates for custom string processing. `\`Hello ${name}, you are ${age} years old.\`` is cleaner than string concatenation.
+</InterviewQ>
+
+<InterviewQ question="What is the spread operator and what is the rest parameter?" difficulty="easy">
+  Spread `...` expands an iterable into individual elements — `Math.max(...[1,2,3])`, `[...arr1, ...arr2]`, `{...obj1, ...obj2}`. Rest `...` collects remaining elements into an array — `function(first, ...rest)` puts all args after first into `rest`. Same syntax, opposite purposes — spread expands, rest collects.
+</InterviewQ>
+
+<InterviewQ question="What are ES Modules and how do they differ from CommonJS?" difficulty="mid">
+  ES Modules use `import`/`export` syntax, are statically analyzed at parse time, support tree shaking, and are always in strict mode. CommonJS uses `require()`/`module.exports`, loads synchronously at runtime, and is the default in Node.js. ES Modules are the standard for browsers and modern Node.js. Key difference: ES Module imports are live bindings — changes to the exported value are reflected in imports. CommonJS copies the value at require time.
+</InterviewQ>
+
+<InterviewQ question="What is a generator function?" difficulty="hard">
+  A generator function (`function*`) returns an iterator that produces values lazily with `yield`. Execution pauses at each `yield` and resumes on the next `.next()` call. Used for lazy sequences, infinite data streams, and async flow control. `async/await` is built on generators internally.
+
+```js
+  function* range(start, end) {
+    for (let i = start; i <= end; i++) yield i;
+  }
+  [...range(1, 5)] // [1, 2, 3, 4, 5]
+```
+</InterviewQ>
+
+---
+
+## Common Gotchas
+
+<InterviewQ question="What is the output of [1,2,3].map(parseInt) and why?" difficulty="hard">
+  `[1, 2, 3]`. Wait — actually `[1, NaN, NaN]`. `map` passes three args to the callback: value, index, array. `parseInt(value, index)` receives the index as the radix. `parseInt('1', 0)` → 1. `parseInt('2', 1)` → NaN (radix 1 is invalid). `parseInt('3', 2)` → NaN (3 is not valid in base 2). Fix: `.map(n => parseInt(n, 10))` or `.map(Number)`.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between synchronous and asynchronous code?" difficulty="easy">
+  Synchronous code runs line by line — each line waits for the previous to finish before executing. Asynchronous code initiates an operation and continues executing without waiting for it to complete — the result is handled later via callbacks, Promises, or async/await. JavaScript is single-threaded but achieves async behavior through the event loop and Web APIs (setTimeout, fetch, etc.).
+</InterviewQ>
+
+<InterviewQ question="Why does 0.1 + 0.2 !== 0.3 in JavaScript?" difficulty="mid">
+  JavaScript uses IEEE 754 double-precision floating point. Some decimal numbers can't be represented exactly in binary — `0.1` and `0.2` are approximations. Their sum is `0.30000000000000004`. To compare floats: `Math.abs(0.1 + 0.2 - 0.3) < Number.EPSILON`. For financial calculations use integers (cents) or a library like `decimal.js`.
+</InterviewQ>
+
+<InterviewQ question="What is event delegation?" difficulty="mid">
+  Event delegation attaches one event listener to a parent element instead of many listeners to individual children. When a child is clicked, the event bubbles up to the parent. The parent checks `event.target` to determine which child was clicked. Benefits: fewer event listeners, works for dynamically added elements, better memory usage.
+
+```js
+  document.querySelector('#list').addEventListener('click', (e) => {
+    if (e.target.matches('li')) console.log(e.target.textContent);
+  });
+```
+</InterviewQ>
+
+<InterviewQ question="What is the difference between event.preventDefault and event.stopPropagation?" difficulty="mid">
+  `preventDefault()` stops the browser's default behavior — like preventing a form from submitting or a link from navigating. `stopPropagation()` stops the event from bubbling up to parent elements — other handlers on parents won't fire. `stopImmediatePropagation()` also prevents other handlers on the same element from firing. They are independent — you can call both, either, or neither.
+</InterviewQ>
+
+---
+
+## Memory & Performance
+
+<InterviewQ question="What is a memory leak in JavaScript and what causes it?" difficulty="hard">
+  A memory leak is when allocated memory is never released because the garbage collector can't collect it — there's still a reference. Common causes: forgotten event listeners (add without remove), closures holding references to large objects, detached DOM nodes still referenced in JS, global variables, and `setInterval` callbacks that keep running. Fix: remove event listeners, clear intervals, nullify references when done.
+</InterviewQ>
+
+<InterviewQ question="What is debouncing and throttling?" difficulty="mid">
+  Debouncing delays executing a function until after a specified time has passed since the last call — useful for search input (wait until user stops typing). Throttling ensures a function runs at most once per specified interval — useful for scroll and resize events. Debounce = "wait until quiet". Throttle = "run at most once per X ms".
+</InterviewQ>
+
+<InterviewQ question="What is memoization?" difficulty="mid">
+  Memoization caches the result of a function call based on its inputs — if called again with the same args, returns the cached result instead of recomputing. Trades memory for speed. Useful for expensive pure functions called with the same args repeatedly. React's `useMemo` and `useCallback` are implementations of memoization.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The event loop question always comes up in senior interviews. The key insight: microtasks (Promises) always drain completely before the next macrotask (setTimeout) runs. Draw the diagram in your head: call stack → microtask queue → macrotask queue.
+
+  The closure question is in every interview. Prepare one clear example — the counter factory is perfect. Explain it in one sentence: "a function that remembers its outer scope even after the outer function returns."
+
+  `0.1 + 0.2 !== 0.3` always gets laughs but interviewers love it — it shows you understand how floats work, not just JavaScript syntax.
+
+  The `[1,2,3].map(parseInt)` gotcha is a classic. The real lesson: always be explicit about function arguments when passing as callbacks. `parseInt` takes two args — most callbacks you pass to `map` do too.
+</MyNotes>

@@ -1,0 +1,921 @@
+---
+title: "Authentication in Next.js with Laravel Sanctum"
+description: "How to implement a complete authentication flow in Next.js App Router using Route Handlers, httpOnly cookies, Next.js Middleware for route protection, and Zustand for client-side auth state — connected to a Laravel Sanctum API."
+category: authentication
+tools: [nextjs, react]
+tags: [authentication, nextjs, laravel, sanctum, bearer-token, middleware, zustand, httponly-cookie]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+Authentication in Next.js App Router with a Laravel backend follows a clear layered pattern. The client never talks to Laravel directly and never sees the Bearer token. Everything flows through Next.js Route Handlers on the server.
+
+**Full architecture:**
+
+```tsx
+[Login Form] → POST /api/auth/login (Next.js Route Handler)
+│
+├── validates input with Zod
+├── calls Laravel POST /api/auth/login
+├── receives { user, token } from Laravel
+├── stores token in httpOnly cookie
+└── returns { user } to client (never the token)
+[Every protected page load]
+│
+├── Next.js Middleware reads httpOnly cookie
+├── if no cookie → redirect to /login
+└── if cookie exists → allow request
+[Every API request from client]
+│
+├── client calls Next.js Route Handler
+├── Route Handler reads token from httpOnly cookie
+├── calls Laravel with Authorization: Bearer {token}
+└── returns data to client
+[Logout] → POST /api/auth/logout (Next.js Route Handler)
+│
+├── calls Laravel to invalidate token
+└── deletes httpOnly cookie
+```
+<Callout type="note">
+  **Why not call Laravel directly from the client?** Three reasons: the Bearer
+  token would be exposed in browser network requests, you would have CORS issues
+  between your frontend domain and Laravel domain, and you lose the ability to
+  add server-side logic (logging, rate limiting, token refresh) in one place.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **Security:** Bearer token lives only in an httpOnly cookie — JavaScript cannot read it, XSS cannot steal it.
+- **No CORS issues:** Client talks to its own Next.js server, not directly to Laravel.
+- **Centralized API logic:** All Laravel calls go through Route Handlers — one place to handle errors, logging, retries.
+- **Next.js Middleware:** Protect entire route groups at the edge before the page even renders.
+- **Zustand for UI state:** User object available instantly in any component without prop drilling.
+
+---
+
+## Real-World Use Cases
+
+- **Login / Register:** Form → Route Handler → Laravel → httpOnly cookie.
+- **Protected dashboard:** Middleware redirects unauthenticated users before the page renders.
+- **User profile:** Route Handler reads cookie, fetches `/api/auth/me` from Laravel, returns user.
+- **Logout:** Route Handler deletes cookie and invalidates Laravel token.
+- **Role-based access:** Middleware checks user role from cookie payload and redirects unauthorized users.
+
+---
+
+## When NOT to Use It
+
+- **Public marketing pages:** No auth needed — skip middleware entirely for these routes.
+- **Static pages:** If a page has no user-specific data, do not fetch auth state for it.
+- **NextAuth:** If you need OAuth providers (Google, GitHub login), consider NextAuth. For Laravel Sanctum with Bearer tokens, this pattern is simpler and more appropriate.
+
+---
+
+## Code Examples
+
+### File Structure
+```tsx
+app/
+├── api/
+│   └── auth/
+│       ├── login/
+│       │   └── route.ts
+│       ├── register/
+│       │   └── route.ts
+│       ├── logout/
+│       │   └── route.ts
+│       └── me/
+│           └── route.ts
+├── (auth)/
+│   ├── login/
+│   │   └── page.tsx
+│   └── register/
+│       └── page.tsx
+├── (protected)/
+│   ├── dashboard/
+│   │   └── page.tsx
+│   └── profile/
+│       └── page.tsx
+└── middleware.ts
+lib/
+├── api/
+│   └── laravel.ts
+├── schemas/
+│   └── auth.ts
+└── store/
+└── useAuthStore.ts
+```
+---
+
+### Laravel Helper — Reusable Fetch Wrapper
+
+```ts
+// lib/api/laravel.ts
+import { cookies } from 'next/headers'
+
+const LARAVEL_API = process.env.LARAVEL_API_URL
+
+export async function laravelFetch(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const cookieStore = await cookies()
+  const token = cookieStore.get('auth_token')?.value
+
+  if (!token) {
+    throw new Error('Unauthorized')
+  }
+
+  return fetch(`${LARAVEL_API}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(options.headers as Record<string, string>),
+    },
+  })
+}
+
+// Public fetch — no token required
+export async function laravelPublicFetch(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  return fetch(`${LARAVEL_API}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers as Record<string, string>),
+    },
+  })
+}
+```
+
+---
+
+### Zod Schemas
+
+```ts
+// lib/schemas/auth.ts
+import { z } from 'zod'
+
+export const loginSchema = z.object({
+  email: z.string().min(1, 'Email is required').email('Invalid email'),
+  password: z.string().min(1, 'Password is required').min(8, 'Minimum 8 characters'),
+})
+
+export const registerSchema = z.object({
+  name: z.string().min(1, 'Name is required').max(255),
+  email: z.string().min(1, 'Email is required').email('Invalid email'),
+  password: z.string().min(8, 'Minimum 8 characters'),
+  password_confirmation: z.string(),
+}).refine((data) => data.password === data.password_confirmation, {
+  message: 'Passwords do not match',
+  path: ['password_confirmation'],
+})
+
+export type LoginFormData = z.infer<typeof loginSchema>
+export type RegisterFormData = z.infer<typeof registerSchema>
+```
+
+---
+
+### Auth Store — Zustand
+
+```ts
+// lib/store/useAuthStore.ts
+import { create } from 'zustand'
+
+interface User {
+  id: string
+  name: string
+  email: string
+  role: string
+}
+
+interface AuthState {
+  user: User | null
+  isAuthenticated: boolean
+  setUser: (user: User) => void
+  clearUser: () => void
+}
+
+export const useAuthStore = create<AuthState>()((set) => ({
+  user: null,
+  isAuthenticated: false,
+  setUser: (user) => set({ user, isAuthenticated: true }),
+  clearUser: () => set({ user: null, isAuthenticated: false }),
+}))
+```
+
+---
+
+### Route Handler — Login
+
+```ts
+// app/api/auth/login/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
+import { loginSchema } from '@/lib/schemas/auth'
+import { laravelPublicFetch } from '@/lib/api/laravel'
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+
+    // Server-side validation
+    const parsed = loginSchema.safeParse(body)
+    if (!parsed.success) {
+      return NextResponse.json(
+        { message: 'Invalid input', errors: parsed.error.flatten().fieldErrors },
+        { status: 422 }
+      )
+    }
+
+    // Call Laravel
+    const laravelRes = await laravelPublicFetch('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(parsed.data),
+    })
+
+    const data = await laravelRes.json()
+
+    if (!laravelRes.ok) {
+      return NextResponse.json(
+        { message: data.message ?? 'Invalid credentials', errors: data.errors },
+        { status: laravelRes.status }
+      )
+    }
+
+    // Store token in httpOnly cookie
+    const cookieStore = await cookies()
+    cookieStore.set('auth_token', data.token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+    })
+
+    // Return user to client — never the token
+    return NextResponse.json({ user: data.user })
+  } catch {
+    return NextResponse.json(
+      { message: 'Internal server error' },
+      { status: 500 }
+    )
+  }
+}
+```
+
+---
+
+### Route Handler — Register
+
+```ts
+// app/api/auth/register/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
+import { registerSchema } from '@/lib/schemas/auth'
+import { laravelPublicFetch } from '@/lib/api/laravel'
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+
+    const parsed = registerSchema.safeParse(body)
+    if (!parsed.success) {
+      return NextResponse.json(
+        { message: 'Invalid input', errors: parsed.error.flatten().fieldErrors },
+        { status: 422 }
+      )
+    }
+
+    const laravelRes = await laravelPublicFetch('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(parsed.data),
+    })
+
+    const data = await laravelRes.json()
+
+    if (!laravelRes.ok) {
+      return NextResponse.json(
+        { message: data.message ?? 'Registration failed', errors: data.errors },
+        { status: laravelRes.status }
+      )
+    }
+
+    const cookieStore = await cookies()
+    cookieStore.set('auth_token', data.token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7,
+    })
+
+    return NextResponse.json({ user: data.user }, { status: 201 })
+  } catch {
+    return NextResponse.json(
+      { message: 'Internal server error' },
+      { status: 500 }
+    )
+  }
+}
+```
+
+---
+
+### Route Handler — Logout
+
+```ts
+// app/api/auth/logout/route.ts
+import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
+import { laravelFetch } from '@/lib/api/laravel'
+
+export async function POST() {
+  try {
+    // Tell Laravel to invalidate the token
+    await laravelFetch('/auth/logout', { method: 'POST' })
+  } catch {
+    // Continue even if Laravel call fails — still clear cookie
+  }
+
+  const cookieStore = await cookies()
+  cookieStore.delete('auth_token')
+
+  return NextResponse.json({ success: true })
+}
+```
+
+---
+
+### Route Handler — Get Current User
+
+```ts
+// app/api/auth/me/route.ts
+import { NextResponse } from 'next/server'
+import { laravelFetch } from '@/lib/api/laravel'
+
+export async function GET() {
+  try {
+    const laravelRes = await laravelFetch('/auth/me')
+    const user = await laravelRes.json()
+
+    if (!laravelRes.ok) {
+      return NextResponse.json(
+        { message: 'Unauthenticated' },
+        { status: 401 }
+      )
+    }
+
+    return NextResponse.json({ user })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ message: 'Unauthenticated' }, { status: 401 })
+    }
+    return NextResponse.json({ message: 'Internal server error' }, { status: 500 })
+  }
+}
+```
+
+---
+
+### Next.js Middleware — Protect Routes
+
+```ts
+// middleware.ts  (root of project, next to app/)
+import { NextRequest, NextResponse } from 'next/server'
+
+// Routes that require authentication
+const protectedRoutes = ['/dashboard', '/profile', '/settings']
+
+// Routes that should redirect to dashboard if already authenticated
+const authRoutes = ['/login', '/register']
+
+export function middleware(req: NextRequest) {
+  const token = req.cookies.get('auth_token')?.value
+  const { pathname } = req.nextUrl
+
+  const isProtected = protectedRoutes.some((route) =>
+    pathname.startsWith(route)
+  )
+  const isAuthRoute = authRoutes.some((route) =>
+    pathname.startsWith(route)
+  )
+
+  // No token + trying to access protected route → redirect to login
+  if (isProtected && !token) {
+    const loginUrl = new URL('/login', req.url)
+    loginUrl.searchParams.set('from', pathname) // remember where they came from
+    return NextResponse.redirect(loginUrl)
+  }
+
+  // Has token + trying to access login/register → redirect to dashboard
+  if (isAuthRoute && token) {
+    return NextResponse.redirect(new URL('/dashboard', req.url))
+  }
+
+  return NextResponse.next()
+}
+
+export const config = {
+  // Run middleware on these paths only — skip static files and API routes
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|api/).*)',
+  ],
+}
+```
+
+---
+
+### Auth Provider — Initialize User on App Load
+
+```tsx
+// components/AuthProvider.tsx
+'use client'
+
+import { useEffect } from 'react'
+import { useAuthStore } from '@/lib/store/useAuthStore'
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const setUser = useAuthStore((s) => s.setUser)
+  const clearUser = useAuthStore((s) => s.clearUser)
+
+  useEffect(() => {
+    // Fetch current user on app load to hydrate Zustand store
+    fetch('/api/auth/me')
+      .then((res) => {
+        if (!res.ok) {
+          clearUser()
+          return
+        }
+        return res.json()
+      })
+      .then((data) => {
+        if (data?.user) setUser(data.user)
+      })
+      .catch(() => clearUser())
+  }, [])
+
+  return <>{children}</>
+}
+```
+
+```tsx
+// app/layout.tsx
+import { AuthProvider } from '@/components/AuthProvider'
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <Providers>
+          <AuthProvider>
+            {children}
+          </AuthProvider>
+        </Providers>
+      </body>
+    </html>
+  )
+}
+```
+
+---
+
+### Login Form — Connected to Route Handler
+
+```tsx
+// components/forms/LoginForm.tsx
+'use client'
+
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { loginSchema, type LoginFormData } from '@/lib/schemas/auth'
+import { useAuthStore } from '@/lib/store/useAuthStore'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { useState } from 'react'
+
+export function LoginForm() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const setUser = useAuthStore((s) => s.setUser)
+  const [serverError, setServerError] = useState<string | null>(null)
+
+  const {
+    register,
+    handleSubmit,
+    setError,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginFormData>({
+    resolver: zodResolver(loginSchema),
+  })
+
+  async function onSubmit(data: LoginFormData) {
+    setServerError(null)
+
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+
+    const result = await res.json()
+
+    if (!res.ok) {
+      if (res.status === 422 && result.errors) {
+        Object.entries(result.errors).forEach(([field, messages]) => {
+          setError(field as keyof LoginFormData, {
+            message: (messages as string[])[0],
+          })
+        })
+        return
+      }
+      setServerError(result.message ?? 'Login failed')
+      return
+    }
+
+    // Set user in Zustand store
+    setUser(result.user)
+
+    // Redirect to where they came from or dashboard
+    const from = searchParams.get('from') ?? '/dashboard'
+    router.push(from)
+  }
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)} noValidate>
+      <div>
+        <label htmlFor="email">Email</label>
+        <input id="email" type="email" {...register('email')} />
+        {errors.email && <p>{errors.email.message}</p>}
+      </div>
+
+      <div>
+        <label htmlFor="password">Password</label>
+        <input id="password" type="password" {...register('password')} />
+        {errors.password && <p>{errors.password.message}</p>}
+      </div>
+
+      {serverError && <p>{serverError}</p>}
+
+      <button type="submit" disabled={isSubmitting}>
+        {isSubmitting ? 'Signing in...' : 'Sign in'}
+      </button>
+    </form>
+  )
+}
+```
+
+---
+
+### Logout Button
+
+```tsx
+// components/LogoutButton.tsx
+'use client'
+
+import { useAuthStore } from '@/lib/store/useAuthStore'
+import { useRouter } from 'next/navigation'
+
+export function LogoutButton() {
+  const clearUser = useAuthStore((s) => s.clearUser)
+  const router = useRouter()
+
+  async function handleLogout() {
+    await fetch('/api/auth/logout', { method: 'POST' })
+    clearUser()
+    router.push('/login')
+  }
+
+  return (
+    <button onClick={handleLogout}>
+      Logout
+    </button>
+  )
+}
+```
+
+---
+
+### useAuth Hook — Access User Anywhere
+
+```ts
+// hooks/useAuth.ts
+import { useAuthStore } from '@/lib/store/useAuthStore'
+
+export function useAuth() {
+  const user = useAuthStore((s) => s.user)
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+  const clearUser = useAuthStore((s) => s.clearUser)
+
+  return { user, isAuthenticated, clearUser }
+}
+
+// Usage in any client component:
+// const { user, isAuthenticated } = useAuth()
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```ts
+// Returning the token to the client — now it's exposed in JS
+return NextResponse.json({
+  user: data.user,
+  token: data.token, // ❌ never do this
+})
+```
+</Wrong>
+<Right>
+```ts
+// Store token in httpOnly cookie — return only the user
+cookieStore.set('auth_token', data.token, { httpOnly: true, ... })
+
+return NextResponse.json({ user: data.user }) // ✅ token never reaches client JS
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// middleware.ts — matching API routes causes infinite loops
+export const config = {
+  matcher: ['/(.*)', '/api/(.*)'], // ❌ middleware runs on its own Route Handlers
+}
+```
+</Wrong>
+<Right>
+```ts
+// Exclude API routes, static files from middleware
+export const config = {
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/).*)', // ✅
+  ],
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Reading cookies in a Client Component — cookies() only works server-side
+'use client'
+import { cookies } from 'next/headers' // ❌ throws error in client component
+
+export function MyComponent() {
+  const token = cookies().get('auth_token') // 💥
+}
+```
+</Wrong>
+<Right>
+```ts
+// Read cookies only in Server Components, Route Handlers, or Middleware
+// In Client Components — use Zustand store or fetch from an API route
+'use client'
+import { useAuth } from '@/hooks/useAuth'
+
+export function MyComponent() {
+  const { user } = useAuth() // ✅ reads from Zustand
+}
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** Next.js Middleware runs on the **Edge Runtime** — it cannot use Node.js APIs or most npm packages. Keep middleware lean: only read cookies, check paths, and redirect. Never put database calls or heavy logic in middleware.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Group protected pages under `app/(protected)/` and auth pages under `app/(auth)/` using route groups — keeps structure clean
+- Keep all auth Route Handlers under `app/api/auth/`
+- Never store user role or permissions in the Zustand store alone — always verify on the server
+
+**Performance tips**
+```ts
+// In Server Components — read user from Laravel directly, skip Zustand
+// Zustand is client-side only — use it for UI, not SSR data
+
+// app/(protected)/dashboard/page.tsx — Server Component
+import { cookies } from 'next/headers'
+
+export default async function DashboardPage() {
+  const cookieStore = await cookies()
+  const token = cookieStore.get('auth_token')?.value
+
+  const res = await fetch(`${process.env.LARAVEL_API_URL}/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  })
+
+  const { user } = await res.json()
+
+  return <div>Welcome {user.name}</div>
+}
+```
+
+**Security considerations**
+- Always set `httpOnly: true`, `secure: true` (production), `sameSite: 'lax'` on the auth cookie
+- Never log request bodies in production — they may contain passwords
+- Add rate limiting to `/api/auth/login` to prevent brute force
+- Validate the token exists in middleware but do not verify it cryptographically there — that is Laravel's job on each API call
+- Use `cache: 'no-store'` on auth-related fetches — never cache user data
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="Why do you use Route Handlers instead of calling Laravel directly from the client?"
+  difficulty="easy"
+>
+  Three reasons: security, CORS, and centralization. Security — the Bearer
+  token lives in an httpOnly cookie that client JavaScript cannot read. CORS —
+  the client calls its own Next.js server so there are no cross-origin issues.
+  Centralization — all Laravel API logic lives in one place where you can add
+  logging, error handling, and rate limiting without touching every component.
+</InterviewQ>
+
+<InterviewQ
+  question="What does Next.js Middleware do and where does it run?"
+  difficulty="easy"
+>
+  Middleware runs before a request is processed — before the page renders or
+  the Route Handler executes. It runs on the Edge Runtime, which means it runs
+  close to the user geographically for low latency. You use it to redirect
+  unauthenticated users before they ever reach a protected page. It can read
+  cookies and headers but cannot use Node.js APIs.
+</InterviewQ>
+
+<InterviewQ
+  question="How do you handle the case where the token in the cookie has expired on Laravel's side?"
+  difficulty="mid"
+>
+  When the Route Handler calls Laravel with an expired token, Laravel returns
+  401 Unauthorized. The Route Handler catches this, deletes the auth cookie,
+  and returns 401 to the client. The client detects the 401 and redirects to
+  the login page — or you handle it globally in a fetch wrapper. On the next
+  page load, middleware sees no cookie and redirects to login automatically.
+</InterviewQ>
+
+<InterviewQ
+  question="Why does the Zustand auth store not persist across page refreshes without extra setup?"
+  difficulty="mid"
+>
+  Zustand state lives in memory — it resets on every page refresh. The httpOnly
+  cookie persists across refreshes because the browser stores it. So on refresh,
+  the cookie exists but the Zustand store is empty. The AuthProvider component
+  fixes this by calling `/api/auth/me` on mount to refetch the user and
+  repopulate the store. This is intentional — the source of truth is the cookie
+  and Laravel, not Zustand.
+</InterviewQ>
+
+<InterviewQ
+  question="How would you implement role-based route protection in Next.js Middleware?"
+  difficulty="hard"
+>
+  The challenge is that middleware runs on the Edge and cannot call Laravel.
+  One pattern is to store a minimal JWT-like payload in a second cookie
+  (not httpOnly so middleware can read it) containing the user role — set this
+  alongside the auth token cookie on login. Middleware reads the role cookie
+  and redirects based on role. The role cookie does not need to be secret since
+  it only contains non-sensitive claims — the real auth is still the httpOnly
+  Bearer token verified by Laravel on every API call.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The middleware matcher is the most confusing part. If you accidentally match
+  API routes in the middleware config, your own Route Handlers get redirected
+  in an infinite loop. Always exclude `/api/` from the matcher and test it
+  carefully on new projects.
+</MyNotes>
+
+<MyNotes>
+  The AuthProvider pattern (fetching `/api/auth/me` on mount) feels like an
+  extra request but it is the cleanest way to hydrate Zustand after a page
+  refresh. The request hits your own Next.js server which reads the httpOnly
+  cookie and calls Laravel — typically under 100ms in production. Alternative:
+  pass the user from a Server Component as a prop to a Client Component that
+  sets the Zustand store.
+</MyNotes>
+
+<MyNotes>
+  Always use `searchParams.get('from')` to redirect users back to the page
+  they tried to access before being sent to login. Set it in middleware with
+  `loginUrl.searchParams.set('from', pathname)` and read it in the login form.
+  Small UX detail that makes a big difference.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Server Component Auth Helper
+
+```ts
+// lib/auth/getServerUser.ts
+// Use in Server Components to get current user without calling Zustand
+import { cookies } from 'next/headers'
+import { redirect } from 'next/navigation'
+
+interface User {
+  id: string
+  name: string
+  email: string
+  role: string
+}
+
+export async function getServerUser(): Promise<User> {
+  const cookieStore = await cookies()
+  const token = cookieStore.get('auth_token')?.value
+
+  if (!token) redirect('/login')
+
+  const res = await fetch(`${process.env.LARAVEL_API_URL}/auth/me`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    cache: 'no-store',
+  })
+
+  if (!res.ok) redirect('/login')
+
+  const data = await res.json()
+  return data.user ?? data
+}
+
+// Usage in any Server Component:
+// const user = await getServerUser()
+// If not authenticated → automatically redirects to /login
+```
+
+---
+
+### Global Fetch Wrapper — Handle 401 on Client
+
+```ts
+// lib/api/clientFetch.ts
+// Use this instead of raw fetch() in client components
+// Automatically handles expired token / 401 responses
+
+import { useAuthStore } from '@/lib/store/useAuthStore'
+
+export async function clientFetch(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+  if (res.status === 401) {
+    // Token expired or invalid — clear store and redirect
+    useAuthStore.getState().clearUser()
+    window.location.href = '/login'
+    throw new Error('Session expired')
+  }
+
+  return res
+}
+```
+
+---
+
+### Environment Variables
+
+```env
+# .env.local
+LARAVEL_API_URL=http://localhost:8000/api   # server-side only — never exposed to client
+NEXT_PUBLIC_APP_URL=http://localhost:3000   # client-safe
+```
+
+```ts
+// Never use NEXT_PUBLIC_ for sensitive server-side variables
+// LARAVEL_API_URL is only used in Route Handlers and Server Components
+// It is never bundled into client JavaScript
+```
+
+---
+
+*Tags: `nextjs` `react` `authentication` `laravel` `sanctum` `bearer-token` `middleware` `zustand` `intermediate`*

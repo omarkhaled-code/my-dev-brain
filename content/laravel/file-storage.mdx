@@ -1,0 +1,500 @@
+---
+title: "File Storage & Uploads in Laravel"
+description: "How to handle file uploads in Laravel — storing files locally and on S3, generating URLs, validating uploads, processing images, and managing file deletion"
+category: laravel
+tools: [laravel]
+tags: [file-upload, storage, s3, images, laravel]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+---
+
+## Concept explanation
+
+Laravel's Storage facade provides a unified API for working with files regardless of where they're stored — local disk, public disk, or Amazon S3. Files are stored via `Storage::put()` or `$request->file()->store()`. The `public` disk stores files in `storage/app/public` and serves them via a symlink at `public/storage`. S3 stores files in the cloud — same API, different config.
+
+```
+User uploads file
+      ↓
+Validate (size, type, dimensions)
+      ↓
+Store file → local disk or S3
+      ↓
+Save path to database
+      ↓
+Generate URL to serve the file
+```
+
+## Why it's used
+
+- Unified API — switch from local to S3 by changing one config value
+- Built-in file validation (size, mime type, dimensions)
+- Automatic file naming and path organization
+- Works seamlessly with queues for async image processing
+
+## Real-world use cases
+
+- User avatar upload and resize
+- Product image gallery
+- Document upload (PDF, Word, Excel)
+- CSV import processing
+- Invoice PDF generation and storage
+- Video upload to S3
+
+## Code example
+
+### Storage configuration
+
+```php
+// .env
+FILESYSTEM_DISK=local        # default disk
+AWS_ACCESS_KEY_ID=xxx
+AWS_SECRET_ACCESS_KEY=xxx
+AWS_DEFAULT_REGION=us-east-1
+AWS_BUCKET=my-bucket
+AWS_URL=https://my-bucket.s3.amazonaws.com
+```
+
+```bash
+# Create symlink so public disk files are web-accessible
+php artisan storage:link
+# Creates: public/storage → storage/app/public
+```
+
+### Basic file upload — controller
+
+```php
+<?php
+// app/Http/Controllers/Api/UserController.php
+
+use Illuminate\Support\Facades\Storage;
+
+public function uploadAvatar(Request $request): JsonResponse
+{
+    $request->validate([
+        'avatar' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+    ]);
+
+    $file = $request->file('avatar');
+
+    // Store on public disk — web accessible
+    // Returns path like: avatars/randomname.jpg
+    $path = $file->store('avatars', 'public');
+
+    // Delete old avatar if exists
+    if ($request->user()->avatar) {
+        Storage::disk('public')->delete($request->user()->avatar);
+    }
+
+    // Save path to database
+    $request->user()->update(['avatar' => $path]);
+
+    // Return the full URL
+    return response()->json([
+        'avatar' => Storage::disk('public')->url($path),
+    ]);
+}
+```
+
+### Store with custom filename
+
+```php
+use Illuminate\Support\Str;
+
+public function uploadAvatar(Request $request): JsonResponse
+{
+    $file      = $request->file('avatar');
+    $extension = $file->getClientOriginalExtension();
+    $filename  = Str::uuid() . '.' . $extension;
+    $path      = 'avatars/' . $request->user()->id . '/' . $filename;
+
+    // Store with custom path and name
+    Storage::disk('public')->put($path, file_get_contents($file));
+
+    $request->user()->update(['avatar' => $path]);
+
+    return response()->json([
+        'avatar' => Storage::disk('public')->url($path),
+    ]);
+}
+```
+
+### Upload to S3
+
+```php
+public function uploadDocument(Request $request): JsonResponse
+{
+    $request->validate([
+        'document' => ['required', 'file', 'mimes:pdf,doc,docx', 'max:10240'],
+    ]);
+
+    $file = $request->file('document');
+
+    // Store on S3 — same API as local
+    $path = $file->store(
+        'documents/' . $request->user()->id,
+        's3'  // use S3 disk
+    );
+
+    // Store with visibility
+    $path = Storage::disk('s3')->putFile(
+        'documents',
+        $file,
+        'private' // or 'public'
+    );
+
+    // Generate temporary URL for private files (15 minutes)
+    $url = Storage::disk('s3')->temporaryUrl($path, now()->addMinutes(15));
+
+    // Save to database
+    Document::create([
+        'user_id' => $request->user()->id,
+        'path'    => $path,
+        'name'    => $file->getClientOriginalName(),
+        'size'    => $file->getSize(),
+        'mime'    => $file->getMimeType(),
+    ]);
+
+    return response()->json(['url' => $url]);
+}
+```
+
+### Form Request with file validation
+
+```php
+<?php
+// app/Http/Requests/UploadAvatarRequest.php
+
+class UploadAvatarRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'avatar' => [
+                'required',
+                'image',
+                'mimes:jpg,jpeg,png,webp',
+                'max:2048',                              // 2MB max
+                'dimensions:min_width=100,min_height=100', // at least 100x100
+                'dimensions:max_width=4000,max_height=4000',
+            ],
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'avatar.image'      => 'The file must be an image.',
+            'avatar.mimes'      => 'Only JPG, PNG, and WebP images are allowed.',
+            'avatar.max'        => 'Image must be smaller than 2MB.',
+            'avatar.dimensions' => 'Image must be at least 100x100 pixels.',
+        ];
+    }
+}
+```
+
+### Multiple file upload
+
+```php
+public function uploadImages(Request $request): JsonResponse
+{
+    $request->validate([
+        'images'   => ['required', 'array', 'max:10'],
+        'images.*' => ['image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+    ]);
+
+    $paths = [];
+
+    foreach ($request->file('images') as $image) {
+        $path    = $image->store('products/' . $request->product_id, 'public');
+        $paths[] = [
+            'path' => $path,
+            'url'  => Storage::disk('public')->url($path),
+            'name' => $image->getClientOriginalName(),
+            'size' => $image->getSize(),
+        ];
+    }
+
+    // Save all paths to database
+    $request->user()->product->images()->createMany(
+        collect($paths)->map(fn($p) => ['path' => $p['path']])->toArray()
+    );
+
+    return response()->json(['images' => $paths]);
+}
+```
+
+### Image processing with intervention/image
+
+```bash
+composer require intervention/image
+```
+
+```php
+use Intervention\Image\ImageManager;
+use Intervention\Image\Drivers\Gd\Driver;
+
+public function uploadAvatar(UploadAvatarRequest $request): JsonResponse
+{
+    $file    = $request->file('avatar');
+    $userId  = $request->user()->id;
+    $manager = new ImageManager(new Driver());
+
+    // Process and store multiple sizes
+    $sizes = [
+        'sm' => [64,  64],
+        'md' => [128, 128],
+        'lg' => [256, 256],
+    ];
+
+    $paths = [];
+
+    foreach ($sizes as $size => [$width, $height]) {
+        $image = $manager->read($file->getRealPath());
+
+        // Crop to square and resize
+        $image->cover($width, $height);
+
+        $path = "avatars/{$userId}/avatar_{$size}.webp";
+
+        // Save to public disk
+        Storage::disk('public')->put(
+            $path,
+            $image->toWebp(85)->toString()
+        );
+
+        $paths[$size] = $path;
+    }
+
+    // Delete old avatars
+    foreach (['sm', 'md', 'lg'] as $size) {
+        $old = $request->user()->{"avatar_{$size}"};
+        if ($old) Storage::disk('public')->delete($old);
+    }
+
+    $request->user()->update([
+        'avatar_sm' => $paths['sm'],
+        'avatar_md' => $paths['md'],
+        'avatar_lg' => $paths['lg'],
+    ]);
+
+    return response()->json([
+        'avatar_sm' => Storage::disk('public')->url($paths['sm']),
+        'avatar_md' => Storage::disk('public')->url($paths['md']),
+        'avatar_lg' => Storage::disk('public')->url($paths['lg']),
+    ]);
+}
+```
+
+### Dispatch image processing to queue
+
+```php
+use App\Jobs\ProcessUserAvatar;
+
+public function uploadAvatar(UploadAvatarRequest $request): JsonResponse
+{
+    $file = $request->file('avatar');
+
+    // Store temp file
+    $tempPath = $file->store('temp', 'local');
+
+    // Respond immediately — process in background
+    ProcessUserAvatar::dispatch($request->user(), $tempPath);
+
+    return response()->json([
+        'message' => 'Avatar is being processed. It will be available shortly.',
+    ]);
+}
+```
+
+### Serving private files
+
+```php
+// Route for private file access
+Route::get('/files/{path}', [FileController::class, 'serve'])
+    ->middleware('auth')
+    ->where('path', '.*');
+
+// FileController
+public function serve(string $path): Response
+{
+    // Check user has access to this file
+    $file = Document::where('path', $path)
+        ->where('user_id', request()->user()->id)
+        ->firstOrFail();
+
+    if (!Storage::disk('local')->exists($path)) {
+        abort(404);
+    }
+
+    return Storage::disk('local')->response($path);
+
+    // Or for download
+    return Storage::disk('local')->download($path, $file->name);
+}
+```
+
+### File management helpers
+
+```php
+use Illuminate\Support\Facades\Storage;
+
+// Check if file exists
+Storage::disk('public')->exists('avatars/user-1.jpg');
+
+// Get file size
+Storage::disk('public')->size('avatars/user-1.jpg');
+
+// Get last modified timestamp
+Storage::disk('public')->lastModified('avatars/user-1.jpg');
+
+// Copy file
+Storage::disk('public')->copy('avatars/old.jpg', 'avatars/new.jpg');
+
+// Move / rename file
+Storage::disk('public')->move('avatars/old.jpg', 'avatars/new.jpg');
+
+// Delete single file
+Storage::disk('public')->delete('avatars/user-1.jpg');
+
+// Delete multiple files
+Storage::disk('public')->delete(['avatars/a.jpg', 'avatars/b.jpg']);
+
+// List all files in a directory
+Storage::disk('public')->files('avatars');
+
+// List all files recursively
+Storage::disk('public')->allFiles('avatars');
+
+// Delete entire directory
+Storage::disk('public')->deleteDirectory('avatars/user-1');
+
+// Get full URL
+Storage::disk('public')->url('avatars/user-1.jpg');
+
+// Get temporary URL (S3 private files)
+Storage::disk('s3')->temporaryUrl('docs/invoice.pdf', now()->addHour());
+```
+
+### Clean up temp files with scheduled job
+
+```php
+// routes/console.php
+use Illuminate\Support\Facades\Schedule;
+use Illuminate\Support\Facades\Storage;
+
+Schedule::call(function () {
+    // Delete temp files older than 24 hours
+    $files = Storage::disk('local')->files('temp');
+
+    foreach ($files as $file) {
+        $lastModified = Storage::disk('local')->lastModified($file);
+        if (now()->timestamp - $lastModified > 86400) {
+            Storage::disk('local')->delete($file);
+        }
+    }
+})->daily();
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Storing files in public/ directly — not using Storage
+// Files outside storage/ aren't managed by Laravel
+// and get deleted on deployment
+move_uploaded_file($_FILES['avatar']['tmp_name'], public_path('uploads/avatar.jpg')); // ❌
+```
+</Wrong>
+<Right>
+```php
+// Always use Storage facade or store() method
+// Files are managed, portable, and disk-agnostic
+$path = $request->file('avatar')->store('avatars', 'public'); // ✅
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Not deleting old files when replacing
+// Old files accumulate forever — storage fills up
+public function updateAvatar(Request $request): JsonResponse
+{
+    $path = $request->file('avatar')->store('avatars', 'public');
+    $request->user()->update(['avatar' => $path]); // ❌ old file still on disk
+}
+```
+</Wrong>
+<Right>
+```php
+// Always delete the old file before storing the new one
+public function updateAvatar(Request $request): JsonResponse
+{
+    // Delete old file first
+    if ($request->user()->avatar) {
+        Storage::disk('public')->delete($request->user()->avatar); // ✅
+    }
+
+    $path = $request->file('avatar')->store('avatars', 'public');
+    $request->user()->update(['avatar' => $path]);
+}
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always use `Storage` facade — never move files manually with PHP functions
+- Delete old files when replacing — don't let storage fill up silently
+- Store only the path in the database — generate the URL on the fly with `Storage::url()`
+- Use queues for image processing — don't resize in the HTTP request cycle
+- Use `temporaryUrl()` for private S3 files — never expose private files publicly
+- Validate file size and type in Form Requests before touching the file
+- Organize files by user ID — `avatars/{user_id}/filename.jpg` — easy to find and delete
+
+<Callout type="tip">
+  Store only the relative path in the database — not the full URL. URLs change when you switch disks or domains. Regenerate the URL when needed:
+```php
+  // In database: avatars/123/avatar.jpg
+  // In API response:
+  'avatar' => $user->avatar ? Storage::disk('public')->url($user->avatar) : null,
+```
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between the local and public disk in Laravel?" difficulty="easy">
+  The `local` disk stores files in `storage/app` — not web-accessible, good for private files. The `public` disk stores files in `storage/app/public` — accessible via the web through a symlink at `public/storage` created by `php artisan storage:link`. Use `local` for private documents and temp files. Use `public` for files users need to access directly like avatars and product images.
+</InterviewQ>
+
+<InterviewQ question="Why should you store only the file path in the database and not the full URL?" difficulty="mid">
+  Full URLs are tightly coupled to your current disk, domain, and CDN configuration. If you switch from local to S3, or change your domain, every URL in the database breaks. Storing only the relative path — `avatars/user-1/avatar.jpg` — keeps the database disk-agnostic. Generate the full URL at runtime with `Storage::url($path)` or `Storage::temporaryUrl($path)`. This way changing disks only requires updating one config value.
+</InterviewQ>
+
+<InterviewQ question="How do you serve private files securely in Laravel?" difficulty="mid">
+  Store private files on the `local` disk or S3 with `private` visibility. Create a route protected by auth middleware that accepts the file path. In the controller, verify the authenticated user has permission to access that file (check ownership in the database). Then use `Storage::response($path)` to stream the file or `Storage::download($path)` to force a download. Never store private files in `storage/app/public` or S3 public — they'd be accessible to anyone with the URL.
+</InterviewQ>
+
+<InterviewQ question="How do you handle large file uploads without timing out?" difficulty="hard">
+  Increase `upload_max_filesize` and `post_max_size` in `php.ini` and `max_execution_time` for the upload request. For very large files use chunked uploads — the client splits the file into chunks, sends each chunk separately, and the server reassembles them. Libraries like Filepond or Uppy handle this on the frontend. On the backend, store chunks in a temp directory and merge them when all chunks arrive. Process the assembled file in a queued job to avoid HTTP timeouts.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The "delete old file" step is the one I always forget. After a few weeks the storage fills up with orphaned avatar files from every update. Now I always check and delete the old path before storing the new one.
+
+  Store the path not the URL — this saved me when we moved from local to S3. Changed one `.env` value and all the `Storage::url()` calls automatically pointed to S3. If I had stored full URLs I would have needed a database migration.
+
+  For images always use queues. Image resizing with Intervention Image can take 2-5 seconds per image. On slow servers or with large images it times out the HTTP request. Dispatch a job, respond with 202 Accepted, and let the worker process it.
+
+  `php artisan storage:link` is the command I forget most often on new server setups. Public disk files return 404 until you run it. Add it to your deployment script.
+</MyNotes>

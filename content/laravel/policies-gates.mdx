@@ -1,0 +1,504 @@
+---
+title: "Policies & Gates in Laravel"
+description: "How to implement authorization in Laravel using Gates for simple checks and Policies for model-based permissions — keeping authorization logic clean, reusable, and out of controllers"
+category: laravel
+tools: [laravel]
+tags: [authorization, policies, gates, permissions, laravel]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+---
+
+## Concept explanation
+
+Laravel authorization has two tools — **Gates** and **Policies**. Gates are simple closures for actions not tied to a specific model — like `can('access-admin-panel')`. Policies are classes that group authorization logic for a specific model — like `PostPolicy` handles who can view, create, update, and delete posts. Both are checked with `$user->can()`, `Gate::allows()`, or the `authorize()` method in controllers.
+
+```
+Authentication → WHO are you?    (login, session, token)
+Authorization  → WHAT can you do? (gates, policies)
+```
+
+## Why it's used
+
+- Keeps authorization logic out of controllers — single responsibility
+- Reusable — define once, check anywhere (controllers, Blade, Form Requests)
+- Automatic 403 responses when authorization fails
+- Works seamlessly with Laravel's middleware and Form Requests
+
+## Real-world use cases
+
+- Only post authors can edit or delete their own posts
+- Only admins can access the admin panel
+- Users can only view their own orders
+- Editors can publish posts but not delete users
+- Team members can only access their own team's resources
+
+## Code example
+
+### Gates — simple closures for global actions
+
+```php
+<?php
+// app/Providers/AppServiceProvider.php
+
+use Illuminate\Support\Facades\Gate;
+use App\Models\User;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function boot(): void
+    {
+        // Simple gate — can this user access the admin panel?
+        Gate::define('access-admin', function (User $user) {
+            return $user->role === 'admin';
+        });
+
+        // Gate with additional argument
+        Gate::define('edit-settings', function (User $user, string $section) {
+            return match($section) {
+                'billing'  => $user->role === 'admin',
+                'profile'  => true,  // everyone can edit their profile
+                'security' => $user->role !== 'viewer',
+                default    => false,
+            };
+        });
+
+        // Before hook — superadmins bypass all checks
+        Gate::before(function (User $user, string $ability) {
+            if ($user->role === 'superadmin') {
+                return true; // bypass all authorization
+            }
+        });
+
+        // After hook — log all authorization checks
+        Gate::after(function (User $user, string $ability, bool $result) {
+            // Log::info("User {$user->id} checked {$ability}: " . ($result ? 'allowed' : 'denied'));
+        });
+    }
+}
+```
+
+### Checking Gates
+
+```php
+// In controllers
+use Illuminate\Support\Facades\Gate;
+
+public function adminPanel(): JsonResponse
+{
+    // Option 1 — Gate::allows / denies
+    if (Gate::denies('access-admin')) {
+        abort(403, 'Unauthorized');
+    }
+
+    // Option 2 — authorize() throws 403 automatically
+    Gate::authorize('access-admin');
+
+    // Option 3 — $request->user()->can()
+    if (!request()->user()->can('access-admin')) {
+        abort(403);
+    }
+
+    return response()->json(['message' => 'Welcome to admin']);
+}
+
+// With additional arguments
+Gate::authorize('edit-settings', 'billing');
+$user->can('edit-settings', 'billing');
+```
+
+```blade
+{{-- In Blade templates --}}
+@can('access-admin')
+    <a href="/admin">Admin Panel</a>
+@endcan
+
+@cannot('access-admin')
+    <p>You don't have admin access.</p>
+@endcannot
+
+@can('edit-settings', 'billing')
+    <button>Edit Billing</button>
+@endcan
+```
+
+### Generate a Policy
+
+```bash
+# Generate policy for a model
+php artisan make:policy PostPolicy --model=Post
+
+# Generate policy without model
+php artisan make:policy AdminPolicy
+```
+
+### PostPolicy — full example
+
+```php
+<?php
+// app/Policies/PostPolicy.php
+
+namespace App\Policies;
+
+use App\Models\Post;
+use App\Models\User;
+use Illuminate\Auth\Access\Response;
+
+class PostPolicy
+{
+    // Before all checks — admins can do anything
+    public function before(User $user, string $ability): bool|null
+    {
+        if ($user->role === 'admin') {
+            return true; // skip all other checks
+        }
+        return null; // continue to specific method
+    }
+
+    // Anyone logged in can view published posts
+    public function view(User $user, Post $post): bool
+    {
+        if ($post->published) {
+            return true;
+        }
+        // Unpublished posts — only the author
+        return $user->id === $post->user_id;
+    }
+
+    // Any logged-in user can create posts
+    public function create(User $user): bool
+    {
+        return true;
+    }
+
+    // Only the author can update their post
+    public function update(User $user, Post $post): bool
+    {
+        return $user->id === $post->user_id;
+    }
+
+    // Only the author can delete their post
+    public function delete(User $user, Post $post): bool
+    {
+        return $user->id === $post->user_id;
+    }
+
+    // Only the author can restore a soft-deleted post
+    public function restore(User $user, Post $post): bool
+    {
+        return $user->id === $post->user_id;
+    }
+
+    // Only admin can force delete (admin bypassed via before())
+    public function forceDelete(User $user, Post $post): bool
+    {
+        return false; // only superadmin via before()
+    }
+
+    // Custom action — publish a post
+    public function publish(User $user, Post $post): Response
+    {
+        if ($user->id !== $post->user_id && $user->role !== 'editor') {
+            return Response::deny('Only the author or an editor can publish this post.');
+        }
+
+        if ($post->published) {
+            return Response::deny('This post is already published.');
+        }
+
+        return Response::allow();
+    }
+}
+```
+
+### Register the Policy
+
+```php
+<?php
+// app/Providers/AppServiceProvider.php
+// Laravel 11+ — register in boot()
+
+use App\Models\Post;
+use App\Policies\PostPolicy;
+use Illuminate\Support\Facades\Gate;
+
+public function boot(): void
+{
+    // Register policy manually
+    Gate::policy(Post::class, PostPolicy::class);
+
+    // Laravel auto-discovers policies if they follow naming convention:
+    // App\Models\Post  → App\Policies\PostPolicy
+    // No manual registration needed if conventions are followed
+}
+```
+
+### Using Policies in controllers
+
+```php
+<?php
+// app/Http/Controllers/Api/PostController.php
+
+class PostController extends Controller
+{
+    // View a post
+    public function show(Post $post): JsonResponse
+    {
+        // Option 1 — authorize() throws 403 automatically
+        $this->authorize('view', $post);
+
+        return response()->json($post);
+    }
+
+    // Create a post
+    public function store(Request $request): JsonResponse
+    {
+        // For actions without a model instance — pass the class
+        $this->authorize('create', Post::class);
+
+        $post = Post::create([
+            ...$request->validated(),
+            'user_id' => $request->user()->id,
+        ]);
+
+        return response()->json($post, 201);
+    }
+
+    // Update a post
+    public function update(UpdatePostRequest $request, Post $post): JsonResponse
+    {
+        $this->authorize('update', $post);
+
+        $post->update($request->validated());
+        return response()->json($post);
+    }
+
+    // Delete a post
+    public function destroy(Post $post): JsonResponse
+    {
+        $this->authorize('delete', $post);
+
+        $post->delete();
+        return response()->json(null, 204);
+    }
+
+    // Publish a post — custom policy action
+    public function publish(Post $post): JsonResponse
+    {
+        $this->authorize('publish', $post);
+
+        $post->update(['published' => true, 'published_at' => now()]);
+        return response()->json($post);
+    }
+}
+```
+
+### Using Policies in Form Requests
+
+```php
+<?php
+// app/Http/Requests/UpdatePostRequest.php
+
+class UpdatePostRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        $post = $this->route('post');
+        // Use policy directly in Form Request
+        return $this->user()->can('update', $post);
+    }
+
+    public function rules(): array
+    {
+        return [
+            'title'   => ['sometimes', 'string', 'max:255'],
+            'content' => ['sometimes', 'string'],
+            'tags'    => ['nullable', 'array'],
+        ];
+    }
+}
+```
+
+### Using Policies in middleware
+
+```php
+// routes/api.php
+
+// Protect route with policy via middleware
+Route::put('/posts/{post}', [PostController::class, 'update'])
+    ->middleware('can:update,post'); // 'update' = policy method, 'post' = route param
+
+Route::delete('/posts/{post}', [PostController::class, 'destroy'])
+    ->middleware('can:delete,post');
+
+// For actions without model instance
+Route::post('/posts', [PostController::class, 'store'])
+    ->middleware('can:create,App\Models\Post');
+```
+
+### Policy with custom response message
+
+```php
+use Illuminate\Auth\Access\Response;
+
+public function update(User $user, Post $post): Response
+{
+    if ($user->id === $post->user_id) {
+        return Response::allow();
+    }
+
+    return Response::deny('You can only edit your own posts.', 403);
+    // The message appears in the JSON response:
+    // { "message": "You can only edit your own posts." }
+}
+```
+
+### Checking policies manually
+
+```php
+// In controllers or anywhere
+$user = request()->user();
+
+// Can check
+$user->can('update', $post);       // true / false
+$user->cannot('delete', $post);    // true / false
+
+// Gate facade
+Gate::allows('update', $post);
+Gate::denies('delete', $post);
+Gate::inspect('publish', $post);   // returns Response with message
+
+// Check multiple abilities
+Gate::any(['update', 'delete'], $post);  // true if any allowed
+Gate::none(['update', 'delete'], $post); // true if none allowed
+```
+
+### Role-based permissions with Gates
+
+```php
+// app/Providers/AppServiceProvider.php
+
+// Define all permissions as gates
+Gate::define('manage-users',   fn(User $u) => in_array($u->role, ['admin']));
+Gate::define('manage-posts',   fn(User $u) => in_array($u->role, ['admin', 'editor']));
+Gate::define('publish-posts',  fn(User $u) => in_array($u->role, ['admin', 'editor']));
+Gate::define('view-reports',   fn(User $u) => in_array($u->role, ['admin']));
+Gate::define('manage-billing', fn(User $u) => in_array($u->role, ['admin']));
+
+// Middleware on routes
+Route::middleware('can:manage-users')->group(function () {
+    Route::apiResource('users', UserController::class);
+});
+
+Route::middleware('can:manage-posts')->group(function () {
+    Route::apiResource('posts', PostController::class);
+});
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Putting authorization logic directly in controllers
+// Hard to reuse, test, and maintain
+public function update(Request $request, Post $post): JsonResponse
+{
+    if ($request->user()->id !== $post->user_id
+        && $request->user()->role !== 'admin') {
+        return response()->json(['message' => 'Forbidden'], 403); // ❌
+    }
+    // update logic...
+}
+```
+</Wrong>
+<Right>
+```php
+// Define authorization in Policy — reusable and testable
+// PostPolicy::update() handles the logic
+public function update(UpdatePostRequest $request, Post $post): JsonResponse
+{
+    $this->authorize('update', $post); // ✅ one line
+    $post->update($request->validated());
+    return response()->json($post);
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Forgetting to handle guests — policy method crashes
+// if $user is null (unauthenticated request)
+public function view(User $user, Post $post): bool
+{
+    return $user->id === $post->user_id; // ❌ crashes if not logged in
+}
+```
+</Wrong>
+<Right>
+```php
+// Use nullable User type to handle guests gracefully
+public function view(?User $user, Post $post): bool
+{
+    // Guest users can view published posts
+    if ($post->published) return true;
+    // Only author can view unpublished
+    return $user?->id === $post->user_id; // ✅ null-safe
+}
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Use `before()` in policies for superadmin bypass — keeps individual methods clean
+- Use nullable `?User` for policy methods that guests can access
+- Return `Response::deny('message')` instead of `false` when you need custom error messages
+- Use `can` middleware on routes for simple checks instead of `authorize()` in controllers
+- Register policies via naming convention — `PostPolicy` for `Post` model — no manual registration
+- Use Gates for non-model permissions (access-admin, view-reports)
+- Use Policies for model-based permissions (update post, delete comment)
+
+<Callout type="tip">
+  Test your policies with `actingAs()` in feature tests:
+```php
+  $user  = User::factory()->create(['role' => 'viewer']);
+  $post  = Post::factory()->create(['user_id' => 999]); // different author
+
+  $this->actingAs($user)
+       ->putJson("/api/posts/{$post->id}", ['title' => 'Hacked'])
+       ->assertForbidden(); // 403
+```
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between Gates and Policies in Laravel?" difficulty="easy">
+  Gates are simple closures defined in `AppServiceProvider` for actions not tied to a specific model — like `access-admin` or `view-reports`. They are good for global or role-based permissions. Policies are classes that group authorization logic for a specific Eloquent model — `PostPolicy` handles all post-related permissions. Use Gates for broad application permissions and Policies for model-specific CRUD authorization.
+</InterviewQ>
+
+<InterviewQ question="What does the before() method do in a Laravel Policy?" difficulty="mid">
+  `before()` runs before any other policy method. If it returns `true`, all other checks are skipped and the action is allowed — perfect for superadmin bypass. If it returns `null`, Laravel continues to the specific policy method. If it returns `false`, the action is denied regardless of the specific method. Use it sparingly — usually only for superadmin or testing scenarios.
+</InterviewQ>
+
+<InterviewQ question="How do you handle authorization for guest users in a Policy?" difficulty="mid">
+  By default, policies receive a type-hinted `User $user` which means unauthenticated users are automatically denied before the method even runs. To allow guests, make the parameter nullable — `?User $user`. Then inside the method check `$user?->id` with the null-safe operator. This lets guests access public resources (published posts) while still requiring authentication for private ones.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between authorize() in a controller and can middleware on a route?" difficulty="mid">
+  `$this->authorize()` in a controller runs inside the controller method — after the request reaches the controller. The `can` middleware runs before the controller — at the routing level. For simple checks where you just need to verify a permission before any controller logic runs, `can` middleware is cleaner. Use `authorize()` inside controllers when the check depends on data fetched inside the method or needs more context.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The nullable `?User` for guest access is something I forget every time. The symptom is: unauthenticated request to a public endpoint returns 403 instead of the data. Fix is always making the User param nullable.
+
+  The `before()` method in policies is the cleanest way to handle superadmin. Without it I used to add `|| $user->role === 'superadmin'` to every single policy method — messy and easy to forget. Now it's one `before()` and done.
+
+  The naming convention auto-discovery is underrated. Laravel automatically maps `App\Models\Post` to `App\Policies\PostPolicy` — no registration needed. I wasted time manually registering policies for months before I realized this.
+
+  For APIs always use `Response::deny('Your message here')` instead of returning `false` — the message shows up in the JSON response body which helps frontend developers understand why they got a 403.
+</MyNotes>

@@ -1,0 +1,405 @@
+---
+title: "Dropdown Menu with Vue + Tailwind CSS"
+description: "How to build a reusable, accessible dropdown menu in Vue 3 with click outside to close, keyboard navigation, positioning, and smooth animations using Tailwind CSS"
+category: ui-patterns
+tools: [vue, tailwind]
+tags: [dropdown, menu, select, accessible, keyboard-navigation]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - ui-patterns/dropdown-nextjs
+  - ui-patterns/navbar-vue
+  - ui-patterns/toast-vue
+---
+
+## Concept explanation
+
+A dropdown menu is a toggleable panel that appears below (or above) a trigger element showing a list of actions or options. In Vue 3 we manage open/close state with `ref()`, detect outside clicks with a directive or event listener on `document`, and use Vue's `<Transition>` for smooth animations. The key challenge is positioning — the panel must appear in the right place relative to the trigger.
+
+<Callout type="note">
+  **Vue vs Nuxt difference:** Code is identical in both. Nuxt auto-imports `ref`, `onMounted`, and `onUnmounted` so you can skip those imports.
+</Callout>
+
+## Why it's used
+
+- Saves space by hiding options until needed
+- Groups related actions under one trigger (user menu, settings, filters)
+- More flexible than a native `<select>` — supports icons, dividers, custom styling
+- Standard pattern users already know from every OS and web app
+
+## Real-world use cases
+
+- User avatar menu (profile, settings, logout)
+- Table row actions (edit, duplicate, delete)
+- Filter menu (sort by, filter by status)
+- Language / theme switcher
+- Share menu with options
+
+## Code example
+
+### Basic dropdown component
+
+```vue
+<!-- components/AppDropdown.vue -->
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted } from 'vue'
+
+type DropdownItem = {
+  label: string
+  icon?: string
+  danger?: boolean
+  divider?: boolean
+  onClick?: () => void
+}
+
+defineProps<{
+  items: DropdownItem[]
+  align?: 'left' | 'right'
+}>()
+
+const isOpen = ref(false)
+const dropdownRef = ref<HTMLElement | null>(null)
+
+const handleClickOutside = (e: MouseEvent) => {
+  if (dropdownRef.value && !dropdownRef.value.contains(e.target as Node)) {
+    isOpen.value = false
+  }
+}
+
+const handleKeydown = (e: KeyboardEvent) => {
+  if (e.key === 'Escape') isOpen.value = false
+}
+
+onMounted(() => {
+  document.addEventListener('mousedown', handleClickOutside)
+  document.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('mousedown', handleClickOutside)
+  document.removeEventListener('keydown', handleKeydown)
+})
+
+const handleItemClick = (item: DropdownItem) => {
+  item.onClick?.()
+  isOpen.value = false
+}
+</script>
+
+<template>
+  <div class="relative inline-block" ref="dropdownRef">
+
+    <!-- Trigger slot -->
+    <div @click="isOpen = !isOpen">
+      <slot name="trigger">
+        <button
+          :aria-expanded="isOpen"
+          class="flex items-center gap-2 px-3 py-2 text-sm font-medium text-neutral-700 dark:text-neutral-300 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
+        >
+          Options
+          <svg
+            class="w-4 h-4 transition-transform duration-200"
+            :class="isOpen ? 'rotate-180' : ''"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+      </slot>
+    </div>
+
+    <!-- Dropdown panel -->
+    <Transition
+      enter-active-class="transition duration-150 ease-out"
+      enter-from-class="opacity-0 scale-95 -translate-y-1"
+      enter-to-class="opacity-100 scale-100 translate-y-0"
+      leave-active-class="transition duration-100 ease-in"
+      leave-from-class="opacity-100 scale-100 translate-y-0"
+      leave-to-class="opacity-0 scale-95 -translate-y-1"
+    >
+      <div
+        v-if="isOpen"
+        :class="[
+          'absolute top-full mt-1.5 z-50 min-w-44 bg-white dark:bg-neutral-900',
+          'border border-neutral-200 dark:border-neutral-700 rounded-xl shadow-lg py-1 overflow-hidden',
+          align === 'right' ? 'right-0' : 'left-0'
+        ]"
+        role="menu"
+      >
+        <template v-for="(item, i) in items" :key="i">
+
+          <!-- Divider -->
+          <div
+            v-if="item.divider"
+            class="my-1 border-t border-neutral-100 dark:border-neutral-800"
+          />
+
+          <!-- Menu item -->
+          <button
+            v-else
+            @click="handleItemClick(item)"
+            :class="[
+              'w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors text-left',
+              item.danger
+                ? 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950'
+                : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800'
+            ]"
+            role="menuitem"
+          >
+            <span v-if="item.icon" class="text-base">{{ item.icon }}</span>
+            {{ item.label }}
+          </button>
+
+        </template>
+      </div>
+    </Transition>
+
+  </div>
+</template>
+```
+
+### How to use it — user avatar menu
+
+```vue
+<!-- pages/dashboard.vue -->
+<script setup lang="ts">
+import { useRouter } from 'vue-router'
+import AppDropdown from '@/components/AppDropdown.vue'
+import { useToast } from '@/composables/useToast'
+
+const router = useRouter()
+const { success } = useToast()
+
+const userMenuItems = [
+  { label: 'My Profile',  icon: '👤', onClick: () => router.push('/profile') },
+  { label: 'Settings',    icon: '⚙️', onClick: () => router.push('/settings') },
+  { label: 'Help',        icon: '❓', onClick: () => router.push('/help') },
+  { divider: true },
+  {
+    label: 'Sign out',
+    icon: '🚪',
+    danger: true,
+    onClick: async () => {
+      await signOut()
+      success('Signed out successfully')
+      router.push('/login')
+    }
+  },
+]
+</script>
+
+<template>
+  <header class="flex items-center justify-between px-6 h-14 border-b border-neutral-200">
+    <span class="font-semibold">Dashboard</span>
+
+    <AppDropdown :items="userMenuItems" align="right">
+      <!-- Custom trigger — user avatar -->
+      <template #trigger>
+        <button class="flex items-center gap-2 hover:opacity-80 transition-opacity">
+          <div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-medium">
+            O
+          </div>
+          <span class="text-sm font-medium text-neutral-700 dark:text-neutral-300">Omar</span>
+          <svg class="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+      </template>
+    </AppDropdown>
+  </header>
+</template>
+```
+
+### Table row actions dropdown
+
+```vue
+<!-- components/RowActions.vue -->
+<script setup lang="ts">
+import AppDropdown from '@/components/AppDropdown.vue'
+
+const props = defineProps<{
+  onEdit: () => void
+  onDuplicate: () => void
+  onDelete: () => void
+}>()
+
+const items = [
+  { label: 'Edit',      icon: '✏️',  onClick: props.onEdit },
+  { label: 'Duplicate', icon: '📋', onClick: props.onDuplicate },
+  { divider: true },
+  { label: 'Delete',    icon: '🗑️',  danger: true, onClick: props.onDelete },
+]
+</script>
+
+<template>
+  <AppDropdown :items="items" align="right">
+    <template #trigger>
+      <button class="p-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors text-neutral-400">
+        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+          <circle cx="12" cy="5" r="1.5"/>
+          <circle cx="12" cy="12" r="1.5"/>
+          <circle cx="12" cy="19" r="1.5"/>
+        </svg>
+      </button>
+    </template>
+  </AppDropdown>
+</template>
+```
+
+### With checkbox items (filter dropdown)
+
+```vue
+<!-- components/FilterDropdown.vue -->
+<script setup lang="ts">
+import { ref } from 'vue'
+
+const isOpen = ref(false)
+
+const filters = ref([
+  { label: 'Active',   checked: true },
+  { label: 'Inactive', checked: false },
+  { label: 'Pending',  checked: true },
+])
+
+const activeCount = computed(() =>
+  filters.value.filter(f => f.checked).length
+)
+</script>
+
+<template>
+  <div class="relative inline-block">
+    <button
+      @click="isOpen = !isOpen"
+      class="flex items-center gap-2 px-3 py-2 text-sm border border-neutral-200 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
+    >
+      🔽 Filter
+      <span
+        v-if="activeCount > 0"
+        class="text-xs bg-blue-600 text-white rounded-full w-4 h-4 flex items-center justify-center"
+      >
+        {{ activeCount }}
+      </span>
+    </button>
+
+    <div
+      v-if="isOpen"
+      class="absolute top-full mt-1.5 left-0 z-50 w-48 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-xl shadow-lg p-2"
+    >
+      <p class="text-xs font-semibold text-neutral-400 uppercase tracking-wider px-2 mb-2">
+        Status
+      </p>
+      <label
+        v-for="filter in filters"
+        :key="filter.label"
+        class="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
+      >
+        <input
+          v-model="filter.checked"
+          type="checkbox"
+          class="rounded border-neutral-300 text-blue-600 focus:ring-blue-500"
+        />
+        <span class="text-sm text-neutral-700 dark:text-neutral-300">
+          {{ filter.label }}
+        </span>
+      </label>
+    </div>
+  </div>
+</template>
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Using click on window instead of mousedown on document
+     window click fires after the toggle so the dropdown
+     opens and immediately closes on first click -->
+onMounted(() => {
+  window.addEventListener('click', handleClickOutside) // ❌
+})
+```
+</Wrong>
+<Right>
+```vue
+<!-- Use mousedown on document — fires before click
+     so the toggle and outside-click don't conflict -->
+onMounted(() => {
+  document.addEventListener('mousedown', handleClickOutside) // ✅
+})
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Not cleaning up event listeners — memory leak
+     handler keeps firing after component unmounts -->
+onMounted(() => {
+  document.addEventListener('mousedown', handleClickOutside)
+  // ❌ no cleanup
+})
+```
+</Wrong>
+<Right>
+```vue
+<!-- Always clean up in onUnmounted -->
+onMounted(() => {
+  document.addEventListener('mousedown', handleClickOutside)
+})
+onUnmounted(() => {
+  document.removeEventListener('mousedown', handleClickOutside) // ✅
+})
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Use `mousedown` not `click` on document for outside-click detection — avoids the open/close conflict on first click
+- Always remove event listeners in `onUnmounted` to prevent memory leaks
+- Close on `Escape` key for keyboard accessibility
+- Add `role="menu"` to the panel and `role="menuitem"` to each item
+- Use a slot for the trigger so the dropdown works with any custom button
+- Add `align` prop (`left` or `right`) to control which side the panel opens from
+- Use `divider: true` items to visually group related actions
+
+<Callout type="tip">
+  If the dropdown gets cut off at the bottom of the viewport, detect available space and open upward instead:
+```ts
+  const openUpward = ref(false)
+  const checkPosition = () => {
+    const rect = dropdownRef.value?.getBoundingClientRect()
+    if (rect) openUpward.value = rect.bottom + 200 > window.innerHeight
+  }
+```
+  Then conditionally apply `bottom-full mb-1.5` instead of `top-full mt-1.5`.
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="Why use mousedown instead of click for outside click detection?" difficulty="mid">
+  The `click` event fires after `mousedown` and `mouseup`. If you toggle the dropdown on `click` of the trigger button and also close it on `click` of the document, both handlers fire in the same event cycle — the dropdown opens and immediately closes. Using `mousedown` on the document fires before the button's `click` handler, so the sequence is: mousedown outside closes dropdown → then click opens it — which works correctly. For outside clicks (not on the trigger), mousedown closes it cleanly.
+</InterviewQ>
+
+<InterviewQ question="How do you make a dropdown accessible for keyboard users?" difficulty="mid">
+  Close on `Escape` key. Add `role="menu"` to the panel and `role="menuitem"` to each button. Add `aria-expanded` to the trigger button. Ideally implement arrow key navigation — `ArrowDown` moves focus to the next item, `ArrowUp` to the previous, `Home` to the first, `End` to the last. `Enter` and `Space` activate the focused item.
+</InterviewQ>
+
+<InterviewQ question="How would you handle a dropdown that gets cut off at the edge of the viewport?" difficulty="hard">
+  Use `getBoundingClientRect()` on the trigger element after the dropdown opens to check if the panel would overflow the viewport edges. Compare `rect.bottom + panelHeight > window.innerHeight` to decide if it should open upward. Compare `rect.left + panelWidth > window.innerWidth` to decide if it should align right. Apply the appropriate CSS classes conditionally. Libraries like Floating UI handle this automatically with advanced positioning algorithms.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The `mousedown` vs `click` bug is the one that trips everyone up the first time. The symptom is: dropdown opens on first click then immediately closes. Fix is always `mousedown` on document instead of `click`.
+
+  The slot pattern for the trigger is what makes this component truly reusable. I use the same `AppDropdown` for user avatar menus, table row action buttons (three dots), filter dropdowns, and language switchers — all with different triggers.
+
+  For Nuxt — `ref`, `onMounted`, and `onUnmounted` are auto-imported. Skip the imports.
+
+  For production apps with complex positioning needs (dropdown inside a scrollable container, inside a modal, near viewport edges), use **Floating UI** (`@floating-ui/vue`) — it handles all edge cases automatically.
+</MyNotes>

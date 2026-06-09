@@ -1,0 +1,521 @@
+---
+title: "Tabs with Next.js + Tailwind CSS"
+description: "How to build a reusable, accessible tabs component in Next.js App Router with animated indicator, keyboard navigation, URL-based state, and multiple styles using Tailwind CSS"
+category: ui-patterns
+tools: [nextjs, tailwind]
+tags: [tabs, navigation, accessible, keyboard-navigation, url-state, app-router]
+difficulty: beginner
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - ui-patterns/tabs-vue
+  - ui-patterns/dropdown-nextjs
+---
+
+## Concept explanation
+
+Tabs in Next.js can be built two ways — **client-side** with `useState` for simple cases, and **URL-based** with `useSearchParams` for production apps where the active tab should be bookmarkable and shareable. The component accepts a `tabs` array and uses a `renderPanel` render prop pattern so each tab's content stays decoupled from the tabs component itself.
+
+<Callout type="note">
+  **Next.js vs React difference:** The `useState` approach works identically in plain React. The URL-based approach uses `useSearchParams` and `useRouter` from `next/navigation` — in plain React replace these with `useSearchParams` and `useNavigate` from `react-router-dom`.
+</Callout>
+
+## Why it's used
+
+- Organizes related content into sections without page navigation
+- Keeps users in context — no full page reload between sections
+- Reduces visual clutter by showing one section at a time
+- Standard pattern users know from browsers, IDEs, and dashboards
+
+## Real-world use cases
+
+- User profile page (Overview, Activity, Settings)
+- Product page (Description, Reviews, Specifications)
+- Dashboard (Analytics, Reports, Exports)
+- Settings page (General, Security, Notifications, Billing)
+- Code editor (multiple open files)
+
+## Code example
+
+### Basic tabs component
+
+```tsx
+// components/Tabs.tsx
+"use client";
+
+import { useState, type ReactNode } from "react";
+
+type Tab = {
+  value: string;
+  label: string;
+  icon?: string;
+  disabled?: boolean;
+};
+
+type Props = {
+  tabs: Tab[];
+  defaultValue?: string;
+  panels: Record<string, ReactNode>;
+};
+
+export function Tabs({ tabs, defaultValue, panels }: Props) {
+  const [active, setActive] = useState(defaultValue ?? tabs[0]?.value);
+
+  const handleKeyDown = (
+    e: React.KeyboardEvent,
+    currentIndex: number
+  ) => {
+    if (e.key === "ArrowLeft") {
+      const prev = tabs
+        .slice(0, currentIndex)
+        .reverse()
+        .find((t) => !t.disabled);
+      if (prev) setActive(prev.value);
+    }
+    if (e.key === "ArrowRight") {
+      const next = tabs.slice(currentIndex + 1).find((t) => !t.disabled);
+      if (next) setActive(next.value);
+    }
+  };
+
+  return (
+    <div>
+      {/* Tab list */}
+      <div
+        className="flex border-b border-neutral-200 dark:border-neutral-800"
+        role="tablist"
+      >
+        {tabs.map((tab, i) => (
+          <button
+            key={tab.value}
+            onClick={() => !tab.disabled && setActive(tab.value)}
+            onKeyDown={(e) => handleKeyDown(e, i)}
+            disabled={tab.disabled}
+            aria-selected={active === tab.value}
+            aria-controls={`panel-${tab.value}`}
+            role="tab"
+            className={`
+              flex items-center gap-2 px-4 py-3 text-sm font-medium
+              border-b-2 -mb-px transition-colors
+              ${active === tab.value
+                ? "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400"
+                : "border-transparent text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 hover:border-neutral-300 dark:hover:border-neutral-600"
+              }
+              ${tab.disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}
+            `}
+          >
+            {tab.icon && <span>{tab.icon}</span>}
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab panels */}
+      <div className="mt-4">
+        {tabs.map((tab) => (
+          <div
+            key={tab.value}
+            id={`panel-${tab.value}`}
+            role="tabpanel"
+            hidden={active !== tab.value}
+          >
+            {panels[tab.value]}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+### How to use it
+
+```tsx
+// app/profile/page.tsx
+"use client";
+
+import { Tabs } from "@/components/Tabs";
+
+const tabs = [
+  { value: "overview",  label: "Overview",  icon: "👤" },
+  { value: "activity",  label: "Activity",  icon: "📊" },
+  { value: "settings",  label: "Settings",  icon: "⚙️" },
+  { value: "billing",   label: "Billing",   icon: "💳", disabled: true },
+];
+
+export default function ProfilePage() {
+  return (
+    <div className="max-w-3xl">
+      <Tabs
+        tabs={tabs}
+        defaultValue="overview"
+        panels={{
+          overview: (
+            <div className="space-y-4">
+              <h2 className="text-lg font-semibold">Profile Overview</h2>
+              <p className="text-neutral-500">Your profile information and summary.</p>
+            </div>
+          ),
+          activity: (
+            <div className="space-y-4">
+              <h2 className="text-lg font-semibold">Recent Activity</h2>
+              <p className="text-neutral-500">Your recent actions and events.</p>
+            </div>
+          ),
+          settings: (
+            <div className="space-y-4">
+              <h2 className="text-lg font-semibold">Account Settings</h2>
+              <p className="text-neutral-500">Manage your account preferences.</p>
+            </div>
+          ),
+          billing: (
+            <div className="space-y-4">
+              <h2 className="text-lg font-semibold">Billing</h2>
+              <p className="text-neutral-500">Manage your subscription.</p>
+            </div>
+          ),
+        }}
+      />
+    </div>
+  );
+}
+```
+
+### Pill style tabs
+
+```tsx
+// components/PillTabs.tsx
+"use client";
+
+import { useState, type ReactNode } from "react";
+
+type Tab = {
+  value: string;
+  label: string;
+  icon?: string;
+};
+
+type Props = {
+  tabs: Tab[];
+  defaultValue?: string;
+  panels: Record<string, ReactNode>;
+};
+
+export function PillTabs({ tabs, defaultValue, panels }: Props) {
+  const [active, setActive] = useState(defaultValue ?? tabs[0]?.value);
+
+  return (
+    <div>
+      {/* Pill tab list */}
+      <div className="flex gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-xl w-fit">
+        {tabs.map((tab) => (
+          <button
+            key={tab.value}
+            onClick={() => setActive(tab.value)}
+            className={`
+              flex items-center gap-2 px-4 py-2 text-sm font-medium
+              rounded-lg transition-all
+              ${active === tab.value
+                ? "bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-sm"
+                : "text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300"
+              }
+            `}
+          >
+            {tab.icon && <span>{tab.icon}</span>}
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Panels */}
+      <div className="mt-4">
+        {tabs.map((tab) => (
+          <div key={tab.value} hidden={active !== tab.value}>
+            {panels[tab.value]}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+### Vertical tabs
+
+```tsx
+// components/VerticalTabs.tsx
+"use client";
+
+import { useState, type ReactNode } from "react";
+
+type Tab = {
+  value: string;
+  label: string;
+  icon?: string;
+};
+
+type Props = {
+  tabs: Tab[];
+  defaultValue?: string;
+  panels: Record<string, ReactNode>;
+};
+
+export function VerticalTabs({ tabs, defaultValue, panels }: Props) {
+  const [active, setActive] = useState(defaultValue ?? tabs[0]?.value);
+
+  return (
+    <div className="flex gap-6">
+
+      {/* Vertical tab list */}
+      <div className="flex flex-col gap-0.5 w-48 shrink-0">
+        {tabs.map((tab) => (
+          <button
+            key={tab.value}
+            onClick={() => setActive(tab.value)}
+            className={`
+              flex items-center gap-2.5 px-3 py-2.5 rounded-lg
+              text-sm font-medium transition-colors text-left
+              ${active === tab.value
+                ? "bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300"
+                : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:text-neutral-900 dark:hover:text-neutral-100"
+              }
+            `}
+          >
+            {tab.icon && <span>{tab.icon}</span>}
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Panel */}
+      <div className="flex-1 min-w-0">
+        {tabs.map((tab) => (
+          <div key={tab.value} hidden={active !== tab.value}>
+            {panels[tab.value]}
+          </div>
+        ))}
+      </div>
+
+    </div>
+  );
+}
+```
+
+### URL-based tabs (production approach)
+
+```tsx
+// components/TabsURL.tsx
+"use client";
+
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { type ReactNode, useCallback } from "react";
+
+type Tab = {
+  value: string;
+  label: string;
+  icon?: string;
+};
+
+type Props = {
+  tabs: Tab[];
+  panels: Record<string, ReactNode>;
+  paramName?: string;
+};
+
+export function TabsURL({ tabs, panels, paramName = "tab" }: Props) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const active = searchParams.get(paramName) ?? tabs[0]?.value;
+
+  const setTab = useCallback(
+    (value: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set(paramName, value);
+      router.push(`${pathname}?${params.toString()}`);
+    },
+    [pathname, router, searchParams, paramName]
+  );
+
+  return (
+    <div>
+      {/* Tab list */}
+      <div
+        className="flex border-b border-neutral-200 dark:border-neutral-800"
+        role="tablist"
+      >
+        {tabs.map((tab) => (
+          <button
+            key={tab.value}
+            onClick={() => setTab(tab.value)}
+            aria-selected={active === tab.value}
+            role="tab"
+            className={`
+              flex items-center gap-2 px-4 py-3 text-sm font-medium
+              border-b-2 -mb-px transition-colors
+              ${active === tab.value
+                ? "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400"
+                : "border-transparent text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 hover:border-neutral-300"
+              }
+            `}
+          >
+            {tab.icon && <span>{tab.icon}</span>}
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Panels */}
+      <div className="mt-6">
+        {tabs.map((tab) => (
+          <div key={tab.value} hidden={active !== tab.value}>
+            {panels[tab.value]}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+### How to use URL-based tabs
+
+```tsx
+// app/settings/page.tsx
+import { Suspense } from "react";
+import { TabsURL } from "@/components/TabsURL";
+
+const tabs = [
+  { value: "general",       label: "General",       icon: "⚙️" },
+  { value: "security",      label: "Security",       icon: "🔐" },
+  { value: "notifications", label: "Notifications",  icon: "🔔" },
+  { value: "billing",       label: "Billing",        icon: "💳" },
+];
+
+export default function SettingsPage() {
+  return (
+    <div className="max-w-3xl">
+      <h1 className="text-2xl font-bold mb-6">Settings</h1>
+      <Suspense fallback={null}>
+        <TabsURL
+          tabs={tabs}
+          paramName="tab"
+          panels={{
+            general: (
+              <div>
+                <h2 className="text-lg font-semibold mb-4">General Settings</h2>
+                {/* General settings form */}
+              </div>
+            ),
+            security: (
+              <div>
+                <h2 className="text-lg font-semibold mb-4">Security</h2>
+                {/* Security form */}
+              </div>
+            ),
+            notifications: (
+              <div>
+                <h2 className="text-lg font-semibold mb-4">Notifications</h2>
+                {/* Notifications form */}
+              </div>
+            ),
+            billing: (
+              <div>
+                <h2 className="text-lg font-semibold mb-4">Billing</h2>
+                {/* Billing info */}
+              </div>
+            ),
+          }}
+        />
+      </Suspense>
+    </div>
+  );
+}
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```tsx
+// Conditionally rendering panels with && operator
+// Destroys and remounts the panel on every tab switch
+// loses form state, scroll position, fetch cache
+{active === "settings" && (
+  <SettingsForm /> // ❌ remounts every time
+)}
+```
+</Wrong>
+<Right>
+```tsx
+// Use the hidden attribute — keeps DOM alive
+// preserves form state and component state
+<div hidden={active !== "settings"}>
+  <SettingsForm /> {/* ✅ stays mounted */}
+</div>
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Forgetting Suspense around useSearchParams
+// Next.js throws a build error without it
+export default function SettingsPage() {
+  return <TabsURL tabs={tabs} panels={panels} /> // ❌ no Suspense
+}
+```
+</Wrong>
+<Right>
+```tsx
+// Always wrap components using useSearchParams in Suspense
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={null}>
+      <TabsURL tabs={tabs} panels={panels} /> {/* ✅ */}
+    </Suspense>
+  )
+}
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Use `hidden` attribute instead of conditional rendering — preserves DOM state between tab switches
+- Use URL-based tabs for settings pages — active tab is bookmarkable and preserved on refresh
+- Always wrap `useSearchParams` in a `Suspense` boundary
+- Add `role="tablist"`, `role="tab"`, `role="tabpanel"` and `aria-selected` for accessibility
+- Support arrow key navigation for keyboard users
+- Support `disabled` tabs with visual feedback
+- Use `paramName` prop in `TabsURL` so multiple tab groups on the same page don't conflict
+
+<Callout type="tip">
+  The `hidden` HTML attribute is better than `display: none` via Tailwind for tab panels — it's semantically correct, works with `aria-hidden` automatically, and is supported in all modern browsers. React renders `hidden={true}` as the `hidden` attribute correctly.
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="Why use the hidden attribute instead of conditional rendering for tab panels?" difficulty="easy">
+  Conditional rendering with `&&` or ternary unmounts the component when false — all state (form inputs, scroll position, fetched data) is lost. When the user switches back, the component remounts from scratch. The `hidden` attribute keeps the DOM element alive but visually hidden — state is preserved. This matters for tabs containing forms, infinite scroll lists, or components that fetch their own data.
+</InterviewQ>
+
+<InterviewQ question="Why do you need Suspense around useSearchParams in Next.js?" difficulty="hard">
+  `useSearchParams` reads from the URL during rendering, which makes the component dynamic — it can't be statically rendered. Next.js App Router requires components that opt into dynamic rendering to be wrapped in `Suspense` so the static shell of the page can be sent immediately while the dynamic part streams in. Without `Suspense`, Next.js throws a build error because it can't statically render the page.
+</InterviewQ>
+
+<InterviewQ question="How would you handle two separate tab groups on the same page?" difficulty="mid">
+  Use different `paramName` values for each tab group in `TabsURL` — for example `paramName="profileTab"` and `paramName="settingsTab"`. Each group reads and writes its own URL param independently. The URL becomes `?profileTab=activity&settingsTab=security` — both tabs are bookmarkable and independent.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The `hidden` attribute approach is something I only learned after breaking a form inside tabs. User filled in their name and email, switched to the Security tab, came back, and the form was empty. Switched from `&&` to `hidden` and it works perfectly.
+
+  The `Suspense` wrapper for `useSearchParams` is easy to forget — Next.js gives a cryptic error at build time without it. Just always wrap any component using `useSearchParams` in `Suspense`.
+
+  **Vue vs React difference:** Vue uses `v-show` to keep DOM alive. React uses the `hidden` attribute. Same concept — both keep the element in the DOM but hide it visually. Vue also has `v-if` vs `v-show` as a familiar distinction. In React you choose between `&&`/ternary (unmounts) vs `hidden` (keeps alive).
+</MyNotes>

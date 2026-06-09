@@ -1,0 +1,839 @@
+---
+title: "Authentication in Nuxt 3 with Laravel Sanctum"
+description: "How to implement a complete authentication flow in Nuxt 3 using server routes, httpOnly cookies, Nuxt middleware for route protection, and Pinia for client-side auth state — connected to a Laravel Sanctum API."
+category: authentication
+tools: [vue, nuxt]
+tags: [authentication, nuxt, laravel, sanctum, bearer-token, middleware, pinia, httponly-cookie]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+Authentication in Nuxt 3 with a Laravel backend follows the same secure layered pattern as Next.js. The client never talks to Laravel directly and never sees the Bearer token. Everything flows through Nuxt server routes.
+
+**Full architecture:**
+```tsx
+[Login Form] → POST /api/auth/login (Nuxt Server Route)
+│
+├── validates input with Zod
+├── calls Laravel POST /api/auth/login
+├── receives { user, token } from Laravel
+├── stores token in httpOnly cookie
+└── returns { user } to client (never the token)
+[Every protected page load]
+│
+├── Nuxt Route Middleware reads httpOnly cookie
+├── if no cookie → redirect to /login
+└── if cookie exists → allow request
+[Every API request from client]
+│
+├── client calls Nuxt server route
+├── server route reads token from httpOnly cookie
+├── calls Laravel with Authorization: Bearer {token}
+└── returns data to client
+[Logout] → POST /api/auth/logout (Nuxt Server Route)
+│
+├── calls Laravel to invalidate token
+└── deletes httpOnly cookie
+```
+<Callout type="note">
+  **Nuxt vs Next.js difference:** In Nuxt 3, route middleware lives in the
+  `middleware/` folder and runs on the client side after hydration. For
+  server-side protection before the page renders, use `definePageMeta` with
+  middleware on each page or use a global middleware. Unlike Next.js Middleware
+  which runs on the Edge, Nuxt middleware runs in the Vue router layer.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **Security:** Bearer token lives only in an httpOnly cookie — JavaScript cannot read it, XSS cannot steal it.
+- **No CORS issues:** Client talks to its own Nuxt server, not directly to Laravel.
+- **Centralized API logic:** All Laravel calls go through server routes — one place to handle errors, logging, retries.
+- **Nuxt Middleware:** Protect entire route groups declaratively with `definePageMeta`.
+- **Pinia for UI state:** User object available instantly in any component without prop drilling.
+
+---
+
+## Real-World Use Cases
+
+- **Login / Register:** Form → Server Route → Laravel → httpOnly cookie.
+- **Protected dashboard:** Middleware redirects unauthenticated users before the page renders.
+- **User profile:** Server route reads cookie, fetches `/api/auth/me` from Laravel, returns user.
+- **Logout:** Server route deletes cookie and invalidates Laravel token.
+- **Role-based access:** Middleware checks user role from Pinia store and redirects unauthorized users.
+
+---
+
+## When NOT to Use It
+
+- **Public marketing pages:** No auth needed — skip middleware entirely for these pages.
+- **Static pages with no user data:** Do not fetch auth state unnecessarily.
+- **`@sidebase/nuxt-auth`:** That module is designed for when Nuxt IS the auth server. Since Laravel handles auth, this manual pattern is simpler and more appropriate.
+
+---
+
+## Code Examples
+
+### File Structure
+
+---
+
+### Laravel Fetch Helper
+
+```ts
+// server/utils/laravelFetch.ts
+import { H3Event } from 'h3'
+
+const LARAVEL_API = process.env.LARAVEL_API_URL
+
+// Authenticated fetch — reads token from httpOnly cookie
+export async function laravelFetch(
+  event: H3Event,
+  endpoint: string,
+  options: RequestInit = {}
+) {
+  const token = getCookie(event, 'auth_token')
+
+  if (!token) {
+    throw createError({ statusCode: 401, message: 'Unauthorized' })
+  }
+
+  return $fetch(`${LARAVEL_API}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(options.headers as Record<string, string>),
+    },
+  })
+}
+
+// Public fetch — no token required
+export async function laravelPublicFetch(
+  endpoint: string,
+  options: RequestInit = {}
+) {
+  return $fetch(`${LARAVEL_API}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers as Record<string, string>),
+    },
+  })
+}
+```
+
+---
+
+### Zod Schemas
+
+```ts
+// lib/schemas/auth.ts
+import { z } from 'zod'
+
+export const loginSchema = z.object({
+  email: z.string().min(1, 'Email is required').email('Invalid email'),
+  password: z.string().min(1, 'Password is required').min(8, 'Minimum 8 characters'),
+})
+
+export const registerSchema = z.object({
+  name: z.string().min(1, 'Name is required').max(255),
+  email: z.string().min(1, 'Email is required').email('Invalid email'),
+  password: z.string().min(8, 'Minimum 8 characters'),
+  password_confirmation: z.string(),
+}).refine((data) => data.password === data.password_confirmation, {
+  message: 'Passwords do not match',
+  path: ['password_confirmation'],
+})
+
+export type LoginFormData = z.infer<typeof loginSchema>
+export type RegisterFormData = z.infer<typeof registerSchema>
+```
+
+---
+
+### Auth Store — Pinia
+
+```ts
+// stores/useAuthStore.ts
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+
+interface User {
+  id: string
+  name: string
+  email: string
+  role: string
+}
+
+export const useAuthStore = defineStore('auth', () => {
+  const user = ref<User | null>(null)
+  const isAuthenticated = computed(() => !!user.value)
+
+  function setUser(userData: User) {
+    user.value = userData
+  }
+
+  function clearUser() {
+    user.value = null
+  }
+
+  return { user, isAuthenticated, setUser, clearUser }
+})
+```
+
+---
+
+### Server Route — Login
+
+```ts
+// server/api/auth/login.post.ts
+import { loginSchema } from '~/lib/schemas/auth'
+
+export default defineEventHandler(async (event) => {
+  const body = await readBody(event)
+
+  // Server-side validation
+  const parsed = loginSchema.safeParse(body)
+  if (!parsed.success) {
+    throw createError({
+      statusCode: 422,
+      data: { errors: parsed.error.flatten().fieldErrors },
+    })
+  }
+
+  // Call Laravel
+  const data = await laravelPublicFetch('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(parsed.data),
+  }).catch((error) => {
+    throw createError({
+      statusCode: error.response?.status ?? 500,
+      message: error.response?._data?.message ?? 'Login failed',
+      data: { errors: error.response?._data?.errors },
+    })
+  })
+
+  // Store token in httpOnly cookie — never sent to client JS
+  setCookie(event, 'auth_token', data.token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 60 * 60 * 24 * 7, // 7 days
+  })
+
+  // Return user only — never the token
+  return { user: data.user }
+})
+```
+
+---
+
+### Server Route — Register
+
+```ts
+// server/api/auth/register.post.ts
+import { registerSchema } from '~/lib/schemas/auth'
+
+export default defineEventHandler(async (event) => {
+  const body = await readBody(event)
+
+  const parsed = registerSchema.safeParse(body)
+  if (!parsed.success) {
+    throw createError({
+      statusCode: 422,
+      data: { errors: parsed.error.flatten().fieldErrors },
+    })
+  }
+
+  const data = await laravelPublicFetch('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(parsed.data),
+  }).catch((error) => {
+    throw createError({
+      statusCode: error.response?.status ?? 500,
+      message: error.response?._data?.message ?? 'Registration failed',
+      data: { errors: error.response?._data?.errors },
+    })
+  })
+
+  setCookie(event, 'auth_token', data.token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 60 * 60 * 24 * 7,
+  })
+
+  return { user: data.user }
+})
+```
+
+---
+
+### Server Route — Logout
+
+```ts
+// server/api/auth/logout.post.ts
+export default defineEventHandler(async (event) => {
+  try {
+    // Tell Laravel to invalidate the token
+    await laravelFetch(event, '/auth/logout', { method: 'POST' })
+  } catch {
+    // Continue even if Laravel call fails — still clear the cookie
+  }
+
+  deleteCookie(event, 'auth_token')
+
+  return { success: true }
+})
+```
+
+---
+
+### Server Route — Get Current User
+
+```ts
+// server/api/auth/me.get.ts
+export default defineEventHandler(async (event) => {
+  const data = await laravelFetch(event, '/auth/me').catch((error) => {
+    throw createError({
+      statusCode: error.statusCode ?? 401,
+      message: error.message ?? 'Unauthenticated',
+    })
+  })
+
+  return { user: data }
+})
+```
+
+---
+
+### Nuxt Middleware — Protect Routes
+
+```ts
+// middleware/auth.ts
+export default defineNuxtRouteMiddleware(async () => {
+  const auth = useAuthStore()
+
+  // If user already in Pinia store — allow
+  if (auth.isAuthenticated) return
+
+  // Try to fetch current user from server
+  try {
+    const data = await $fetch('/api/auth/me')
+    auth.setUser(data.user)
+  } catch {
+    // No valid cookie or token expired — redirect to login
+    return navigateTo('/login')
+  }
+})
+```
+
+```ts
+// middleware/guest.ts
+// Redirect authenticated users away from login/register pages
+export default defineNuxtRouteMiddleware(async () => {
+  const auth = useAuthStore()
+
+  if (auth.isAuthenticated) {
+    return navigateTo('/dashboard')
+  }
+
+  // Check cookie even if Pinia is empty (page refresh)
+  try {
+    const data = await $fetch('/api/auth/me')
+    auth.setUser(data.user)
+    return navigateTo('/dashboard')
+  } catch {
+    // Not authenticated — allow access to login/register
+  }
+})
+```
+
+---
+
+### Apply Middleware to Pages
+
+```vue
+<!-- pages/dashboard.vue -->
+<script setup lang="ts">
+definePageMeta({
+  middleware: 'auth', // ← protected route
+})
+</script>
+
+<template>
+  <div>
+    <h1>Dashboard</h1>
+  </div>
+</template>
+```
+
+```vue
+<!-- pages/login.vue -->
+<script setup lang="ts">
+definePageMeta({
+  middleware: 'guest', // ← redirect if already logged in
+})
+</script>
+
+<template>
+  <LoginForm />
+</template>
+```
+
+---
+
+### Auth Plugin — Hydrate Pinia on App Load
+
+```ts
+// plugins/auth.client.ts
+// Runs on client side after hydration — populates Pinia store on page refresh
+export default defineNuxtPlugin(async () => {
+  const auth = useAuthStore()
+
+  if (auth.isAuthenticated) return
+
+  try {
+    const data = await $fetch('/api/auth/me')
+    auth.setUser(data.user)
+  } catch {
+    auth.clearUser()
+  }
+})
+```
+
+---
+
+### Login Form — Connected to Server Route
+
+```vue
+<!-- components/forms/LoginForm.vue -->
+<script setup lang="ts">
+import { useForm, FormSubmitError } from '@/composables/useForm'
+import { loginSchema, type LoginFormData } from '@/lib/schemas/auth'
+
+const auth = useAuthStore()
+const router = useRouter()
+const route = useRoute()
+
+const { values, errors, serverError, isSubmitting, handleSubmit } =
+  useForm<LoginFormData>({
+    schema: loginSchema,
+    initialValues: { email: '', password: '' },
+    onSubmit: async (data) => {
+      const result = await $fetch('/api/auth/login', {
+        method: 'POST',
+        body: data,
+      }).catch((error) => {
+        const status = error.response?.status
+        const body = error.response?._data
+
+        if (status === 422 && body?.errors) {
+          throw new FormSubmitError('Validation failed', body.errors)
+        }
+
+        throw new FormSubmitError(body?.message ?? 'Login failed')
+      })
+
+      // Set user in Pinia store
+      auth.setUser(result.user)
+
+      // Redirect to where they came from or dashboard
+      const from = route.query.from as string ?? '/dashboard'
+      await navigateTo(from)
+    },
+  })
+</script>
+
+<template>
+  <form @submit.prevent="handleSubmit" novalidate>
+    <div>
+      <label for="email">Email</label>
+      <input
+        id="email"
+        v-model="values.email"
+        type="email"
+        autocomplete="email"
+      />
+      <p v-if="errors.email">{{ errors.email }}</p>
+    </div>
+
+    <div>
+      <label for="password">Password</label>
+      <input
+        id="password"
+        v-model="values.password"
+        type="password"
+        autocomplete="current-password"
+      />
+      <p v-if="errors.password">{{ errors.password }}</p>
+    </div>
+
+    <p v-if="serverError">{{ serverError }}</p>
+
+    <button type="submit" :disabled="isSubmitting">
+      {{ isSubmitting ? 'Signing in...' : 'Sign in' }}
+    </button>
+  </form>
+</template>
+```
+
+---
+
+### Logout Button
+
+```vue
+<!-- components/LogoutButton.vue -->
+<script setup lang="ts">
+const auth = useAuthStore()
+
+async function handleLogout() {
+  await $fetch('/api/auth/logout', { method: 'POST' })
+  auth.clearUser()
+  await navigateTo('/login')
+}
+</script>
+
+<template>
+  <button @click="handleLogout">Logout</button>
+</template>
+```
+
+---
+
+### useAuth Composable — Access User Anywhere
+
+```ts
+// composables/useAuth.ts
+export function useAuth() {
+  const auth = useAuthStore()
+
+  return {
+    user: computed(() => auth.user),
+    isAuthenticated: computed(() => auth.isAuthenticated),
+    clearUser: auth.clearUser,
+  }
+}
+
+// Usage in any component:
+// const { user, isAuthenticated } = useAuth()
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```ts
+// Returning the token to the client — exposed in JS
+return { user: data.user, token: data.token } // ❌
+```
+</Wrong>
+<Right>
+```ts
+// Store in httpOnly cookie — return only user
+setCookie(event, 'auth_token', data.token, { httpOnly: true, ... })
+return { user: data.user } // ✅ token never reaches client JS
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// middleware/auth.ts — using useCookie() to read httpOnly cookie
+export default defineNuxtRouteMiddleware(() => {
+  const token = useCookie('auth_token') // ❌ httpOnly cookies are not readable by JS
+  if (!token.value) return navigateTo('/login')
+})
+```
+</Wrong>
+<Right>
+```ts
+// Check auth by calling /api/auth/me — let the server read the httpOnly cookie
+export default defineNuxtRouteMiddleware(async () => {
+  try {
+    const data = await $fetch('/api/auth/me') // ✅ server reads cookie
+    useAuthStore().setUser(data.user)
+  } catch {
+    return navigateTo('/login')
+  }
+})
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Calling useAuthStore() inside a server route — Pinia is client-only
+// server/api/auth/me.get.ts
+export default defineEventHandler(async (event) => {
+  const auth = useAuthStore() // ❌ Pinia does not exist on the server
+})
+```
+</Wrong>
+<Right>
+```ts
+// Server routes use cookies directly — never Pinia
+export default defineEventHandler(async (event) => {
+  const token = getCookie(event, 'auth_token') // ✅
+})
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** Nuxt middleware runs **client-side** after hydration — it does not prevent the page from being server-rendered. If you have sensitive data that should never be visible to unauthenticated users even in the HTML source, fetch it inside the page with `useAsyncData` and handle the 401 there, or protect the API route on the server.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- One middleware per concern — `auth.ts` for protected routes, `guest.ts` for auth pages
+- Keep all auth server routes under `server/api/auth/`
+- Use `definePageMeta` on every page explicitly — do not rely on global middleware for security
+
+**Performance tips**
+```ts
+// Cache the /api/auth/me call in middleware with useState
+// to avoid multiple requests on the same page load
+
+export default defineNuxtRouteMiddleware(async () => {
+  const auth = useAuthStore()
+
+  // Already hydrated — skip the fetch
+  if (auth.isAuthenticated) return
+
+  // Use useState to avoid duplicate fetches during SSR + hydration
+  const userState = useState('auth-user', () => null)
+
+  if (userState.value) {
+    auth.setUser(userState.value)
+    return
+  }
+
+  try {
+    const data = await $fetch('/api/auth/me')
+    userState.value = data.user
+    auth.setUser(data.user)
+  } catch {
+    return navigateTo('/login')
+  }
+})
+```
+
+**Security considerations**
+- Always set `httpOnly: true`, `secure: true` (production), `sameSite: 'lax'` on auth cookie
+- Never use `useCookie()` to read the auth token — httpOnly means JS cannot read it
+- Never call Pinia inside server routes — it does not exist there
+- Use `cache: 'no-store'` equivalent in `$fetch` for auth-related calls
+- Validate token on every Laravel API call — do not trust client-side auth state alone
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between Nuxt route middleware and Next.js Middleware?"
+  difficulty="easy"
+>
+  Nuxt route middleware runs in the Vue Router layer on the client side after
+  hydration. Next.js Middleware runs on the Edge Runtime before any rendering
+  happens — server-side, before the page is even built. This means Nuxt
+  middleware cannot prevent the initial server render, while Next.js Middleware
+  can redirect before anything is sent to the browser. For Nuxt, true
+  server-side protection requires checking auth inside `useAsyncData` or
+  server routes.
+</InterviewQ>
+
+<InterviewQ
+  question="Why can't you read an httpOnly cookie with useCookie() in Nuxt middleware?"
+  difficulty="easy"
+>
+  httpOnly cookies are intentionally inaccessible to JavaScript — that is their
+  security purpose. `useCookie()` in Nuxt is a JavaScript API that runs in the
+  browser. The browser deliberately blocks JS from reading httpOnly cookies to
+  prevent XSS attacks from stealing them. Only the browser's HTTP layer sends
+  them automatically with requests — so the only way to use the token is to
+  make a fetch request to your own server route which can read it server-side
+  via `getCookie(event, 'auth_token')`.
+</InterviewQ>
+
+<InterviewQ
+  question="Why do you need the auth plugin in addition to middleware?"
+  difficulty="mid"
+>
+  Middleware runs on route navigation — when moving between pages. But on the
+  initial page load after a refresh, if the user lands directly on a public
+  page, the middleware might not run. The `auth.client.ts` plugin runs once
+  when the app boots on the client, regardless of which page the user lands on.
+  It populates the Pinia store from the server so `useAuth()` works everywhere
+  immediately without waiting for a navigation event.
+</InterviewQ>
+
+<InterviewQ
+  question="How do you handle token expiration gracefully in Nuxt?"
+  difficulty="mid"
+>
+  When a server route calls Laravel with an expired token, Laravel returns 401.
+  The server route catches this and throws a `createError({ statusCode: 401 })`.
+  On the client, the `$fetch` call rejects. In the middleware this triggers the
+  catch block which calls `navigateTo('/login')`. For API calls outside
+  middleware, handle 401 in a global `$fetch` interceptor set up in a plugin
+  that clears the Pinia store and redirects to login automatically.
+</InterviewQ>
+
+<InterviewQ
+  question="How would you set up a global $fetch interceptor to handle 401 responses in Nuxt?"
+  difficulty="hard"
+>
+  Create a plugin that uses `addRouteMiddleware` or hooks into `$fetch` via
+  `useRequestFetch`. The cleanest pattern in Nuxt is to create a custom
+  composable that wraps `$fetch` with an `onResponseError` interceptor:
+
+```ts
+// composables/useApiFetch.ts
+export function useApiFetch() {
+  const auth = useAuthStore()
+  const router = useRouter()
+
+  return $fetch.create({
+    onResponseError({ response }) {
+      if (response.status === 401) {
+        auth.clearUser()
+        router.push('/login')
+      }
+    },
+  })
+}
+
+// Usage:
+const apiFetch = useApiFetch()
+const data = await apiFetch('/api/posts')
+```
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The biggest confusion when starting with Nuxt auth: trying to read the
+  httpOnly cookie with `useCookie('auth_token')` in middleware and getting
+  undefined. httpOnly means JS literally cannot see it — that is the whole
+  point. The only way to use it is to make a request to a server route that
+  calls `getCookie(event, 'auth_token')` server-side.
+</MyNotes>
+
+<MyNotes>
+  The auth plugin (`plugins/auth.client.ts`) is essential for page refreshes.
+  Without it, Pinia is empty after every refresh even though the cookie exists.
+  The plugin fires once on client boot and refetches the user. Small addition,
+  solves a very annoying UX problem.
+</MyNotes>
+
+<MyNotes>
+  For local development: Laravel on port 8000, Nuxt on port 3000. Set
+  `LARAVEL_API_URL=http://localhost:8000/api` in `.env` — this is server-side
+  only so no CORS issues. The Nuxt server routes call Laravel server-to-server,
+  completely bypassing the browser and any CORS restrictions.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Server-Side User Helper — Use in Server Routes
+
+```ts
+// server/utils/getAuthUser.ts
+import { H3Event } from 'h3'
+
+interface User {
+  id: string
+  name: string
+  email: string
+  role: string
+}
+
+export async function getAuthUser(event: H3Event): Promise<User> {
+  const data = await laravelFetch(event, '/auth/me').catch(() => {
+    throw createError({ statusCode: 401, message: 'Unauthenticated' })
+  })
+
+  return data as User
+}
+
+// Usage in any server route:
+// const user = await getAuthUser(event)
+// Now you have the user without duplicating the fetch logic
+```
+
+---
+
+### Global $fetch Interceptor Plugin
+
+```ts
+// plugins/fetch.client.ts
+export default defineNuxtPlugin(() => {
+  const auth = useAuthStore()
+
+  const customFetch = $fetch.create({
+    onResponseError({ response }) {
+      if (response.status === 401) {
+        auth.clearUser()
+        navigateTo('/login')
+      }
+    },
+  })
+
+  // Make available app-wide
+  return {
+    provide: {
+      apiFetch: customFetch,
+    },
+  }
+})
+
+// Usage in components:
+// const { $apiFetch } = useNuxtApp()
+// const data = await $apiFetch('/api/posts')
+```
+
+---
+
+### Environment Variables
+
+```env
+# .env
+LARAVEL_API_URL=http://localhost:8000/api   # server-side only
+NUXT_PUBLIC_APP_URL=http://localhost:3000   # client-safe
+```
+
+```ts
+// nuxt.config.ts
+export default defineNuxtConfig({
+  runtimeConfig: {
+    // Server-side only — never exposed to client
+    laravelApiUrl: process.env.LARAVEL_API_URL,
+
+    public: {
+      // Exposed to client
+      appUrl: process.env.NUXT_PUBLIC_APP_URL,
+    },
+  },
+})
+```
+
+---
+
+*Tags: `nuxt` `vue` `authentication` `laravel` `sanctum` `bearer-token` `middleware` `pinia` `intermediate`*

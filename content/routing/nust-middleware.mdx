@@ -1,0 +1,546 @@
+---
+title: "Nuxt Middleware & Navigation Guards"
+description: "How to use Nuxt 3 middleware to protect routes, redirect unauthenticated users, handle role-based access, and run code before every navigation using route middleware and server middleware"
+category: routing
+tools: [nuxt, vue]
+tags: [middleware, auth-guard, navigation-guards, protected-routes, nuxt]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+---
+
+## Concept explanation
+
+Nuxt 3 has two types of middleware — **route middleware** and **server middleware**. Route middleware runs on the client and server during navigation — before a page renders. Server middleware runs on every HTTP request to the Nuxt server — similar to Express middleware. For auth guards and navigation protection, you use route middleware defined in the `middleware/` folder and applied per-page with `definePageMeta`.
+
+```
+User navigates to /dashboard
+        ↓
+Route middleware runs (auth.ts)
+        ↓
+Has valid session?
+  ├── YES → render /dashboard page
+  └── NO  → navigateTo('/login')
+```
+
+<Callout type="note">
+  **Vue vs Nuxt difference:** Plain Vue uses Vue Router's `beforeEach` global navigation guard defined in `router/index.ts`. Nuxt uses the `middleware/` folder with file-based middleware applied via `definePageMeta`. Both achieve the same result — Nuxt's approach is more modular and composable.
+</Callout>
+
+## Why it's used
+
+- Protects routes without adding auth checks to every page
+- Runs before the page renders — no flash of protected content
+- Modular — each middleware file handles one concern
+- Works in both SSR and client-side navigation
+
+## Real-world use cases
+
+- Redirect unauthenticated users from `/dashboard` to `/login`
+- Redirect authenticated users away from `/login` to `/dashboard`
+- Role-based access — only admins can visit `/admin`
+- Log page views for analytics
+- Set page-specific headers or meta
+
+## Code example
+
+### Types of middleware
+
+```
+middleware/
+├── auth.ts          → named middleware — applied per page
+├── guest.ts         → named middleware — for login/register pages
+├── admin.ts         → named middleware — admin only routes
+└── log.ts           → global middleware (if prefixed with 00.)
+
+server/
+└── middleware/
+    └── cors.ts      → server middleware — runs on every HTTP request
+```
+
+### Named middleware — auth guard
+
+```ts
+// middleware/auth.ts
+export default defineNuxtRouteMiddleware((to, from) => {
+  const { loggedIn } = useAuth() // or your own composable
+
+  if (!loggedIn.value) {
+    // Save where they were trying to go
+    return navigateTo({
+      path: '/login',
+      query: { callbackUrl: to.fullPath },
+    })
+  }
+})
+```
+
+### Named middleware — guest guard
+
+```ts
+// middleware/guest.ts
+// Redirect already-logged-in users away from login/register
+export default defineNuxtRouteMiddleware(() => {
+  const { loggedIn } = useAuth()
+
+  if (loggedIn.value) {
+    return navigateTo('/dashboard')
+  }
+})
+```
+
+### Apply middleware to a page
+
+```vue
+<!-- pages/dashboard/index.vue -->
+<script setup lang="ts">
+definePageMeta({
+  middleware: ['auth'], // runs auth.ts before this page renders
+})
+</script>
+
+<template>
+  <div>
+    <h1>Dashboard</h1>
+  </div>
+</template>
+```
+
+```vue
+<!-- pages/login.vue -->
+<script setup lang="ts">
+definePageMeta({
+  middleware: ['guest'], // redirect if already logged in
+  layout: 'auth',
+})
+</script>
+
+<template>
+  <div>
+    <h1>Login</h1>
+  </div>
+</template>
+```
+
+### Apply middleware to multiple pages at once
+
+```vue
+<!-- pages/dashboard/users/index.vue -->
+<script setup lang="ts">
+definePageMeta({
+  middleware: ['auth'],
+})
+</script>
+
+<!-- pages/dashboard/users/[id].vue -->
+<script setup lang="ts">
+definePageMeta({
+  middleware: ['auth'],
+})
+</script>
+
+<!-- pages/dashboard/settings.vue -->
+<script setup lang="ts">
+definePageMeta({
+  middleware: ['auth'],
+})
+</script>
+```
+
+<Callout type="tip">
+  Instead of adding `middleware: ['auth']` to every dashboard page, create a `layouts/dashboard.vue` layout and add the middleware check there once — all pages using that layout are automatically protected.
+</Callout>
+
+### Global middleware — runs on every navigation
+
+```ts
+// middleware/00.log.ts
+// Prefix with number to control execution order
+// Files starting with 00. run before 01. etc.
+export default defineNuxtRouteMiddleware((to, from) => {
+  // Runs on every page navigation — client and server
+  console.log(`Navigating from ${from.path} to ${to.path}`)
+})
+```
+
+<Callout type="note">
+  To make middleware global (runs on every route automatically), name it with a number prefix like `00.auth.global.ts` or add `.global` to the filename — e.g. `auth.global.ts`. Without `.global` or a number prefix, it only runs when explicitly listed in `definePageMeta`.
+</Callout>
+
+### Role-based access control
+
+```ts
+// middleware/admin.ts
+export default defineNuxtRouteMiddleware(() => {
+  const { loggedIn, user } = useAuth()
+
+  // Not logged in at all
+  if (!loggedIn.value) {
+    return navigateTo('/login')
+  }
+
+  // Logged in but not admin
+  if (user.value?.role !== 'admin') {
+    return navigateTo('/unauthorized')
+  }
+})
+```
+
+```vue
+<!-- pages/admin/index.vue -->
+<script setup lang="ts">
+definePageMeta({
+  middleware: ['admin'],
+})
+</script>
+
+<template>
+  <div>
+    <h1>Admin Panel</h1>
+  </div>
+</template>
+```
+
+### Multiple middleware on one page
+
+```vue
+<!-- pages/admin/billing.vue -->
+<script setup lang="ts">
+definePageMeta({
+  // Runs in order: auth first, then admin
+  middleware: ['auth', 'admin'],
+})
+</script>
+```
+
+### Inline middleware — defined directly in the page
+
+```vue
+<!-- pages/profile.vue -->
+<script setup lang="ts">
+definePageMeta({
+  // Inline middleware — only applies to this page
+  middleware: [
+    function (to, from) {
+      const { loggedIn } = useAuth()
+      if (!loggedIn.value) {
+        return navigateTo('/login')
+      }
+    }
+  ],
+})
+</script>
+```
+
+### Auth composable — useAuth
+
+```ts
+// composables/useAuth.ts
+export function useAuth() {
+  // Read session from cookie or state
+  const user     = useState<User | null>('auth-user', () => null)
+  const loggedIn = computed(() => !!user.value)
+
+  const login = async (email: string, password: string) => {
+    const data = await $fetch('/api/auth/login', {
+      method: 'POST',
+      body: { email, password },
+    })
+    user.value = data.user
+    await navigateTo('/dashboard')
+  }
+
+  const logout = async () => {
+    await $fetch('/api/auth/logout', { method: 'POST' })
+    user.value = null
+    await navigateTo('/login')
+  }
+
+  return { user, loggedIn, login, logout }
+}
+```
+
+### Protecting layout instead of every page
+
+```vue
+<!-- layouts/dashboard.vue -->
+<script setup lang="ts">
+// Protect all pages using this layout in one place
+const { loggedIn } = useAuth()
+
+// Runs on every navigation to a page using this layout
+onMounted(() => {
+  if (!loggedIn.value) {
+    navigateTo('/login')
+  }
+})
+
+// Better — use middleware in the layout's definePageMeta equivalent
+// by using a plugin or global middleware
+</script>
+
+<template>
+  <div class="flex min-h-screen">
+    <Sidebar />
+    <main class="flex-1 p-6">
+      <slot />
+    </main>
+  </div>
+</template>
+```
+
+### Server middleware — runs on every HTTP request
+
+```ts
+// server/middleware/cors.ts
+export default defineEventHandler((event) => {
+  // Runs on EVERY request to the Nuxt server
+  setResponseHeaders(event, {
+    'Access-Control-Allow-Origin':  '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  })
+})
+```
+
+```ts
+// server/middleware/auth.ts
+// Protect all /api/ routes at the server level
+export default defineEventHandler(async (event) => {
+  const url = getRequestURL(event)
+
+  // Only protect API routes
+  if (!url.pathname.startsWith('/api/')) return
+
+  // Skip public auth endpoints
+  const publicRoutes = ['/api/auth/login', '/api/auth/register']
+  if (publicRoutes.includes(url.pathname)) return
+
+  // Verify token
+  const token = getCookie(event, 'session-token')
+  if (!token) {
+    throw createError({
+      statusCode:  401,
+      message:     'Unauthorized',
+    })
+  }
+
+  const user = await verifyToken(token)
+  if (!user) {
+    throw createError({
+      statusCode:  401,
+      message:     'Invalid session',
+    })
+  }
+
+  // Attach user to event context for use in API routes
+  event.context.user = user
+})
+```
+
+### Reading user from event context in API route
+
+```ts
+// server/api/users/index.get.ts
+export default defineEventHandler(async (event) => {
+  // User was attached by server middleware
+  const user = event.context.user
+
+  if (!user) {
+    throw createError({ statusCode: 401, message: 'Unauthorized' })
+  }
+
+  const users = await getUsersFromDB()
+  return { users }
+})
+```
+
+### callbackUrl — redirect back after login
+
+```ts
+// middleware/auth.ts
+export default defineNuxtRouteMiddleware((to) => {
+  const { loggedIn } = useAuth()
+
+  if (!loggedIn.value) {
+    return navigateTo({
+      path: '/login',
+      query: { callbackUrl: to.fullPath }, // save intended destination
+    })
+  }
+})
+```
+
+```vue
+<!-- pages/login.vue -->
+<script setup lang="ts">
+definePageMeta({ middleware: ['guest'] })
+
+const route = useRoute()
+const { login } = useAuth()
+
+const callbackUrl = computed(
+  () => (route.query.callbackUrl as string) ?? '/dashboard'
+)
+
+const handleLogin = async (email: string, password: string) => {
+  await login(email, password)
+  await navigateTo(callbackUrl.value) // go back to where they came from
+}
+</script>
+
+<template>
+  <div class="flex items-center justify-center min-h-screen">
+    <form @submit.prevent="handleLogin('test@test.com', 'password')">
+      <!-- login form -->
+      <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg">
+        Login
+      </button>
+    </form>
+  </div>
+</template>
+```
+
+### Vue Router navigation guards — plain Vue (not Nuxt)
+
+```ts
+// router/index.ts — plain Vue with Vue Router
+import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    { path: '/',          component: () => import('@/pages/Home.vue') },
+    { path: '/dashboard', component: () => import('@/pages/Dashboard.vue'), meta: { requiresAuth: true } },
+    { path: '/login',     component: () => import('@/pages/Login.vue'),     meta: { guest: true } },
+  ],
+})
+
+// Global navigation guard
+router.beforeEach((to, from, next) => {
+  const auth = useAuthStore()
+
+  if (to.meta.requiresAuth && !auth.isLoggedIn) {
+    next({ path: '/login', query: { callbackUrl: to.fullPath } })
+    return
+  }
+
+  if (to.meta.guest && auth.isLoggedIn) {
+    next('/dashboard')
+    return
+  }
+
+  next() // allow navigation
+})
+
+export default router
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```ts
+// Forgetting to return navigateTo — middleware continues
+// even after the redirect condition is met
+export default defineNuxtRouteMiddleware((to) => {
+  const { loggedIn } = useAuth()
+
+  if (!loggedIn.value) {
+    navigateTo('/login') // ❌ no return — page still renders
+  }
+})
+```
+</Wrong>
+<Right>
+```ts
+// Always return navigateTo — stops middleware execution
+export default defineNuxtRouteMiddleware((to) => {
+  const { loggedIn } = useAuth()
+
+  if (!loggedIn.value) {
+    return navigateTo('/login') // ✅ return stops further execution
+  }
+})
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Using window or document in middleware
+// Middleware runs on server too — window doesn't exist there
+export default defineNuxtRouteMiddleware(() => {
+  const token = localStorage.getItem('token') // ❌ crashes on server
+  if (!token) return navigateTo('/login')
+})
+```
+</Wrong>
+<Right>
+```ts
+// Use useCookie or useState — works on both server and client
+export default defineNuxtRouteMiddleware(() => {
+  const token = useCookie('session-token') // ✅ SSR safe
+  if (!token.value) return navigateTo('/login')
+})
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always `return navigateTo()` — without `return` the page still renders after the redirect
+- Use `useCookie` not `localStorage` in middleware — middleware runs on the server too
+- Use named middleware files in `middleware/` — keep each concern in its own file
+- Apply middleware in layouts not individual pages when protecting entire sections
+- Use `callbackUrl` query param so users return to their intended page after login
+- Use server middleware in `server/middleware/` to protect API routes at the server level
+- Order multiple middleware with number prefixes (`00.log.ts`, `01.auth.ts`)
+
+<Callout type="warning">
+  Never use `localStorage`, `sessionStorage`, or `window` in Nuxt middleware. Middleware runs during SSR on the server where these browser APIs don't exist. Always use `useCookie()` or `useState()` which work in both server and client context.
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between route middleware and server middleware in Nuxt?" difficulty="mid">
+  Route middleware runs during client-side and SSR navigation — before a page component renders. It has access to Vue Router's `to` and `from` objects and is used for auth guards, redirects, and page-level logic. Server middleware runs on every HTTP request to the Nuxt server — including API routes. It's used for CORS headers, request logging, and protecting API endpoints. Route middleware is in `middleware/`. Server middleware is in `server/middleware/`.
+</InterviewQ>
+
+<InterviewQ question="Why must you return navigateTo() in Nuxt middleware?" difficulty="easy">
+  `defineNuxtRouteMiddleware` expects a return value to know what to do next. If you call `navigateTo()` without returning it, the return value of the middleware function is `undefined` — Nuxt interprets this as "continue to the page" and renders it anyway, ignoring the redirect. Always `return navigateTo()` to actually stop the navigation and redirect the user.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Nuxt middleware and Vue Router beforeEach?" difficulty="mid">
+  Vue Router's `beforeEach` is a single global guard defined once in the router config — all route protection logic lives in one place, which can get large. Nuxt middleware is file-based and modular — each file handles one concern (`auth.ts`, `admin.ts`, `guest.ts`) and is applied per-page via `definePageMeta`. Nuxt middleware also runs during SSR automatically, while Vue Router guards only run on the client unless you manually add SSR handling.
+</InterviewQ>
+
+<InterviewQ question="How do you protect all routes in a section without adding middleware to every page?" difficulty="mid">
+  Two approaches: use a global middleware file (suffix with `.global.ts`) that checks the route path and applies logic conditionally, or add the auth check to a shared layout component that all protected pages use. The layout approach is cleaner — pages that use `layout: 'dashboard'` are automatically protected because the layout runs the auth check once. For Nuxt, you can also use a plugin with `addRouteMiddleware` to register middleware globally.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The `return navigateTo()` mistake is the one that gets everyone. The page flashes for a second then redirects — which means the middleware ran, the redirect was called, but without `return` the page started rendering too. Always `return`.
+
+  The `localStorage` in middleware mistake also took me a while to figure out. The error is cryptic — "localStorage is not defined" only appears in SSR logs, not the browser. Switch everything to `useCookie()` in middleware and the problem disappears.
+
+  For protecting entire dashboard sections I now use one global middleware file with path checking instead of adding `middleware: ['auth']` to every single page:
+
+```ts
+  // middleware/auth.global.ts
+  export default defineNuxtRouteMiddleware((to) => {
+    const { loggedIn } = useAuth()
+    const protectedPaths = ['/dashboard', '/settings', '/profile']
+    const isProtected = protectedPaths.some(p => to.path.startsWith(p))
+    if (isProtected && !loggedIn.value) {
+      return navigateTo({ path: '/login', query: { callbackUrl: to.fullPath } })
+    }
+  })
+```
+
+  One file, zero per-page config needed.
+</MyNotes>

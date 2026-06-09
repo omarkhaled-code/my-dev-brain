@@ -1,0 +1,207 @@
+---
+title: "Laravel & PHP Interview Questions"
+description: "Quick-review Laravel and PHP interview questions — Eloquent, routing, middleware, queues, authentication, performance, and architecture"
+category: interviews
+tags: [laravel, php, interview, eloquent, middleware, queues, authentication]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - interviews/database
+  - interviews/javascript
+  - laravel/form-requests-validation
+---
+
+## PHP Fundamentals
+
+<InterviewQ question="What is the difference between == and === in PHP?" difficulty="easy">
+  `==` is loose comparison — PHP coerces types before comparing (`0 == "foo"` is `true` in older PHP). `===` is strict — both value and type must match. In PHP 8, `0 == "foo"` changed to `false`. Always use `===` for predictable comparisons. For sorting, use the spaceship operator `<=>` which returns -1, 0, or 1.
+</InterviewQ>
+
+<InterviewQ question="What are PHP traits and why are they used?" difficulty="mid">
+  Traits are reusable code blocks that can be included in multiple classes — PHP's answer to multiple inheritance limitations. Define with `trait MyTrait {}`, use with `use MyTrait` inside a class. Laravel uses traits extensively — `Notifiable`, `HasFactory`, `SoftDeletes` are all traits. Use traits for horizontal code reuse across unrelated classes without creating deep inheritance hierarchies.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between abstract classes and interfaces in PHP?" difficulty="mid">
+  Abstract classes can have implemented methods, properties, and constructors — but can't be instantiated directly. Interfaces only define method signatures — no implementation, no properties. A class can implement multiple interfaces but extend only one class. Use abstract classes when sharing code between related classes. Use interfaces to define a contract that unrelated classes must fulfill.
+</InterviewQ>
+
+<InterviewQ question="What are PHP 8 named arguments?" difficulty="easy">
+  Named arguments let you pass values by parameter name in any order — `array_slice(array: $arr, offset: 2, length: 3)`. Useful for functions with many optional parameters, makes code self-documenting, and lets you skip optional parameters in the middle. Works with built-in functions and user-defined functions.
+</InterviewQ>
+
+<InterviewQ question="What are PHP 8 union types and intersection types?" difficulty="mid">
+  Union types allow a parameter or return value to be one of multiple types — `function foo(int|string $id)`. Intersection types require a value to satisfy ALL specified types simultaneously — `function foo(Countable&Iterator $collection)`. Union types are common for flexible APIs. Intersection types are for objects that must implement multiple interfaces.
+</InterviewQ>
+
+---
+
+## Laravel Architecture
+
+<InterviewQ question="What is the Laravel service container?" difficulty="hard">
+  The service container is Laravel's IoC (Inversion of Control) container — a powerful tool for managing class dependencies and performing dependency injection. When you type-hint a class in a controller constructor or method, Laravel automatically resolves and injects it. You can bind interfaces to implementations with `app()->bind(Interface::class, Implementation::class)`. The container powers everything in Laravel — middlewares, controllers, jobs, commands.
+</InterviewQ>
+
+<InterviewQ question="What is a service provider in Laravel?" difficulty="hard">
+  Service providers are the central place to configure and bootstrap your application — binding things into the service container, registering event listeners, middleware, and routes. Every Laravel service (queue, auth, cache) has its own service provider. Your app providers live in `app/Providers/`. The `register()` method binds things into the container. The `boot()` method runs after all providers are registered — use it for things that depend on other bindings.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between register() and boot() in a service provider?" difficulty="hard">
+  `register()` should only bind things into the service container — never use other services here because they may not be registered yet. `boot()` runs after ALL providers have been registered — safe to use any service, register routes, event listeners, view composers, Gates, and validation rules. Think of `register()` as "declare what exists" and `boot()` as "use what exists."
+</InterviewQ>
+
+<InterviewQ question="What is a facade in Laravel?" difficulty="mid">
+  A facade provides a static-style interface to objects in the service container — `Cache::get('key')` instead of `app('cache')->get('key')`. Under the hood it's not actually static — the facade resolves the underlying class from the container. Facades make code concise and testable (they can be swapped in tests). Common facades: `DB`, `Cache`, `Storage`, `Mail`, `Queue`, `Auth`, `Route`.
+</InterviewQ>
+
+<InterviewQ question="What is dependency injection and how does Laravel implement it?" difficulty="mid">
+  Dependency injection is passing dependencies into a class rather than creating them inside. Instead of `new Mailer()` inside a controller, you type-hint `Mailer $mailer` in the constructor and Laravel injects it automatically from the container. Benefits: easier testing (inject mocks), decoupled code, single responsibility. Laravel's container handles constructor injection, method injection in controllers, and closure injection in route callbacks.
+</InterviewQ>
+
+---
+
+## Eloquent ORM
+
+<InterviewQ question="What is the N+1 query problem and how do you fix it?" difficulty="mid">
+  N+1 happens when you load a collection and then access a relationship on each item — 1 query for the collection + N queries for each item's relationship. Fix: eager load with `with()` — `Post::with('user')->get()` fetches all posts and all users in 2 queries instead of N+1. Use `withCount()` for counts, `has()` and `whereHas()` for filtering by relationships. Use `Laravel Debugbar` or `DB::listen()` to detect N+1 in development.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between hasMany and belongsTo?" difficulty="easy">
+  `hasMany` is defined on the parent — a User `hasMany` Posts. `belongsTo` is defined on the child — a Post `belongsTo` User. The foreign key (`user_id`) lives on the posts table. Always define both sides for bidirectional access. `hasMany` returns a collection. `belongsTo` returns a single model or null.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between hasMany and hasManyThrough?" difficulty="mid">
+  `hasMany` is a direct relationship — User has many Posts through `user_id` on posts. `hasManyThrough` accesses a distant relationship through an intermediate model — a Country has many Posts through Users. `Country → User → Post`. The country doesn't have a direct link to posts — it goes through users. Useful for skipping intermediate models in queries.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between create() and save() in Eloquent?" difficulty="easy">
+  `create(['name' => 'Omar'])` is a static method that creates and saves in one call — requires `$fillable` on the model. `save()` is called on an instance — set properties manually then call `save()`. `create()` is concise for simple cases. `save()` gives more control and works for both creating and updating (if the model has an ID it updates, otherwise inserts).
+</InterviewQ>
+
+<InterviewQ question="What are Eloquent scopes?" difficulty="mid">
+  Scopes are reusable query constraints on models. Local scopes: `scopeActive($query)` → call with `User::active()->get()`. Global scopes apply automatically to all queries for a model — like `SoftDeletes` which adds `WHERE deleted_at IS NULL` automatically. Use local scopes for frequently reused filters. Use global scopes for conditions that should always apply (multi-tenancy, soft deletes).
+</InterviewQ>
+
+<InterviewQ question="What is soft deleting and how does it work in Laravel?" difficulty="easy">
+  Soft deletes mark records as deleted by setting `deleted_at` timestamp instead of actually removing them. Add `use SoftDeletes` trait and `deleted_at` column. Soft-deleted records are automatically excluded from all queries. Access them with `withTrashed()`, only deleted with `onlyTrashed()`, permanently delete with `forceDelete()`, restore with `restore()`. Good for audit trails and accidental deletion recovery.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between first() and find()?" difficulty="easy">
+  `find($id)` looks up by primary key — `User::find(1)`. `first()` gets the first result of any query — `User::where('email', $email)->first()`. Both return a model or `null` if not found. Use `findOrFail()` and `firstOrFail()` to throw `ModelNotFoundException` (returns 404) instead of null. Use `firstOrCreate()` to find or create in one atomic operation.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between get() and all()?" difficulty="easy">
+  `all()` is a static shorthand for `Model::get()` with no constraints — fetches every record. `get()` is called on a query builder and returns results of the built query. `User::where('active', true)->get()` — use `get()` when you have constraints. Never use `all()` on large tables — always add constraints. Both return an Eloquent Collection.
+</InterviewQ>
+
+---
+
+## Routing & Middleware
+
+<InterviewQ question="What is middleware in Laravel and how does it work?" difficulty="mid">
+  Middleware filters HTTP requests entering your application. It wraps the request/response cycle — before the request reaches the controller and/or after the response leaves it. Common middleware: `auth` (redirect if not logged in), `throttle` (rate limiting), `verified` (email verified), `cors`. Middleware can terminate the request early or pass it to the next layer with `$next($request)`. Register in `bootstrap/app.php` (Laravel 11+).
+</InterviewQ>
+
+<InterviewQ question="What is the difference between web and api middleware groups?" difficulty="mid">
+  The `web` group includes: session, cookies, CSRF protection, `ShareErrorsFromSession`. Used for browser-facing routes in `web.php`. The `api` group includes: stateless throttle, no session or CSRF. Used for API routes in `api.php` — auto-prefixed with `/api`. Use `auth:sanctum` for API authentication instead of the `auth` middleware (which uses sessions).
+</InterviewQ>
+
+<InterviewQ question="What is route model binding?" difficulty="easy">
+  Route model binding automatically resolves Eloquent models from route parameters. When a controller method type-hints a model and the parameter name matches, Laravel calls `Model::find($id)` automatically and injects the instance. Returns 404 if not found. Customize the binding key with `{user:slug}` or by overriding `getRouteKeyName()` in the model. Use `scopeBindings()` for scoped nested bindings.
+</InterviewQ>
+
+---
+
+## Authentication & Authorization
+
+<InterviewQ question="What is Laravel Sanctum and what does it do?" difficulty="mid">
+  Sanctum provides lightweight API token authentication and SPA authentication. For APIs: issues personal access tokens stored in the database — sent as `Bearer` tokens. For SPAs: uses cookie-based session authentication — the SPA and API must be on the same domain or configured subdomain. Simpler than Passport for most cases. Use `auth:sanctum` middleware to protect API routes.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Sanctum and Passport?" difficulty="mid">
+  Sanctum is lightweight — API tokens and SPA auth for first-party clients. Simple setup, good for most apps. Passport is a full OAuth2 server — authorization codes, refresh tokens, personal tokens, client credentials. Use Passport when you need to issue tokens to third-party applications (like building a public API with OAuth2 flows). For internal SPAs and mobile apps, Sanctum is almost always the right choice.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Gates and Policies?" difficulty="easy">
+  Gates are closures for simple, non-model-specific permissions — `Gate::define('access-admin', fn($user) => $user->isAdmin())`. Policies are classes for model-specific authorization — `PostPolicy::update($user, $post)`. Use Gates for global app permissions. Use Policies for CRUD operations on specific models. Both are checked with `$user->can()`, `$this->authorize()`, or `@can` in Blade.
+</InterviewQ>
+
+---
+
+## Queues & Jobs
+
+<InterviewQ question="What is the difference between sync, database, and Redis queue drivers?" difficulty="mid">
+  `sync` runs jobs immediately in the same request — no worker needed, good for testing. `database` stores jobs in a MySQL/PostgreSQL table — simple setup, no extra infrastructure. `redis` uses Redis for fast in-memory queue — much faster than database, better for production. Use `sync` locally, `database` for simple setups, `redis` for high-volume production.
+</InterviewQ>
+
+<InterviewQ question="What happens when a queued job fails?" difficulty="mid">
+  Laravel catches the exception, decrements the `$tries` counter, and re-queues the job after the `$backoff` delay. When `$tries` is exhausted, the job is moved to the `failed_jobs` table and the `failed()` method is called. View with `php artisan queue:failed`, retry with `queue:retry {id}`, delete with `queue:forget {id}`. Always implement `failed()` to log errors and notify your team.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between job chaining and job batching?" difficulty="mid">
+  Chaining runs jobs sequentially — each waits for the previous to complete. Stops if any job fails. Use when jobs depend on each other's results. Batching runs jobs in parallel simultaneously — tracks progress with `then/catch/finally` callbacks. Use when jobs are independent and you want maximum throughput. Both are dispatched via the `Bus` facade.
+</InterviewQ>
+
+---
+
+## Performance & Caching
+
+<InterviewQ question="What caching options does Laravel provide?" difficulty="mid">
+  Laravel supports multiple cache drivers via a unified `Cache` facade: `file` (local filesystem), `database` (DB table), `redis` (fastest), `memcached`, `array` (in-memory, testing). Use `Cache::put('key', $value, $ttl)`, `Cache::get('key')`, `Cache::remember('key', $ttl, fn() => expensiveQuery())`. Tag-based cache invalidation with Redis — `Cache::tags(['posts'])->flush()`.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Cache::put and Cache::remember?" difficulty="easy">
+  `Cache::put('key', $value, $ttl)` stores a value — always overwrites. `Cache::remember('key', $ttl, fn() => fetchData())` checks if the key exists first — if yes, returns cached value. If no, runs the callback, stores the result, and returns it. `remember` is the "cache-aside" pattern — the most common caching pattern. `rememberForever` stores without expiry.
+</InterviewQ>
+
+<InterviewQ question="How do you optimize database queries in Laravel?" difficulty="mid">
+  Key techniques: eager loading with `with()` to fix N+1, `select()` to fetch only needed columns, `chunk()` for processing large datasets without memory exhaustion, database indexes on frequently queried columns, `withCount()` instead of loading full relationships for counts, query caching with `Cache::remember()`, and `DB::listen()` or Laravel Debugbar to catch slow queries in development.
+</InterviewQ>
+
+<InterviewQ question="What is route caching and when should you use it?" difficulty="easy">
+  `php artisan route:cache` compiles all routes into a single cached file — significantly speeds up route matching in production. Run during deployment after all routes are defined. Important: doesn't work if any routes use closures — convert all closures to controller methods first. Clear with `route:clear`. Also cache config with `config:cache` and views with `view:cache` for production optimization.
+</InterviewQ>
+
+---
+
+## Testing
+
+<InterviewQ question="What is the difference between unit tests and feature tests in Laravel?" difficulty="easy">
+  Unit tests test a single class or method in isolation — no database, no HTTP. Fast, focused. Feature tests test a full HTTP request through the entire application stack — routes, middleware, controllers, database. Slower but test real behavior. Laravel also has browser tests with Dusk. Most Laravel testing is feature tests — `$this->getJson('/api/users')->assertOk()`.
+</InterviewQ>
+
+<InterviewQ question="What is database testing in Laravel and how do you keep tests isolated?" difficulty="mid">
+  Use `RefreshDatabase` trait to migrate a fresh database before each test — slow but always clean. Use `DatabaseTransactions` to wrap each test in a transaction and roll back after — faster. Use `DatabaseMigrations` for full migration run. Seed test data with factories — `User::factory()->create()`. Use SQLite in-memory database for speed: `DB_CONNECTION=sqlite`, `DB_DATABASE=:memory:` in `phpunit.xml`.
+</InterviewQ>
+
+---
+
+## Common Gotchas
+
+<InterviewQ question="What is mass assignment and how do you protect against it?" difficulty="easy">
+  Mass assignment fills model attributes from an array — `User::create($request->all())`. If `$fillable` is not set, attackers can inject fields like `is_admin=true`. Protection: set `$fillable` array with allowed fields OR set `$guarded = []` with a list of protected fields. Never pass `$request->all()` to `create()` or `fill()` without filtering. Always use `$request->validated()` from Form Requests.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between dd() and dump() in Laravel?" difficulty="easy">
+  `dd($value)` (Die and Dump) outputs the value and immediately stops execution. `dump($value)` outputs the value and continues execution. `ddd()` is the same as `dd()` but opens the Telescope debugger. Use `dump()` when you need to inspect multiple values without stopping. Use `dd()` to stop at a specific point. Remove both before deploying to production.
+</InterviewQ>
+
+<InterviewQ question="What is CSRF and how does Laravel protect against it?" difficulty="mid">
+  CSRF (Cross-Site Request Forgery) is an attack where a malicious site tricks a user's browser into making authenticated requests to your site. Laravel generates a unique CSRF token per session and validates it on all non-GET requests in the `web` middleware group. In Blade: `@csrf` adds a hidden token input. In Axios: read the token from the `XSRF-TOKEN` cookie. API routes in `api.php` are exempt — they use token-based auth instead of sessions.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between redirect() and response() in Laravel?" difficulty="easy">
+  `redirect('/url')` returns a redirect HTTP response (301/302) — browser navigates to the new URL. `redirect()->route('name')` redirects to a named route. `redirect()->back()` goes to the previous URL. `response()->json($data, 200)` returns a JSON response — for APIs. `response()->view('blade', $data)` returns an HTML response. Use redirect for web flows. Use response for API endpoints.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The service container question separates junior from mid-level candidates. Practice this answer: "The container is an IoC container that manages class dependencies. You bind interfaces to implementations and Laravel resolves them automatically via type hints."
+
+  N+1 is the most common Laravel interview question. Always mention `with()` for eager loading, `withCount()` for counts, and Laravel Debugbar for detection. Show you know HOW to detect it not just how to fix it.
+
+  For the Sanctum vs Passport question: Sanctum for first-party SPAs and mobile apps. Passport when you need full OAuth2 for third-party access. 95% of projects need Sanctum.
+
+  Mass assignment protection always comes up. The answer: use `$fillable` on models and always use `$request->validated()` not `$request->all()`. Two lines that prevent a whole category of vulnerabilities.
+</MyNotes>

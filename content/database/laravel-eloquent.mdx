@@ -1,0 +1,1111 @@
+---
+title: "Laravel Eloquent ORM"
+description: "How to query, create, update, and delete data in Laravel using Eloquent ORM — covering model setup, query methods, scopes, accessors, mutators, factories, and seeders with real-life examples."
+category: database
+tools: [laravel, mysql, sqlite]
+tags:
+  [
+    eloquent,
+    laravel,
+    orm,
+    queries,
+    scopes,
+    accessors,
+    mutators,
+    factories,
+    seeders,
+  ]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+Eloquent is Laravel's ORM (Object Relational Mapper). It maps database tables to PHP classes (Models) and rows to objects. Instead of writing raw SQL, you write expressive PHP that reads like English.
+
+**Mental model:** Each Eloquent Model is a smart class that represents one database table. Each instance of that class represents one row.
+
+```tsx
+Database Table          Eloquent Model          PHP Object
+─────────────           ──────────────          ──────────
+posts table      →      Post model       →      $post = Post::find(1)
+one row          →      one instance     →      $post->title = "Hello"
+```
+
+**File structure:**
+```tsx
+app/
+└── Models/
+├── User.php
+├── Post.php
+├── Category.php
+└── Order.php
+database/
+├── factories/
+│   ├── UserFactory.php
+│   └── PostFactory.php
+└── seeders/
+├── DatabaseSeeder.php
+├── UserSeeder.php
+└── PostSeeder.php
+```
+
+<Callout type="note">
+  **Convention over configuration:** Eloquent assumes your model `Post` maps
+  to a table called `posts` (plural, snake_case). Your model `OrderItem` maps
+  to `order_items`. You can override this but following the convention means
+  zero configuration.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **Readable code:** `Post::where('status', 'published')->latest()->get()` reads like English.
+- **No raw SQL:** Less error-prone, more maintainable, protected from SQL injection by default.
+- **Relationships:** Access related data as properties — `$post->user->name` with no manual JOIN.
+- **Scopes:** Reusable query constraints — define once, use everywhere.
+- **Events and observers:** Hook into model lifecycle (creating, created, updating, deleted).
+
+---
+
+## Real-World Use Cases
+
+- **Blog:** Fetch published posts ordered by date, paginate them, eager load authors.
+- **E-commerce:** Create orders, update status, query orders by user with total calculations.
+- **User management:** Find users by role, soft delete accounts, restore them.
+- **Search:** Filter posts by multiple criteria with reusable scopes.
+- **Seeding dev data:** Generate 100 fake users and posts for local development.
+
+---
+
+## Code Examples
+
+### Creating a Model
+
+```bash
+# Model only
+php artisan make:model Post
+
+# Model + migration
+php artisan make:model Post -m
+
+# Model + migration + factory + seeder + controller
+php artisan make:model Post -mfsc
+```
+
+---
+
+### Model Setup — Real-Life Post Model
+
+```php
+// app/Models/Post.php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+
+class Post extends Model
+{
+    use HasFactory, SoftDeletes;
+
+    // Columns that can be mass assigned (create/update)
+    protected $fillable = [
+        'user_id',
+        'category_id',
+        'title',
+        'slug',
+        'excerpt',
+        'body',
+        'cover_image',
+        'status',
+        'published_at',
+    ];
+
+    // Cast column values to PHP types automatically
+    protected $casts = [
+        'published_at' => 'datetime',
+        'views'        => 'integer',
+        'metadata'     => 'array',   // JSON column → PHP array automatically
+    ];
+
+    // Columns hidden from array/JSON output (API responses)
+    protected $hidden = [];
+
+    // If table name doesn't follow convention
+    // protected $table = 'blog_posts';
+
+    // If primary key is not 'id'
+    // protected $primaryKey = 'post_id';
+
+    // If you don't want created_at / updated_at
+    // public $timestamps = false;
+}
+```
+
+---
+
+### Basic CRUD
+
+```php
+// ── CREATE ──────────────────────────────────────────
+
+// Create and save in one step
+$post = Post::create([
+    'user_id'  => 1,
+    'title'    => 'My First Post',
+    'slug'     => 'my-first-post',
+    'body'     => 'Hello world...',
+    'status'   => 'draft',
+]);
+
+// Create instance then save
+$post = new Post();
+$post->title = 'My First Post';
+$post->slug  = 'my-first-post';
+$post->save();
+
+// Find or create — useful for seeding or upserts
+$category = Category::firstOrCreate(
+    ['slug' => 'technology'],           // find by this
+    ['name' => 'Technology']            // create with this if not found
+);
+
+// Update or create
+$setting = Setting::updateOrCreate(
+    ['key' => 'site_name'],             // find by this
+    ['value' => 'My Awesome Blog']      // update or create with this
+);
+
+
+// ── READ ────────────────────────────────────────────
+
+// Find by primary key — returns model or null
+$post = Post::find(1);
+
+// Find or throw 404 — use in controllers
+$post = Post::findOrFail(1);
+
+// Get all rows — avoid on large tables
+$posts = Post::all();
+
+// Get first matching row
+$post = Post::where('slug', 'my-first-post')->first();
+
+// First or throw 404
+$post = Post::where('slug', 'my-first-post')->firstOrFail();
+
+// Get multiple by IDs
+$posts = Post::whereIn('id', [1, 2, 3])->get();
+
+// Count
+$total = Post::where('status', 'published')->count();
+
+// Check existence
+$exists = Post::where('slug', 'my-post')->exists();
+
+
+// ── UPDATE ──────────────────────────────────────────
+
+// Find then update
+$post = Post::findOrFail(1);
+$post->update(['title' => 'Updated Title', 'status' => 'published']);
+
+// Or set and save
+$post->title = 'Updated Title';
+$post->save();
+
+// Mass update — updates multiple rows
+Post::where('user_id', 1)->update(['status' => 'archived']);
+
+
+// ── DELETE ──────────────────────────────────────────
+
+// Soft delete (if model uses SoftDeletes)
+$post = Post::findOrFail(1);
+$post->delete(); // sets deleted_at — row still in DB
+
+// Restore soft deleted
+$post->restore();
+
+// Force delete — permanently removes row even with SoftDeletes
+$post->forceDelete();
+
+// Mass delete
+Post::where('status', 'draft')
+    ->where('created_at', '<', now()->subDays(30))
+    ->delete();
+
+// Include soft deleted in query
+$posts = Post::withTrashed()->get();
+
+// Only soft deleted
+$posts = Post::onlyTrashed()->get();
+```
+
+---
+
+### Query Methods — Real-Life Examples
+
+```php
+// ── FILTERING ───────────────────────────────────────
+
+// Basic where
+Post::where('status', 'published')->get();
+
+// Multiple conditions — AND
+Post::where('status', 'published')
+    ->where('user_id', 1)
+    ->get();
+
+// OR condition
+Post::where('status', 'published')
+    ->orWhere('status', 'featured')
+    ->get();
+
+// Where in array
+Post::whereIn('status', ['published', 'featured'])->get();
+
+// Where not in
+Post::whereNotIn('status', ['draft', 'archived'])->get();
+
+// Where null / not null
+Post::whereNull('published_at')->get();
+Post::whereNotNull('published_at')->get();
+
+// Where between
+Post::whereBetween('views', [100, 1000])->get();
+
+// Where date
+Post::whereDate('published_at', '2026-06-01')->get();
+Post::whereMonth('published_at', 6)->get();
+Post::whereYear('published_at', 2026)->get();
+
+// Where like — search
+Post::where('title', 'like', '%laravel%')->get();
+
+
+// ── ORDERING ────────────────────────────────────────
+
+Post::orderBy('created_at', 'desc')->get();
+Post::orderBy('views', 'desc')->orderBy('title', 'asc')->get();
+Post::latest()->get();           // shorthand for orderBy('created_at', 'desc')
+Post::oldest()->get();           // shorthand for orderBy('created_at', 'asc')
+Post::latest('published_at')->get(); // latest by specific column
+
+
+// ── LIMITING ────────────────────────────────────────
+
+Post::take(5)->get();            // LIMIT 5
+Post::skip(10)->take(5)->get();  // LIMIT 5 OFFSET 10
+
+
+// ── PAGINATION ──────────────────────────────────────
+
+// Standard pagination — returns LengthAwarePaginator
+$posts = Post::where('status', 'published')
+             ->latest()
+             ->paginate(15); // 15 per page
+
+// $posts->total()        — total records
+// $posts->currentPage()  — current page number
+// $posts->lastPage()     — last page number
+// $posts->data           — the actual records (when converted to array)
+
+// Simple pagination — faster, no total count
+$posts = Post::latest()->simplePaginate(15);
+
+// Cursor pagination — best performance for large datasets
+$posts = Post::latest()->cursorPaginate(15);
+
+
+// ── SELECTING SPECIFIC COLUMNS ──────────────────────
+
+Post::select('id', 'title', 'slug', 'published_at')->get();
+Post::select('id', 'title')->where('status', 'published')->get();
+
+
+// ── AGGREGATES ──────────────────────────────────────
+
+Post::count();
+Post::where('status', 'published')->count();
+Post::max('views');
+Post::min('views');
+Post::avg('views');
+Post::sum('views');
+
+
+// ── CHUNKING — for large datasets ───────────────────
+
+// Process 200 records at a time — avoids memory exhaustion
+Post::chunk(200, function ($posts) {
+    foreach ($posts as $post) {
+        // process each post
+    }
+});
+```
+
+---
+
+### Local Scopes — Reusable Query Constraints
+
+```php
+// app/Models/Post.php
+class Post extends Model
+{
+    // Define scope — prefix method with 'scope'
+    public function scopePublished($query)
+    {
+        return $query->where('status', 'published')
+                     ->whereNotNull('published_at')
+                     ->where('published_at', '<=', now());
+    }
+
+    public function scopeDraft($query)
+    {
+        return $query->where('status', 'draft');
+    }
+
+    public function scopeByUser($query, int $userId)
+    {
+        return $query->where('user_id', $userId);
+    }
+
+    public function scopePopular($query, int $minViews = 1000)
+    {
+        return $query->where('views', '>=', $minViews)
+                     ->orderBy('views', 'desc');
+    }
+
+    public function scopeSearch($query, string $term)
+    {
+        return $query->where(function ($q) use ($term) {
+            $q->where('title', 'like', "%{$term}%")
+              ->orWhere('body', 'like', "%{$term}%");
+        });
+    }
+}
+
+// Usage — chain scopes just like regular query methods
+Post::published()->latest()->paginate(15);
+Post::published()->byUser(1)->get();
+Post::published()->popular()->take(5)->get();
+Post::published()->search('laravel')->paginate(10);
+Post::draft()->byUser(auth()->id())->latest()->get();
+
+// Combine multiple scopes
+Post::published()
+    ->byUser(1)
+    ->popular(500)
+    ->search('api')
+    ->paginate(10);
+```
+
+---
+
+### Global Scopes — Always Applied
+
+```php
+// Always filter by the authenticated user's data
+// app/Models/Scopes/OwnedByUserScope.php
+<?php
+
+namespace App\Models\Scopes;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Scope;
+
+class OwnedByUserScope implements Scope
+{
+    public function apply(Builder $builder, Model $model): void
+    {
+        if (auth()->check()) {
+            $builder->where('user_id', auth()->id());
+        }
+    }
+}
+
+// Apply in model
+class Post extends Model
+{
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new OwnedByUserScope());
+    }
+}
+
+// Now Post::all() automatically filters by authenticated user
+// To bypass global scope:
+Post::withoutGlobalScope(OwnedByUserScope::class)->get();
+Post::withoutGlobalScopes()->get(); // bypass all global scopes
+```
+
+---
+
+### Accessors — Transform When Reading
+
+```php
+// app/Models/User.php
+// Accessors transform values when you READ from the model
+
+use Illuminate\Database\Eloquent\Casts\Attribute;
+
+class User extends Model
+{
+    // Full name from first + last name columns
+    protected function fullName(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => "{$this->first_name} {$this->last_name}"
+        );
+    }
+
+    // Avatar URL with fallback
+    protected function avatarUrl(): Attribute
+    {
+        return Attribute::make(
+            get: fn ($value) => $value
+                ? asset("storage/{$value}")
+                : asset('images/default-avatar.png')
+        );
+    }
+
+    // Format created_at for display
+    protected function memberSince(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->created_at->format('F Y') // "June 2026"
+        );
+    }
+}
+
+// Usage — access like a regular property
+$user->full_name;    // "Ahmed Ali"
+$user->avatar_url;   // "https://app.com/storage/avatars/1.jpg"
+$user->member_since; // "June 2026"
+```
+
+---
+
+### Mutators — Transform When Writing
+
+```php
+// app/Models/Post.php
+// Mutators transform values when you WRITE to the model
+
+class Post extends Model
+{
+    // Auto-generate slug from title
+    protected function slug(): Attribute
+    {
+        return Attribute::make(
+            set: fn ($value) => \Str::slug($value)
+        );
+    }
+
+    // Auto-trim and lowercase email
+    protected function email(): Attribute
+    {
+        return Attribute::make(
+            get: fn ($value) => $value,
+            set: fn ($value) => strtolower(trim($value))
+        );
+    }
+
+    // Encrypt sensitive data before storing
+    protected function phoneNumber(): Attribute
+    {
+        return Attribute::make(
+            get: fn ($value) => decrypt($value),
+            set: fn ($value) => encrypt($value)
+        );
+    }
+}
+
+// Usage — mutator fires automatically on assignment
+$post->slug = 'My Post Title'; // stored as 'my-post-title'
+$user->email = '  Ahmed@Example.com  '; // stored as 'ahmed@example.com'
+```
+
+---
+
+### Factories — Generate Fake Data
+
+```bash
+php artisan make:factory PostFactory
+```
+
+```php
+// database/factories/PostFactory.php
+<?php
+
+namespace Database\Factories;
+
+use App\Models\User;
+use App\Models\Category;
+use Illuminate\Database\Eloquent\Factories\Factory;
+use Illuminate\Support\Str;
+
+class PostFactory extends Factory
+{
+    public function definition(): array
+    {
+        $title = fake()->sentence(6);
+
+        return [
+            'user_id'      => User::factory(),     // creates a user automatically
+            'category_id'  => Category::factory(), // creates a category automatically
+            'title'        => $title,
+            'slug'         => Str::slug($title),
+            'excerpt'      => fake()->paragraph(2),
+            'body'         => fake()->paragraphs(5, true),
+            'status'       => fake()->randomElement(['draft', 'published']),
+            'views'        => fake()->numberBetween(0, 10000),
+            'published_at' => fake()->optional(0.7)->dateTimeBetween('-1 year', 'now'),
+            'created_at'   => fake()->dateTimeBetween('-1 year', 'now'),
+        ];
+    }
+
+    // Named states — create specific variations
+    public function published(): static
+    {
+        return $this->state(fn () => [
+            'status'       => 'published',
+            'published_at' => now()->subDays(rand(1, 30)),
+        ]);
+    }
+
+    public function draft(): static
+    {
+        return $this->state(fn () => [
+            'status'       => 'draft',
+            'published_at' => null,
+        ]);
+    }
+
+    public function byUser(User $user): static
+    {
+        return $this->state(fn () => [
+            'user_id' => $user->id,
+        ])
+    }
+}
+```
+
+```php
+// Usage in tests or seeders
+Post::factory()->create();                        // one post
+Post::factory()->count(10)->create();             // 10 posts
+Post::factory()->published()->count(5)->create(); // 5 published posts
+Post::factory()->draft()->count(3)->create();     // 3 draft posts
+
+// Create with specific user
+$user = User::factory()->create();
+Post::factory()->byUser($user)->count(10)->create();
+
+// Create without saving (for unit tests)
+$post = Post::factory()->make();
+```
+
+---
+
+### Seeders — Populate Database
+
+```bash
+php artisan make:seeder PostSeeder
+```
+
+```php
+// database/seeders/UserSeeder.php
+<?php
+
+namespace Database\Seeders;
+
+use App\Models\User;
+use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\Hash;
+
+class UserSeeder extends Seeder
+{
+    public function run(): void
+    {
+        // Create a known admin user for local dev
+        User::firstOrCreate(
+            ['email' => 'admin@example.com'],
+            [
+                'name'     => 'Admin User',
+                'password' => Hash::make('password'),
+                'role'     => 'admin',
+            ]
+        );
+
+        // Create 10 random users
+        User::factory()->count(10)->create();
+    }
+}
+```
+
+```php
+// database/seeders/PostSeeder.php
+<?php
+
+namespace Database\Seeders;
+
+use App\Models\Post;
+use App\Models\User;
+use App\Models\Category;
+use Illuminate\Database\Seeder;
+
+class PostSeeder extends Seeder
+{
+    public function run(): void
+    {
+        $users      = User::all();
+        $categories = Category::all();
+
+        // 50 published posts spread across all users
+        Post::factory()
+            ->count(50)
+            ->published()
+            ->recycle($users)       // reuse existing users randomly
+            ->recycle($categories)  // reuse existing categories randomly
+            ->create();
+
+        // 20 draft posts
+        Post::factory()
+            ->count(20)
+            ->draft()
+            ->recycle($users)
+            ->create();
+    }
+}
+```
+
+```php
+// database/seeders/DatabaseSeeder.php
+<?php
+
+namespace Database\Seeders;
+
+use Illuminate\Database\Seeder;
+
+class DatabaseSeeder extends Seeder
+{
+    public function run(): void
+    {
+        // Order matters — seed in dependency order
+        $this->call([
+            UserSeeder::class,
+            CategorySeeder::class,
+            PostSeeder::class,
+            OrderSeeder::class,
+        ]);
+    }
+}
+```
+
+```bash
+# Run seeders
+php artisan db:seed
+
+# Fresh migrate + seed
+php artisan migrate:fresh --seed
+
+# Run specific seeder
+php artisan db:seed --class=PostSeeder
+```
+
+---
+
+### Model Events and Observers
+
+```php
+// Auto-generate slug before creating
+// app/Models/Post.php
+protected static function booted(): void
+{
+    static::creating(function (Post $post) {
+        if (empty($post->slug)) {
+            $post->slug = \Str::slug($post->title);
+        }
+    });
+
+    static::updating(function (Post $post) {
+        if ($post->isDirty('title') && empty($post->slug)) {
+            $post->slug = \Str::slug($post->title);
+        }
+    });
+}
+```
+
+```php
+// For more complex logic — use an Observer
+// php artisan make:observer PostObserver --model=Post
+
+// app/Observers/PostObserver.php
+class PostObserver
+{
+    public function creating(Post $post): void
+    {
+        if (empty($post->slug)) {
+            $post->slug = \Str::slug($post->title);
+        }
+    }
+
+    public function created(Post $post): void
+    {
+        // Send notification, update cache, etc.
+    }
+
+    public function deleting(Post $post): void
+    {
+        // Clean up related files before deleting
+        if ($post->cover_image) {
+            \Storage::delete($post->cover_image);
+        }
+    }
+}
+
+// Register observer in AppServiceProvider
+public function boot(): void
+{
+    Post::observe(PostObserver::class);
+}
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// N+1 query problem — 1 query for posts + 1 query per post for user = 101 queries!
+$posts = Post::all();
+foreach ($posts as $post) {
+    echo $post->user->name; // ❌ fires a new query for every post
+}
+```
+</Wrong>
+<Right>
+```php
+// Eager loading — 2 queries total regardless of how many posts
+$posts = Post::with('user')->get();
+foreach ($posts as $post) {
+    echo $post->user->name; // ✅ user already loaded
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Using get() when you only need one record
+$user = User::where('email', 'ahmed@example.com')->get()->first(); // ❌ fetches all matches
+```
+</Wrong>
+<Right>
+```php
+$user = User::where('email', 'ahmed@example.com')->first(); // ✅ LIMIT 1 in SQL
+$user = User::where('email', 'ahmed@example.com')->firstOrFail(); // ✅ throws 404 if not found
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Mass assignment without fillable — security risk
+class Post extends Model
+{
+    // No $fillable defined
+}
+
+Post::create($request->all()); // ❌ user could inject any column including 'is_admin'
+```
+</Wrong>
+<Right>
+```php
+class Post extends Model
+{
+    protected $fillable = ['title', 'body', 'status']; // ✅ whitelist only safe columns
+}
+
+Post::create($request->only(['title', 'body', 'status'])); // ✅ double protection
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Loading all columns when you only need a few — wastes memory
+$posts = Post::all(); // ❌ loads ALL columns including huge 'body' text
+foreach ($posts as $post) {
+    echo $post->title; // only needed title
+}
+```
+</Wrong>
+<Right>
+```php
+$posts = Post::select('id', 'title', 'slug', 'published_at')->get(); // ✅ only needed columns
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** The N+1 query problem is the most common Eloquent performance issue. In development, install Laravel Debugbar (`composer require barryvdh/laravel-debugbar --dev`) — it shows every query being fired and highlights N+1 problems instantly.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Always define `$fillable` — never use `$guarded = []` in production
+- Use `findOrFail()` in controllers instead of `find()` — automatic 404 response
+- Define scopes for any query you write more than once
+- Use `firstOrCreate()` and `updateOrCreate()` for idempotent operations
+
+**Performance tips**
+```php
+// Always eager load relationships you know you will use
+Post::with(['user', 'category', 'tags'])->paginate(15);
+
+// Lazy eager load — when you don't know upfront
+$posts = Post::paginate(15);
+$posts->load('user'); // loads after the fact
+
+// Select only needed columns even with relationships
+Post::with(['user:id,name,avatar'])->select('id', 'title', 'user_id')->get();
+
+// Use chunk for large data processing
+Post::published()->chunk(500, function ($posts) {
+    foreach ($posts as $post) {
+        // process without loading 10,000 posts into memory
+    }
+});
+
+// Use value() when you need a single column value
+$email = User::where('id', 1)->value('email'); // faster than find(1)->email
+
+// Use pluck() for a list of values
+$titles = Post::published()->pluck('title');          // Collection of titles
+$slugs  = Post::published()->pluck('slug', 'id');     // ['id' => 'slug'] array
+```
+
+**Security considerations**
+- Always define `$fillable` — never `$guarded = []` in production apps
+- Use `$hidden` to exclude sensitive columns from API responses: `protected $hidden = ['password', 'remember_token']`
+- Never return `$request->all()` directly to `create()` — always whitelist with `only()`
+- Use `$casts = ['password' => 'hashed']` — Laravel auto-hashes on assignment
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the N+1 query problem and how do you fix it in Eloquent?"
+  difficulty="easy"
+>
+  The N+1 problem happens when you load a collection of models (1 query) then
+  access a relationship on each one in a loop, firing a new query per item
+  (N queries). For 100 posts that is 101 queries. Fix it with eager loading —
+  `Post::with('user')->get()` loads all users in one additional query regardless
+  of how many posts there are. Use Laravel Debugbar in development to spot N+1
+  problems immediately.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between $fillable and $guarded in Eloquent?"
+  difficulty="easy"
+>
+  Both protect against mass assignment vulnerabilities. `$fillable` is a
+  whitelist — only the listed columns can be mass assigned. `$guarded` is a
+  blacklist — all columns except the listed ones can be mass assigned. Using
+  `$fillable` is safer because you explicitly allow only what you intend.
+  `$guarded = []` disables all protection and should never be used in
+  production — if you add a sensitive column like `is_admin` later and forget
+  to guard it, it becomes mass assignable.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between a local scope and a global scope?"
+  difficulty="mid"
+>
+  A local scope is opt-in — you define it with a `scope` prefix and call it
+  explicitly: `Post::published()->get()`. A global scope is automatic — it is
+  applied to every query on the model without you doing anything. Eloquent's
+  SoftDeletes is a global scope that automatically adds `WHERE deleted_at IS
+  NULL` to every query. Use global scopes for constraints that should always
+  apply — like filtering by the authenticated user's data. Use local scopes
+  for constraints you apply selectively.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between create() and save() in Eloquent?"
+  difficulty="mid"
+>
+  `create()` is a static method that instantiates the model, fills the
+  attributes, and saves it to the database in one call — it respects
+  `$fillable`. `save()` is called on an existing instance — either a new
+  one you built manually or one you fetched and modified. Use `create()` for
+  new records from external input. Use `save()` when you need to build the
+  object programmatically before persisting, or when updating a fetched model.
+</InterviewQ>
+
+<InterviewQ
+  question="How do factories and seeders work together and what is the difference between them?"
+  difficulty="mid"
+>
+  Factories define how to generate fake data for a model — the blueprint.
+  Seeders orchestrate what data to create and in what order — the director.
+  A factory says "a Post has a random title, body, and status." A seeder says
+  "create 50 published posts spread across existing users." Factories are also
+  used in feature tests to create test data without writing fixtures manually.
+  Seeders are for populating development databases — never run seeders on
+  production with fake data.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The N+1 problem is the single most common performance bug I have seen and
+  introduced myself. Installing Laravel Debugbar in every new project is the
+  first thing I do now — it shows every query on the page and makes N+1
+  problems impossible to miss.
+</MyNotes>
+
+<MyNotes>
+  `firstOrCreate` and `updateOrCreate` are underused. They are perfect for
+  seeders (run them multiple times safely), settings tables (upsert key/value
+  pairs), and any scenario where you want "give me this record or create it."
+  Before I knew these methods I was writing verbose find-then-create-if-null
+  code everywhere.
+</MyNotes>
+
+<MyNotes>
+  The `recycle()` method in factories is a game changer for seeders. Before
+  it I was manually looping and assigning random users to posts. Now I just
+  pass `->recycle($users)` and Eloquent randomly assigns from the collection
+  automatically.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Base Model — Common Functionality
+
+```php
+// app/Models/BaseModel.php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+
+abstract class BaseModel extends Model
+{
+    use HasFactory, SoftDeletes;
+
+    // Scope: owned by authenticated user
+    public function scopeOwned($query)
+    {
+        return $query->where('user_id', auth()->id());
+    }
+
+    // Scope: created within date range
+    public function scopeCreatedBetween($query, $from, $to)
+    {
+        return $query->whereBetween('created_at', [$from, $to]);
+    }
+
+    // Scope: search across multiple columns
+    public function scopeSearch($query, string $term, array $columns = ['name'])
+    {
+        return $query->where(function ($q) use ($term, $columns) {
+            foreach ($columns as $column) {
+                $q->orWhere($column, 'like', "%{$term}%");
+            }
+        });
+    }
+}
+
+// Extend in your models
+class Post extends BaseModel
+{
+    // inherits owned(), createdBetween(), search()
+}
+```
+
+---
+
+### Useful Factory Helpers
+
+```php
+// database/factories/UserFactory.php
+
+public function admin(): static
+{
+    return $this->state(fn () => ['role' => 'admin']);
+}
+
+public function verified(): static
+{
+    return $this->state(fn () => [
+        'email_verified_at' => now(),
+    ]);
+}
+
+public function unverified(): static
+{
+    return $this->state(fn () => [
+        'email_verified_at' => null,
+    ]);
+}
+
+public function withPosts(int $count = 5): static
+{
+    return $this->has(Post::factory()->count($count)->published());
+}
+
+// Usage:
+User::factory()->admin()->verified()->withPosts(10)->create();
+```
+
+---
+
+### Pagination Response for API
+
+```php
+// app/Http/Controllers/Api/PostController.php
+public function index(Request $request)
+{
+    $posts = Post::with(['user:id,name', 'category:id,name'])
+                 ->published()
+                 ->when($request->search, fn ($q) =>
+                     $q->search($request->search, ['title', 'excerpt'])
+                 )
+                 ->when($request->category_id, fn ($q) =>
+                     $q->where('category_id', $request->category_id)
+                 )
+                 ->latest('published_at')
+                 ->paginate($request->per_page ?? 15);
+
+    return PostResource::collection($posts);
+    // Automatically includes pagination meta in response
+}
+```
+
+---
+
+*Tags: `laravel` `eloquent` `orm` `queries` `scopes` `factories` `seeders` `database` `intermediate`*

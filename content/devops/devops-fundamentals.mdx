@@ -1,0 +1,1352 @@
+---
+title: "DevOps Fundamentals"
+description: "A beginner-friendly guide to DevOps essentials — Docker, CI/CD, Nginx, and Deployment. Everything you need to ship your code to the real world."
+category: devops
+tools: [docker, github-actions, nginx, linux]
+tags:
+  [
+    devops,
+    docker,
+    containers,
+    cicd,
+    github-actions,
+    nginx,
+    deployment,
+    linux,
+    vps,
+  ]
+difficulty: beginner
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## What is DevOps? (Plain English)
+
+DevOps is everything that happens **after you write your code** — packaging it, testing it automatically, and putting it on a server so real users can access it.
+
+Think of it like this:
+
+```
+You write code  →  Package it  →  Test it automatically  →  Put it on a server  →  Users access it
+   (Dev)            (Docker)          (CI/CD)               (Deployment)           (Nginx)
+```
+
+**The 4 tools you need to know:**
+
+| Tool | What it does | Simple analogy |
+|------|-------------|----------------|
+| **Docker** | Packages your app + everything it needs | A lunchbox that has everything inside |
+| **CI/CD** | Automatically tests & deploys your code | A robot that checks your work and ships it |
+| **Nginx** | Receives user requests and routes them | A receptionist at a building |
+| **Deployment** | Putting your app on a real server | Moving from your bedroom to a real office |
+
+---
+
+## Part 1 — Docker
+
+### Concept Explanation
+
+Imagine you build an app on your laptop. It works perfectly. But when a teammate runs it, it crashes because they have a different version of Node.js. **Docker solves this.**
+
+Docker packages your app + its exact environment (Node version, dependencies, OS settings) into one unit called a **container**. That container runs the same way everywhere — your laptop, your teammate's laptop, or a server in the cloud.
+
+```
+Without Docker:
+  Your laptop   →  works ✅
+  Server        →  crashes ❌ (different Node version)
+
+With Docker:
+  Your laptop   →  works ✅
+  Server        →  works ✅ (same container, same environment)
+```
+
+**Key concepts:**
+
+```
+Dockerfile    →  The recipe (instructions to build your app)
+Image         →  The cooked meal (built from the Dockerfile)
+Container     →  The plate of food being served (a running image)
+Docker Hub    →  A restaurant menu (public library of pre-built images)
+```
+
+### Why It's Used
+
+- **Consistency:** "Works on my machine" problem disappears.
+- **Isolation:** Each app runs in its own box — no conflicts.
+- **Speed:** Spin up a database in seconds with one command.
+- **Portability:** Move your app between any server without reconfiguring anything.
+
+### Real-World Use Cases
+
+- Run a MySQL database locally without installing MySQL.
+- Deploy your Next.js app on any server without setting up Node.js manually.
+- Run multiple projects on one server without them interfering with each other.
+
+### Code Examples
+
+#### Installing Docker
+
+```bash
+# On Ubuntu/Debian server
+sudo apt update
+sudo apt install docker.io -y
+sudo systemctl start docker
+sudo systemctl enable docker
+
+# Add your user to docker group (so you don't need sudo every time)
+sudo usermod -aG docker $USER
+
+# Verify installation
+docker --version
+```
+
+#### Your First Dockerfile — Next.js App
+
+```dockerfile
+# Dockerfile (place this in your project root)
+
+# Step 1: Start from an official Node.js image (no need to install Node yourself)
+FROM node:20-alpine
+
+# Step 2: Set the working directory inside the container
+WORKDIR /app
+
+# Step 3: Copy package files first (for better caching)
+COPY package*.json ./
+
+# Step 4: Install dependencies
+RUN npm install
+
+# Step 5: Copy the rest of your code
+COPY . .
+
+# Step 6: Build the app
+RUN npm run build
+
+# Step 7: Tell Docker which port the app runs on
+EXPOSE 3000
+
+# Step 8: The command to start the app
+CMD ["npm", "start"]
+```
+
+#### Building and Running
+
+```bash
+# Build an image from your Dockerfile
+# -t gives it a name (tag)
+docker build -t my-nextjs-app .
+
+# Run the container
+# -p maps port 3000 on your machine to port 3000 inside the container
+# -d runs it in the background (detached)
+docker run -p 3000:3000 -d my-nextjs-app
+
+# See running containers
+docker ps
+
+# Stop a container
+docker stop <container_id>
+
+# See logs
+docker logs <container_id>
+```
+
+#### Docker Compose — Multiple Services Together
+
+Most real apps need a database too. Docker Compose lets you define and run multiple containers together.
+
+```yaml
+# docker-compose.yml (place in project root)
+
+version: '3.8'
+
+services:
+  # Your Next.js app
+  app:
+    build: .                    # Build from your Dockerfile
+    ports:
+      - "3000:3000"             # host:container
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/mydb
+    depends_on:
+      - db                      # Wait for db to start first
+
+  # PostgreSQL database
+  db:
+    image: postgres:16-alpine   # Use official Postgres image — no setup needed
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: mydb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data  # Persist data across restarts
+
+  # Redis cache
+  redis:
+    image: redis:7-alpine
+
+volumes:
+  postgres_data:                # Named volume — data survives container restarts
+```
+
+```bash
+# Start everything
+docker compose up -d
+
+# Stop everything
+docker compose down
+
+# View logs for all services
+docker compose logs -f
+
+# View logs for one service
+docker compose logs -f app
+
+# Rebuild after code changes
+docker compose up -d --build
+```
+
+#### Useful Docker Commands
+
+```bash
+# List all images on your machine
+docker images
+
+# Remove an image
+docker rmi my-nextjs-app
+
+# Remove all stopped containers (cleanup)
+docker container prune
+
+# Remove all unused images (free up space)
+docker image prune -a
+
+# Go inside a running container (like SSH into it)
+docker exec -it <container_id> sh
+
+# Copy a file from container to your machine
+docker cp <container_id>:/app/file.txt ./file.txt
+```
+
+### Common Mistakes
+
+<WrongRight>
+<Wrong>
+```dockerfile
+# Copying everything before installing dependencies
+COPY . .
+RUN npm install   # ❌ Any code change invalidates the npm install cache
+```
+</Wrong>
+<Right>
+```dockerfile
+# Copy package files first, install, THEN copy code
+COPY package*.json ./
+RUN npm install      # ✅ This layer is cached unless package.json changes
+COPY . .
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```dockerfile
+# Using a huge base image
+FROM node:20    # ❌ ~1GB image — slow to build and deploy
+```
+</Wrong>
+<Right>
+```dockerfile
+# Use Alpine — minimal Linux, much smaller
+FROM node:20-alpine   # ✅ ~150MB — faster everywhere
+```
+</Right>
+</WrongRight>
+
+### Best Practices
+
+- Always use `.dockerignore` to exclude `node_modules`, `.git`, `.env` files from the image.
+- Use specific version tags (`node:20-alpine`) not `latest` — `latest` can break your build unexpectedly.
+- Keep containers stateless — don't store data inside them; use volumes instead.
+- One process per container — don't run your app + database in the same container.
+
+```bash
+# .dockerignore
+node_modules
+.git
+.env
+.env.local
+*.log
+.next
+dist
+```
+
+### My Personal Notes
+
+<MyNotes>
+  The most confusing part for me was the difference between an image and a container.
+  An image is like a template or a class in OOP. A container is an instance of that class — the running thing.
+  You build images once and run many containers from them.
+</MyNotes>
+
+<MyNotes>
+  Docker Compose is what you'll actually use day-to-day. Raw `docker run` commands are mostly for quick experiments.
+  Once you have a `docker-compose.yml`, starting your entire project (app + database + cache) is just `docker compose up -d`.
+</MyNotes>
+
+---
+
+## Part 2 — CI/CD
+
+### Concept Explanation
+
+CI/CD stands for **Continuous Integration / Continuous Deployment**.
+
+In plain English: every time you push code to GitHub, a robot automatically runs your tests and deploys your app. No manual steps.
+
+```
+You push code to GitHub
+        ↓
+Robot wakes up (GitHub Actions)
+        ↓
+Runs your tests
+        ↓
+If tests pass → Deploys to server automatically ✅
+If tests fail → Stops, notifies you ❌
+```
+
+**CI vs CD:**
+
+```
+CI (Continuous Integration)  =  Automatically test every push
+CD (Continuous Deployment)   =  Automatically deploy if tests pass
+```
+
+### Why It's Used
+
+- **Catch bugs early:** Tests run on every push, not just when you remember.
+- **No manual deploys:** Push to main → it's live. No SSH into server, no manual commands.
+- **Team confidence:** Everyone knows the main branch always works.
+- **Consistency:** The same steps run every time, no human error.
+
+### Real-World Use Cases
+
+- Push a bug fix → tests run → if green, it's automatically deployed to production.
+- Open a pull request → CI runs tests and shows a green/red checkmark before merging.
+- Deploy to staging automatically on every push, production only on tags/releases.
+
+### Code Examples
+
+#### GitHub Actions — Basic CI Pipeline
+
+Create this file in your project:
+
+```bash
+# File location: .github/workflows/ci.yml
+```
+
+```yaml
+# .github/workflows/ci.yml
+
+name: CI                          # Name shown in GitHub Actions tab
+
+on:                               # When to run this workflow
+  push:
+    branches: [main, develop]     # Run on push to main or develop
+  pull_request:
+    branches: [main]              # Run on PRs targeting main
+
+jobs:
+  test:                           # Job name
+    runs-on: ubuntu-latest        # The machine to run on (GitHub provides this free)
+
+    steps:
+      # Step 1: Get your code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'            # Cache node_modules for faster runs
+
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: npm ci               # ci is faster and stricter than npm install
+
+      # Step 4: Run linting
+      - name: Lint
+        run: npm run lint
+
+      # Step 5: Run tests
+      - name: Run tests
+        run: npm test
+
+      # Step 6: Build (check it compiles without errors)
+      - name: Build
+        run: npm run build
+```
+
+#### GitHub Actions — CI + CD (Deploy to Server)
+
+```yaml
+# .github/workflows/deploy.yml
+
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]              # Only deploy when pushing to main
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install and test
+        run: |
+          npm ci
+          npm run build
+
+      # Deploy via SSH to your server
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}      # Your server IP (stored in GitHub Secrets)
+          username: ${{ secrets.SERVER_USER }}  # SSH username
+          key: ${{ secrets.SERVER_SSH_KEY }}    # SSH private key
+          script: |
+            cd /var/www/my-app
+            git pull origin main
+            npm ci
+            npm run build
+            pm2 restart my-app                  # Restart the running process
+```
+
+#### Setting Up GitHub Secrets
+
+```
+GitHub Repository → Settings → Secrets and variables → Actions → New repository secret
+
+Add these secrets:
+  SERVER_HOST     → your server IP (e.g. 123.456.789.0)
+  SERVER_USER     → ubuntu (or root)
+  SERVER_SSH_KEY  → your private SSH key content
+```
+
+#### CI/CD with Docker (More Advanced)
+
+```yaml
+# .github/workflows/docker-deploy.yml
+
+name: Build and Deploy Docker
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Login to Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Build and push image to Docker Hub
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: yourusername/my-app:latest
+
+      # SSH into server and pull the new image
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            docker pull yourusername/my-app:latest
+            docker compose down
+            docker compose up -d
+```
+
+### Common Mistakes
+
+<WrongRight>
+<Wrong>
+```yaml
+# Putting secrets directly in the workflow file
+- name: Deploy
+  run: ssh user@123.456.789.0   # ❌ Your IP is now public in your repo!
+  env:
+    PASSWORD: mypassword123      # ❌ NEVER do this
+```
+</Wrong>
+<Right>
+```yaml
+# Always use GitHub Secrets
+- name: Deploy
+  with:
+    host: ${{ secrets.SERVER_HOST }}    # ✅ Stored securely, not visible in code
+    password: ${{ secrets.PASSWORD }}   # ✅
+```
+</Right>
+</WrongRight>
+
+### Best Practices
+
+- Keep CI fast — under 5 minutes ideally. Slow CI means developers stop waiting for it.
+- Run tests in CI even if you don't have CD yet — it's the most valuable part.
+- Use `npm ci` instead of `npm install` in CI — it's faster and uses exact versions from `package-lock.json`.
+- Separate workflows: one for testing PRs, one for deploying main.
+- Never store secrets in code — always use GitHub Secrets or environment variables.
+
+### My Personal Notes
+
+<MyNotes>
+  GitHub Actions feels overwhelming at first because of the YAML syntax and all the options.
+  The trick is to start with the simplest possible workflow (just run `npm test`) and add steps one by one.
+  You don't need a perfect pipeline from day one.
+</MyNotes>
+
+<MyNotes>
+  The `secrets` feature in GitHub is your best friend. Never hardcode IPs, passwords, or API keys
+  in workflow files — even in private repos. Treat secrets like passwords: never type them in plaintext anywhere.
+</MyNotes>
+
+---
+
+## Part 3 — Nginx
+
+### Concept Explanation
+
+Nginx (pronounced "engine-x") is a **web server and reverse proxy**.
+
+Without Nginx, users would have to type `http://yourserver.com:3000` to access your app. Nginx sits in front of your app and handles incoming requests.
+
+```
+User types: https://myapp.com
+        ↓
+Nginx receives the request (port 80/443)
+        ↓
+Nginx forwards it to your app (port 3000)
+        ↓
+Your app responds
+        ↓
+Nginx sends response back to user
+```
+
+**What Nginx does for you:**
+
+```
+1. Handles HTTPS (SSL certificates)
+2. Serves on port 80/443 (standard web ports)
+3. Routes different domains to different apps on the same server
+4. Serves static files (images, CSS) super fast
+5. Load balancing (split traffic across multiple servers)
+6. Compression (makes responses smaller = faster)
+```
+
+### Why It's Used
+
+- Your app runs on port 3000, but websites need to be on port 80 (HTTP) or 443 (HTTPS).
+- One server can host many websites — Nginx routes each domain to the right app.
+- HTTPS/SSL termination — Nginx handles the encryption so your app doesn't have to.
+- Free performance boost — Nginx is extremely fast at serving static files.
+
+### Real-World Use Cases
+
+- Host `api.myapp.com` and `myapp.com` on the same server, routing to different apps.
+- Automatically redirect all HTTP traffic to HTTPS.
+- Serve your static Next.js export directly without Node.js.
+
+### Code Examples
+
+#### Installing Nginx
+
+```bash
+# On Ubuntu/Debian
+sudo apt update
+sudo apt install nginx -y
+
+# Start Nginx
+sudo systemctl start nginx
+sudo systemctl enable nginx  # Start automatically on server reboot
+
+# Check status
+sudo systemctl status nginx
+
+# Test config for syntax errors (always do this before reloading)
+sudo nginx -t
+
+# Reload config without downtime
+sudo systemctl reload nginx
+```
+
+#### Basic Config — Proxy to Your App
+
+```nginx
+# /etc/nginx/sites-available/myapp.com
+
+server {
+    listen 80;                          # Listen on port 80 (HTTP)
+    server_name myapp.com www.myapp.com; # Your domain
+
+    location / {
+        proxy_pass http://localhost:3000;   # Forward to your app
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+```bash
+# Enable the site (create a symlink)
+sudo ln -s /etc/nginx/sites-available/myapp.com /etc/nginx/sites-enabled/
+
+# Test config
+sudo nginx -t
+
+# Reload Nginx
+sudo systemctl reload nginx
+```
+
+#### Adding HTTPS with Certbot (Free SSL)
+
+```bash
+# Install Certbot
+sudo apt install certbot python3-certbot-nginx -y
+
+# Get a free SSL certificate (replaces your config automatically)
+sudo certbot --nginx -d myapp.com -d www.myapp.com
+
+# Certbot will ask for your email and automatically update your Nginx config
+# It also sets up auto-renewal
+
+# Test auto-renewal
+sudo certbot renew --dry-run
+```
+
+After Certbot, your config will look like this:
+
+```nginx
+# /etc/nginx/sites-available/myapp.com (after certbot)
+
+server {
+    listen 80;
+    server_name myapp.com www.myapp.com;
+    return 301 https://$host$request_uri;  # Redirect HTTP → HTTPS
+}
+
+server {
+    listen 443 ssl;                        # Listen on HTTPS
+    server_name myapp.com www.myapp.com;
+
+    ssl_certificate /etc/letsencrypt/live/myapp.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/myapp.com/privkey.pem;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+#### Multiple Apps on One Server
+
+```nginx
+# App 1: myapp.com → port 3000
+server {
+    listen 443 ssl;
+    server_name myapp.com;
+
+    location / {
+        proxy_pass http://localhost:3000;
+    }
+}
+
+# App 2: api.myapp.com → port 8000
+server {
+    listen 443 ssl;
+    server_name api.myapp.com;
+
+    location / {
+        proxy_pass http://localhost:8000;
+    }
+}
+
+# App 3: blog.myapp.com → port 3001
+server {
+    listen 443 ssl;
+    server_name blog.myapp.com;
+
+    location / {
+        proxy_pass http://localhost:3001;
+    }
+}
+```
+
+#### Performance Config (Add to Your Server Block)
+
+```nginx
+server {
+    # ... your existing config ...
+
+    # Enable gzip compression (smaller responses = faster)
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript;
+
+    # Cache static files (browsers won't re-download them)
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # Increase upload size limit (default is 1MB — too small for file uploads)
+    client_max_body_size 50M;
+
+    # Timeouts
+    proxy_connect_timeout 60s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
+}
+```
+
+### Common Mistakes
+
+<WrongRight>
+<Wrong>
+```bash
+# Editing the default config file directly
+sudo nano /etc/nginx/nginx.conf   # ❌ Don't put your sites here
+```
+</Wrong>
+<Right>
+```bash
+# Create a separate file per site in sites-available, then enable it
+sudo nano /etc/nginx/sites-available/myapp.com   # ✅ Clean separation
+sudo ln -s /etc/nginx/sites-available/myapp.com /etc/nginx/sites-enabled/
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```bash
+# Reloading without testing the config
+sudo systemctl reload nginx   # ❌ If config has an error, Nginx crashes
+```
+</Wrong>
+<Right>
+```bash
+sudo nginx -t                 # ✅ Always test first
+sudo systemctl reload nginx   # ✅ Then reload only if test passes
+```
+</Right>
+</WrongRight>
+
+### Best Practices
+
+- Always run `sudo nginx -t` before reloading — a bad config will take down your site.
+- Use Certbot for free HTTPS — there's no reason to serve HTTP in production.
+- Keep one config file per domain in `sites-available`.
+- Always redirect HTTP to HTTPS in production.
+- Set `client_max_body_size` if your app accepts file uploads.
+
+### My Personal Notes
+
+<MyNotes>
+  The most common beginner mistake is forgetting `sudo nginx -t` before reload.
+  One syntax error in your config will bring down ALL sites on the server. Always test first.
+</MyNotes>
+
+<MyNotes>
+  Certbot is genuinely magic. It reads your Nginx config, gets a certificate from Let's Encrypt,
+  updates your config, and sets up auto-renewal — all in one command. There's no excuse not to have HTTPS.
+</MyNotes>
+
+---
+
+## Part 4 — Deployment
+
+### Concept Explanation
+
+Deployment means putting your app on a server that's accessible 24/7 on the internet. There are many ways to do it — from simple platforms that handle everything for you, to raw servers where you control everything.
+
+```
+Complexity spectrum:
+
+Vercel / Railway    →   Managed platforms (easiest, least control)
+    ↓
+DigitalOcean App Platform / Render
+    ↓
+VPS (DigitalOcean Droplet, AWS EC2, Hetzner)   →   Raw server (hardest, most control)
+```
+
+### Why It's Used
+
+Obviously you need to deploy to make your app accessible to the world. The question is which method to choose.
+
+**Choosing a deployment method:**
+
+```
+Personal projects / startups   →   Vercel (Next.js), Railway (full-stack)
+Need more control / saving $   →   VPS with Docker
+Large scale                    →   Kubernetes, AWS ECS (beyond this guide)
+```
+
+### Real-World Use Cases
+
+- Deploy a Next.js app to Vercel in 2 minutes with zero configuration.
+- Deploy a full-stack app (Next.js + PostgreSQL) to a $5/month VPS.
+- Set up automatic deployment from GitHub so every push to main goes live.
+
+### Code Examples
+
+#### Option 1 — Vercel (Easiest for Next.js)
+
+```bash
+# Install Vercel CLI
+npm install -g vercel
+
+# Deploy from your project folder
+vercel
+
+# Follow the prompts — it auto-detects Next.js
+# Your app is live at: https://your-app.vercel.app
+
+# Deploy to production
+vercel --prod
+```
+
+Or just connect your GitHub repo at vercel.com — every push to main auto-deploys.
+
+#### Option 2 — VPS from Scratch (DigitalOcean / Hetzner)
+
+**Step 1: Initial server setup**
+
+```bash
+# SSH into your new server
+ssh root@YOUR_SERVER_IP
+
+# Update the system
+apt update && apt upgrade -y
+
+# Create a non-root user
+adduser deploy
+usermod -aG sudo deploy
+
+# Copy SSH keys to new user
+rsync --archive --chown=deploy:deploy ~/.ssh /home/deploy
+
+# Switch to new user
+su - deploy
+```
+
+**Step 2: Install Node.js**
+
+```bash
+# Install Node.js via NVM (Node Version Manager)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+source ~/.bashrc
+
+# Install Node 20
+nvm install 20
+nvm use 20
+node --version
+```
+
+**Step 3: Install PM2 (keeps your app running)**
+
+```bash
+# PM2 is a process manager — restarts your app if it crashes
+npm install -g pm2
+
+# Start your app with PM2
+pm2 start npm --name "my-app" -- start
+
+# Make PM2 start on server reboot
+pm2 startup
+pm2 save
+
+# Useful PM2 commands
+pm2 list              # See all running apps
+pm2 logs my-app       # View logs
+pm2 restart my-app    # Restart
+pm2 stop my-app       # Stop
+pm2 delete my-app     # Remove
+```
+
+**Step 4: Deploy your app**
+
+```bash
+# Clone your repo
+cd /var/www
+git clone https://github.com/yourusername/my-app.git
+cd my-app
+
+# Install dependencies and build
+npm ci
+npm run build
+
+# Start with PM2
+pm2 start npm --name "my-app" -- start
+```
+
+**Step 5: Set up Nginx (from Part 3)**
+
+```bash
+sudo apt install nginx -y
+sudo nano /etc/nginx/sites-available/myapp.com
+# (paste the config from Part 3)
+sudo ln -s /etc/nginx/sites-available/myapp.com /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+**Step 6: Get SSL with Certbot**
+
+```bash
+sudo apt install certbot python3-certbot-nginx -y
+sudo certbot --nginx -d myapp.com -d www.myapp.com
+```
+
+**Done! Your app is live with HTTPS.**
+
+#### Option 3 — Docker on VPS (Recommended for Full-Stack)
+
+```bash
+# On your server: install Docker
+sudo apt update
+sudo apt install docker.io docker-compose-plugin -y
+sudo usermod -aG docker $USER
+# Log out and back in for group change to take effect
+
+# Clone your repo
+cd /var/www
+git clone https://github.com/yourusername/my-app.git
+cd my-app
+
+# Create .env file on the server
+nano .env
+# Add your production environment variables
+
+# Start everything
+docker compose up -d
+
+# Set up Nginx to proxy to the Docker container (same as Part 3)
+# Your app runs on port 3000, Nginx proxies to it
+```
+
+#### Setting Up Environment Variables on Server
+
+```bash
+# Never commit .env to git!
+# Create it directly on the server
+
+nano /var/www/my-app/.env
+
+# Add production values:
+DATABASE_URL=postgresql://user:pass@localhost:5432/mydb
+NEXTAUTH_SECRET=your-secret-here
+NEXTAUTH_URL=https://myapp.com
+NODE_ENV=production
+```
+
+#### Deploying Updates
+
+```bash
+# Manual update script — save as /var/www/my-app/deploy.sh
+#!/bin/bash
+
+echo "Pulling latest code..."
+git pull origin main
+
+echo "Installing dependencies..."
+npm ci
+
+echo "Building..."
+npm run build
+
+echo "Restarting app..."
+pm2 restart my-app
+
+echo "Done! ✅"
+```
+
+```bash
+chmod +x deploy.sh
+./deploy.sh  # Run to deploy
+```
+
+#### Firewall Setup (Important for Security)
+
+```bash
+# Set up UFW firewall
+sudo apt install ufw -y
+
+# Default: deny all incoming, allow all outgoing
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+
+# Allow SSH (don't lock yourself out!)
+sudo ufw allow OpenSSH
+
+# Allow HTTP and HTTPS
+sudo ufw allow 'Nginx Full'
+
+# Enable the firewall
+sudo ufw enable
+
+# Check status
+sudo ufw status
+```
+
+### Common Mistakes
+
+<WrongRight>
+<Wrong>
+```bash
+# Running your app directly without a process manager
+node server.js   # ❌ App dies when you close the terminal or if it crashes
+```
+</Wrong>
+<Right>
+```bash
+pm2 start npm --name "my-app" -- start   # ✅ Stays alive, auto-restarts on crash
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```bash
+# Committing .env to git
+git add .env
+git commit -m "add env"   # ❌ Your secrets are now public on GitHub!
+```
+</Wrong>
+<Right>
+```bash
+# Add to .gitignore
+echo ".env" >> .gitignore
+echo ".env.local" >> .gitignore
+# Create .env manually on the server   ✅
+```
+</Right>
+</WrongRight>
+
+### Best Practices
+
+- Always use a process manager (PM2) — never run `node` directly in production.
+- Set up a firewall on your VPS — only allow ports 22 (SSH), 80 (HTTP), 443 (HTTPS).
+- Never commit `.env` files to git — create them manually on the server.
+- Use `npm ci` instead of `npm install` in production — it's deterministic.
+- Keep your server updated: `sudo apt update && sudo apt upgrade -y` monthly.
+- Set up monitoring (UptimeRobot is free) to alert you if your site goes down.
+
+### My Personal Notes
+
+<MyNotes>
+  For hobby projects and small startups, Vercel + Railway covers 90% of cases for free or cheaply.
+  Only move to a raw VPS when you actually need more control or cost savings at scale.
+  Don't over-engineer early.
+</MyNotes>
+
+<MyNotes>
+  PM2 saved me many times. Apps crash — it's inevitable. PM2 automatically restarts them
+  and keeps logs so you can debug what happened. `pm2 logs` after something breaks is the first thing I run.
+</MyNotes>
+
+---
+
+## The Full Picture — How It All Fits Together
+
+```
+Developer workflow with all 4 tools:
+
+1. You write code on your laptop
+        ↓
+2. You push to GitHub
+        ↓
+3. GitHub Actions (CI/CD) runs automatically:
+   - Installs dependencies
+   - Runs tests
+   - Builds Docker image
+   - Pushes image to Docker Hub
+        ↓
+4. GitHub Actions SSHs into your VPS and runs:
+   docker pull latest image
+   docker compose up -d
+        ↓
+5. Your app is now running in a Docker container on the VPS
+        ↓
+6. Nginx receives requests on port 443 (HTTPS)
+   and forwards them to your Docker container (port 3000)
+        ↓
+7. User sees your app ✅
+```
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between a Docker image and a Docker container?"
+  difficulty="easy"
+>
+  An image is a read-only template — the blueprint or recipe. A container is a running instance
+  of that image. You build an image once from a Dockerfile, and you can run many containers
+  from the same image. Think of image as a class and container as an object (instance) in OOP.
+</InterviewQ>
+
+<InterviewQ
+  question="What is CI/CD and why is it important?"
+  difficulty="easy"
+>
+  CI (Continuous Integration) means automatically running tests on every code push.
+  CD (Continuous Deployment) means automatically deploying when tests pass. It's important
+  because it removes manual steps, catches bugs early before they reach production,
+  and lets teams ship faster and with more confidence.
+</InterviewQ>
+
+<InterviewQ
+  question="What is a reverse proxy and why is Nginx used as one?"
+  difficulty="mid"
+>
+  A reverse proxy sits in front of your application and forwards requests to it. Nginx is
+  used as a reverse proxy because it handles HTTPS termination (so your app doesn't have to),
+  lets multiple apps run on the same server with different domains, serves static files very
+  efficiently, and adds features like compression and caching without touching your app code.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between a volume and a bind mount in Docker?"
+  difficulty="mid"
+>
+  Both persist data outside the container. A volume is managed by Docker — stored in Docker's
+  own storage area, portable, and the recommended way to persist database data. A bind mount
+  maps a specific directory on your host machine into the container — useful for development
+  (your code changes reflect instantly inside the container). For production databases, always
+  use volumes.
+</InterviewQ>
+
+<InterviewQ
+  question="Why should you never run applications in production as root?"
+  difficulty="mid"
+>
+  If your application is compromised by an attacker, running as root gives them full control
+  over the server. Running as a non-root user limits the damage — the attacker only gets
+  the permissions of that user. This applies to both server users and Docker containers
+  (use the USER directive in Dockerfile).
+</InterviewQ>
+
+---
+
+## Reusable Code Snippets
+
+### Quick Docker Compose Template (App + PostgreSQL + Redis)
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+```
+
+### Multi-Stage Dockerfile (Smaller Production Image)
+
+```dockerfile
+# Stage 1: Build
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# Stage 2: Production (only copy what's needed)
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV production
+
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/node_modules ./node_modules
+
+EXPOSE 3000
+CMD ["npm", "start"]
+
+# Result: much smaller image — no build tools included
+```
+
+### GitHub Actions — Complete Deploy Workflow
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci && npm run build
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd /var/www/my-app
+            git pull origin main
+            npm ci --production
+            npm run build
+            pm2 restart my-app
+```
+
+### Nginx Config Template with HTTPS
+
+```nginx
+# /etc/nginx/sites-available/myapp.com
+server {
+    listen 80;
+    server_name myapp.com www.myapp.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name myapp.com www.myapp.com;
+
+    ssl_certificate /etc/letsencrypt/live/myapp.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/myapp.com/privkey.pem;
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript;
+    client_max_body_size 50M;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff2)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        proxy_pass http://localhost:3000;
+    }
+}
+```
+
+### Server Setup Script (Run Once on a Fresh VPS)
+
+```bash
+#!/bin/bash
+# save as setup.sh and run: bash setup.sh
+
+echo "Updating system..."
+apt update && apt upgrade -y
+
+echo "Installing essentials..."
+apt install -y curl git nginx ufw certbot python3-certbot-nginx
+
+echo "Installing Docker..."
+apt install -y docker.io
+systemctl enable docker
+usermod -aG docker $USER
+
+echo "Installing Node.js..."
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+source ~/.bashrc
+nvm install 20
+
+echo "Installing PM2..."
+npm install -g pm2
+
+echo "Setting up firewall..."
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow OpenSSH
+ufw allow 'Nginx Full'
+ufw --force enable
+
+echo "Server setup complete! ✅"
+```
+
+---
+
+*Tags: `devops` `docker` `cicd` `github-actions` `nginx` `deployment` `linux` `vps` `beginner`*

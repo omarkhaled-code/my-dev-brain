@@ -1,0 +1,1130 @@
+---
+title: "Laravel Eloquent Relationships"
+description: "A complete guide to all Eloquent relationship types in Laravel — hasOne, hasMany, belongsTo, belongsToMany, polymorphic, and more — with real-life examples for every type."
+category: database
+tools: [laravel, mysql, sqlite]
+tags:
+  [
+    eloquent,
+    relationships,
+    laravel,
+    database,
+    hasMany,
+    belongsTo,
+    polymorphic,
+    pivot,
+  ]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+Eloquent relationships define how your database tables connect to each other. Instead of writing manual JOIN queries, you define the relationship once in the model and access related data as a simple property or method.
+
+**Mental model:** Think of relationships like connections between real-world entities:
+
+- A **User** has many **Posts** (one-to-many)
+- A **Post** belongs to a **User** (inverse one-to-many)
+- A **User** has one **Profile** (one-to-one)
+- A **Post** belongs to many **Tags** (many-to-many)
+- A **Comment** can belong to a **Post** OR a **Video** (polymorphic)
+
+```tsx
+Relationship Types:
+─────────────────────────────────────────────────────
+hasOne          → User hasOne Profile
+hasMany         → User hasMany Posts
+belongsTo       → Post belongsTo User
+belongsToMany   → Post belongsToMany Tags (pivot table)
+hasOneThrough   → Country hasOne UserProfile through User
+hasManyThrough  → Country hasMany Posts through User
+morphOne        → Post morphOne Image
+morphMany       → Post morphMany Comments
+morphToMany     → Post morphToMany Tags (polymorphic pivot)
+```
+
+---
+
+## Why It's Used
+
+- **No manual JOINs:** Access related data as `$post->user->name` instead of writing SQL.
+- **Lazy loading:** Related data loads only when accessed.
+- **Eager loading:** Load relationships upfront to avoid N+1 queries.
+- **Nested relationships:** `$post->user->profile->avatar` — chain as deep as needed.
+- **Querying through relationships:** Filter posts by their author's role, count comments, etc.
+
+---
+
+## 1. hasOne — One to One
+
+**Real-life example:** A User has one Profile. One profile belongs to one user.
+```tsx
+users table          profiles table
+───────────          ──────────────
+id                   id
+name                 user_id  ← foreign key
+email                bio
+avatar
+website
+```
+
+```php
+// Migration
+Schema::create('profiles', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->unique()->constrained()->cascadeOnDelete();
+    $table->text('bio')->nullable();
+    $table->string('avatar')->nullable();
+    $table->string('website')->nullable();
+    $table->timestamps();
+});
+```
+
+```php
+// app/Models/User.php
+class User extends Model
+{
+    public function profile(): HasOne
+    {
+        return $this->hasOne(Profile::class);
+        // Laravel assumes: profiles.user_id = users.id
+    }
+}
+
+// app/Models/Profile.php
+class Profile extends Model
+{
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+}
+```
+
+```php
+// Usage
+$user = User::find(1);
+
+// Access profile — lazy loads on first access
+$bio = $user->profile->bio;
+
+// Create profile for user
+$user->profile()->create([
+    'bio'     => 'Laravel developer',
+    'website' => 'https://ahmed.dev',
+]);
+
+// Update profile
+$user->profile->update(['bio' => 'Full-stack developer']);
+
+// Check if profile exists
+if ($user->profile) {
+    echo $user->profile->bio;
+}
+
+// Eager load
+$users = User::with('profile')->get();
+
+// Create or update profile (upsert)
+$user->profile()->updateOrCreate(
+    ['user_id' => $user->id],
+    ['bio' => 'New bio', 'website' => 'https://example.com']
+);
+```
+
+---
+
+## 2. hasMany — One to Many
+
+**Real-life example:** A User has many Posts. Each post belongs to one user.
+```tsx
+users table          posts table
+───────────          ───────────
+id                   id
+name                 user_id  ← foreign key
+email                title
+body
+status
+```
+
+```php
+// app/Models/User.php
+class User extends Model
+{
+    public function posts(): HasMany
+    {
+        return $this->hasMany(Post::class);
+    }
+
+    // Scoped relationship — only published posts
+    public function publishedPosts(): HasMany
+    {
+        return $this->hasMany(Post::class)
+                    ->where('status', 'published')
+                    ->latest();
+    }
+}
+
+// app/Models/Post.php
+class Post extends Model
+{
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+}
+```
+
+```php
+// Usage
+$user = User::find(1);
+
+// Get all posts
+$posts = $user->posts;
+
+// Get only published posts
+$published = $user->publishedPosts;
+
+// Query through relationship
+$draftPosts = $user->posts()->where('status', 'draft')->latest()->get();
+
+// Count posts
+$count = $user->posts()->count();
+
+// Create a post for this user
+$post = $user->posts()->create([
+    'title'  => 'My New Post',
+    'body'   => 'Content here...',
+    'status' => 'draft',
+]);
+
+// Check if user has any posts
+if ($user->posts()->exists()) {
+    echo 'User has posts';
+}
+
+// Eager load with constraint
+$users = User::with(['posts' => function ($query) {
+    $query->where('status', 'published')->latest();
+}])->get();
+
+// withCount — get users with post count
+$users = User::withCount('posts')->get();
+foreach ($users as $user) {
+    echo $user->posts_count;
+}
+
+// withCount with condition
+$users = User::withCount([
+    'posts',
+    'posts as published_posts_count' => fn ($q) => $q->where('status', 'published'),
+])->get();
+```
+
+---
+
+## 3. belongsTo — Inverse Relationship
+
+**Real-life example:** A Post belongs to a User. A Post belongs to a Category.
+
+```php
+// app/Models/Post.php
+class Post extends Model
+{
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+        // Laravel assumes: posts.user_id references users.id
+    }
+
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(Category::class);
+    }
+}
+```
+
+```php
+// Usage
+$post = Post::find(1);
+
+// Access the owner
+$authorName = $post->user->name;
+$categoryName = $post->category->name;
+
+// Eager load — prevents N+1
+$posts = Post::with(['user', 'category'])->paginate(15);
+
+// Query posts by their user's role
+$adminPosts = Post::whereHas('user', function ($query) {
+    $query->where('role', 'admin');
+})->get();
+
+// Associate a post with a different user
+$post->user()->associate($newUser);
+$post->save();
+
+// Dissociate (set foreign key to null — column must be nullable)
+$post->category()->dissociate();
+$post->save();
+```
+
+---
+
+## 4. belongsToMany — Many to Many
+
+**Real-life example:** A Post can have many Tags. A Tag can belong to many Posts.
+```tsx
+posts table     post_tag pivot table     tags table
+───────────     ────────────────────     ──────────
+id              post_id                  id
+title           tag_id                   name
+created_at (optional)    slug
+updated_at (optional)
+```
+
+```php
+// Migration — pivot table
+Schema::create('post_tag', function (Blueprint $table) {
+    $table->foreignId('post_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('tag_id')->constrained()->cascadeOnDelete();
+    $table->primary(['post_id', 'tag_id']);
+    $table->timestamps(); // optional — if you need when tag was added
+});
+```
+
+```php
+// app/Models/Post.php
+class Post extends Model
+{
+    public function tags(): BelongsToMany
+    {
+        return $this->belongsToMany(Tag::class)
+                    ->withTimestamps(); // if pivot has timestamps
+    }
+}
+
+// app/Models/Tag.php
+class Tag extends Model
+{
+    public function posts(): BelongsToMany
+    {
+        return $this->belongsToMany(Post::class)
+                    ->withTimestamps();
+    }
+}
+```
+
+```php
+// Usage
+$post = Post::find(1);
+
+// Get all tags
+$tags = $post->tags;
+
+// Attach tags (add to pivot)
+$post->tags()->attach(1);                    // attach one by id
+$post->tags()->attach([1, 2, 3]);           // attach multiple
+$post->tags()->attach($tag);                // attach model directly
+
+// Detach tags (remove from pivot)
+$post->tags()->detach(1);
+$post->tags()->detach([1, 2, 3]);
+$post->tags()->detach(); // detach all
+
+// Sync — detaches everything not in array, attaches everything in array
+$post->tags()->sync([1, 2, 3]); // post now has exactly tags 1, 2, 3
+
+// Sync without detaching — only adds, never removes
+$post->tags()->syncWithoutDetaching([4, 5]);
+
+// Toggle — attach if not attached, detach if attached
+$post->tags()->toggle([1, 2]);
+
+// Check if tag is attached
+$post->tags()->where('tag_id', 1)->exists();
+
+// Eager load
+$posts = Post::with('tags')->get();
+
+// Query posts that have specific tag
+$laravelPosts = Post::whereHas('tags', function ($query) {
+    $query->where('slug', 'laravel');
+})->get();
+
+// Get tag names as comma-separated string
+$tagNames = $post->tags->pluck('name')->implode(', ');
+```
+
+---
+
+### belongsToMany with Extra Pivot Columns
+
+**Real-life example:** A User belongs to many Teams. The pivot stores the user's role in that team.
+
+```php
+// Migration
+Schema::create('team_user', function (Blueprint $table) {
+    $table->foreignId('team_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+    $table->string('role')->default('member');   // extra pivot column
+    $table->timestamp('joined_at')->nullable();  // extra pivot column
+    $table->primary(['team_id', 'user_id']);
+});
+```
+
+```php
+// app/Models/User.php
+class User extends Model
+{
+    public function teams(): BelongsToMany
+    {
+        return $this->belongsToMany(Team::class)
+                    ->withPivot('role', 'joined_at')  // expose extra columns
+                    ->withTimestamps();
+    }
+}
+```
+
+```php
+// Usage
+$user = User::find(1);
+
+// Access pivot data
+foreach ($user->teams as $team) {
+    echo $team->pivot->role;       // 'admin', 'member', etc.
+    echo $team->pivot->joined_at;
+}
+
+// Attach with extra pivot data
+$user->teams()->attach($team->id, [
+    'role'      => 'admin',
+    'joined_at' => now(),
+]);
+
+// Update pivot data
+$user->teams()->updateExistingPivot($team->id, ['role' => 'member']);
+
+// Sync with pivot data
+$user->teams()->sync([
+    1 => ['role' => 'admin'],
+    2 => ['role' => 'member'],
+]);
+```
+
+---
+
+## 5. hasManyThrough — Many Through Another Model
+
+**Real-life example:** A Country has many Posts through Users. Country → Users → Posts.
+```tsx
+countries table     users table          posts table
+───────────────     ───────────          ───────────
+id                  id                   id
+name                country_id           user_id
+code                name                 title
+```
+
+```php
+// app/Models/Country.php
+class Country extends Model
+{
+    public function posts(): HasManyThrough
+    {
+        return $this->hasManyThrough(
+            Post::class,    // final model
+            User::class,    // intermediate model
+            'country_id',   // foreign key on users table
+            'user_id',      // foreign key on posts table
+            'id',           // local key on countries table
+            'id'            // local key on users table
+        );
+    }
+}
+```
+
+```php
+// Usage
+$country = Country::find(1);
+
+// Get all posts from users in this country
+$posts = $country->posts;
+
+// Count posts from this country
+$count = $country->posts()->count();
+
+// Get published posts from this country
+$published = $country->posts()
+                     ->where('status', 'published')
+                     ->latest()
+                     ->get();
+```
+
+---
+
+## 6. Polymorphic Relationships
+
+**What is polymorphic?** One model can belong to multiple different models using a single relationship.
+
+### morphTo / morphMany — One Polymorphic
+
+**Real-life example:** A Comment can belong to a Post OR a Video. An Image can belong to a Post OR a Product.
+```tsx
+taggables pivot table
+─────────────────────
+tag_id
+taggable_id
+taggable_type   ← 'App\Models\Post' or 'App\Models\Video'
+```
+```php
+// Migration
+Schema::create('taggables', function (Blueprint $table) {
+    $table->foreignId('tag_id')->constrained()->cascadeOnDelete();
+    $table->morphs('taggable'); // creates taggable_id + taggable_type
+});
+```
+
+```php
+// app/Models/Post.php
+class Post extends Model
+{
+    public function tags(): MorphToMany
+    {
+        return $this->morphToMany(Tag::class, 'taggable');
+    }
+}
+
+// app/Models/Video.php
+class Video extends Model
+{
+    public function tags(): MorphToMany
+    {
+        return $this->morphToMany(Tag::class, 'taggable');
+    }
+}
+
+// app/Models/Tag.php
+class Tag extends Model
+{
+    public function posts(): MorphedByMany
+    {
+        return $this->morphedByMany(Post::class, 'taggable');
+    }
+
+    public function videos(): MorphedByMany
+    {
+        return $this->morphedByMany(Video::class, 'taggable');
+    }
+}
+```
+
+```php
+// Usage — identical to regular belongsToMany
+$post->tags()->attach([1, 2, 3]);
+$post->tags()->sync([1, 2]);
+$post->tags()->detach(1);
+
+$video->tags()->attach([3, 4]);
+
+// Get all posts for a tag
+$tag = Tag::find(1);
+$posts  = $tag->posts;
+$videos = $tag->videos;
+```
+
+---
+
+## 7. Querying Relationships
+
+```php
+// ── whereHas — filter by related model existence ───────
+
+// Posts that have at least one comment
+Post::whereHas('comments')->get();
+
+// Posts that have comments from a specific user
+Post::whereHas('comments', function ($query) {
+    $query->where('user_id', 1);
+})->get();
+
+// Posts that have at least 5 comments
+Post::whereHas('comments', null, '>=', 5)->get();
+
+// Users who have published posts
+User::whereHas('posts', function ($query) {
+    $query->where('status', 'published');
+})->get();
+
+
+// ── doesntHave — filter by absence ─────────────────────
+
+// Posts with no comments
+Post::doesntHave('comments')->get();
+
+// Users who have never published a post
+User::whereDoesntHave('posts', function ($query) {
+    $query->where('status', 'published');
+})->get();
+
+
+// ── withCount — count related records ───────────────────
+
+$posts = Post::withCount('comments')->get();
+echo $posts->first()->comments_count;
+
+// Multiple counts
+$posts = Post::withCount([
+    'comments',
+    'comments as approved_comments_count' => fn ($q) =>
+        $q->where('approved', true),
+])->get();
+
+
+// ── withSum, withAvg, withMin, withMax ──────────────────
+
+// Sum of order totals per user
+$users = User::withSum('orders', 'total')->get();
+echo $user->orders_sum_total;
+
+// Average rating per product
+$products = Product::withAvg('reviews', 'rating')->get();
+echo $product->reviews_avg_rating;
+```
+
+---
+
+## Real-Life Full Example — Blog System
+
+```php
+// Complete relationship setup for a blog
+
+// User Model
+class User extends Model
+{
+    public function posts(): HasMany
+    {
+        return $this->hasMany(Post::class);
+    }
+
+    public function comments(): HasMany
+    {
+        return $this->hasMany(Comment::class);
+    }
+
+    public function profile(): HasOne
+    {
+        return $this->hasOne(Profile::class);
+    }
+}
+
+// Category Model
+class Category extends Model
+{
+    public function posts(): HasMany
+    {
+        return $this->hasMany(Post::class);
+    }
+
+    // Nested categories
+    public function parent(): BelongsTo
+    {
+        return $this->belongsTo(Category::class, 'parent_id');
+    }
+
+    public function children(): HasMany
+    {
+        return $this->hasMany(Category::class, 'parent_id');
+    }
+}
+
+// Post Model
+class Post extends Model
+{
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(Category::class);
+    }
+
+    public function tags(): BelongsToMany
+    {
+        return $this->belongsToMany(Tag::class)->withTimestamps();
+    }
+
+    public function comments(): MorphMany
+    {
+        return $this->morphMany(Comment::class, 'commentable')
+                    ->whereNull('parent_id') // top-level only
+                    ->latest();
+    }
+
+    public function allComments(): MorphMany
+    {
+        return $this->morphMany(Comment::class, 'commentable');
+    }
+
+    public function image(): MorphOne
+    {
+        return $this->morphOne(Image::class, 'imageable');
+    }
+}
+
+// Comment Model — supports nested replies
+class Comment extends Model
+{
+    public function commentable(): MorphTo
+    {
+        return $this->morphTo();
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    // Parent comment
+    public function parent(): BelongsTo
+    {
+        return $this->belongsTo(Comment::class, 'parent_id');
+    }
+
+    // Replies to this comment
+    public function replies(): HasMany
+    {
+        return $this->hasMany(Comment::class, 'parent_id')->latest();
+    }
+}
+```
+
+```php
+// Real-life controller — blog post page
+public function show(string $slug)
+{
+    $post = Post::with([
+        'user:id,name,avatar',
+        'user.profile:user_id,bio,website',
+        'category:id,name,slug',
+        'tags:id,name,slug',
+        'image',
+        'comments' => fn ($q) => $q->with([
+            'user:id,name,avatar',
+            'replies.user:id,name,avatar',
+        ])->latest(),
+    ])
+    ->withCount('comments')
+    ->where('slug', $slug)
+    ->where('status', 'published')
+    ->firstOrFail();
+
+    // Increment view count
+    $post->increment('views');
+
+    return new PostResource($post);
+}
+```
+
+---
+
+## Real-Life Full Example — E-Commerce
+
+```php
+// Product Model
+class Product extends Model
+{
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(Category::class);
+    }
+
+    public function images(): MorphMany
+    {
+        return $this->morphMany(Image::class, 'imageable');
+    }
+
+    public function featuredImage(): MorphOne
+    {
+        return $this->morphOne(Image::class, 'imageable')
+                    ->where('is_featured', true);
+    }
+
+    public function reviews(): HasMany
+    {
+        return $this->hasMany(Review::class);
+    }
+
+    public function tags(): MorphToMany
+    {
+        return $this->morphToMany(Tag::class, 'taggable');
+    }
+
+    public function orderItems(): HasMany
+    {
+        return $this->hasMany(OrderItem::class);
+    }
+}
+
+// Order Model
+class Order extends Model
+{
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    public function items(): HasMany
+    {
+        return $this->hasMany(OrderItem::class);
+    }
+
+    public function products(): HasManyThrough
+    {
+        return $this->hasManyThrough(Product::class, OrderItem::class);
+    }
+}
+
+// OrderItem Model
+class OrderItem extends Model
+{
+    public function order(): BelongsTo
+    {
+        return $this->belongsTo(Order::class);
+    }
+
+    public function product(): BelongsTo
+    {
+        return $this->belongsTo(Product::class);
+    }
+}
+```
+
+```php
+// Real-life usage
+// Get user's orders with all items and products
+$orders = Order::with([
+    'items.product.featuredImage',
+    'items.product.category:id,name',
+])
+->where('user_id', auth()->id())
+->latest()
+->paginate(10);
+
+// Get products with average rating and review count
+$products = Product::with([
+    'featuredImage',
+    'category:id,name,slug',
+    'tags:id,name',
+])
+->withAvg('reviews', 'rating')
+->withCount('reviews')
+->where('is_active', true)
+->paginate(20);
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Accessing relationship without eager loading in a loop — N+1!
+$posts = Post::all();
+foreach ($posts as $post) {
+    echo $post->user->name;     // ❌ 1 query per post
+    echo $post->category->name; // ❌ another query per post
+}
+```
+</Wrong>
+<Right>
+```php
+// Eager load all relationships you will use
+$posts = Post::with(['user', 'category'])->get();
+foreach ($posts as $post) {
+    echo $post->user->name;     // ✅ no extra queries
+    echo $post->category->name; // ✅ no extra queries
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Using attach() when you want sync() — creates duplicates
+$post->tags()->attach([1, 2, 3]); // called twice → duplicates in pivot!
+```
+</Wrong>
+<Right>
+```php
+// sync() detaches what's not in the array, attaches what's new — idempotent
+$post->tags()->sync([1, 2, 3]); // safe to call multiple times
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Forgetting to select foreign key when selecting specific columns
+$posts = Post::with('user')->select('id', 'title')->get();
+// ❌ user_id not selected → Eloquent cannot match users to posts → user is null
+```
+</Wrong>
+<Right>
+```php
+// Always include the foreign key in select
+$posts = Post::with('user')->select('id', 'title', 'user_id')->get(); // ✅
+// Or when selecting from the related model:
+$posts = Post::with('user:id,name')->get(); // ✅ id always included automatically
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Defining polymorphic relationship with wrong morph name
+class Comment extends Model
+{
+    public function commentable(): MorphTo
+    {
+        return $this->morphTo('post'); // ❌ wrong — will look for post_id, post_type
+    }
+}
+```
+</Wrong>
+<Right>
+```php
+class Comment extends Model
+{
+    public function commentable(): MorphTo
+    {
+        return $this->morphTo(); // ✅ method name IS the morph name → commentable_id, commentable_type
+    }
+}
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** When selecting specific columns with `with('user:id,name')`, always include `id` in the related model's column list. Eloquent uses the primary key to match related records — without it, all relationships return null.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Name relationship methods with camelCase matching the related model: `user()`, `posts()`, `orderItems()`
+- Always eager load relationships used in loops — zero exceptions
+- Use `with('user:id,name,avatar')` to select only needed columns from related models
+- Define inverse relationships on both sides — always define both `hasMany` and `belongsTo`
+
+**Performance tips**
+```php
+// Constrained eager loading — load only what you need
+Post::with([
+    'comments' => fn ($q) => $q->latest()->take(3), // only last 3 comments
+    'user:id,name',                                  // only id and name
+    'tags:id,name,slug',                             // only needed columns
+])->paginate(15);
+
+// Use withCount instead of loading all related records just to count
+// Bad:
+$user->posts->count();       // loads all posts into memory
+
+// Good:
+$user->loadCount('posts');   // adds posts_count attribute
+echo $user->posts_count;
+
+// Prevent loading huge relationships on list pages
+// Load full details only on show/detail pages
+```
+
+**Security considerations**
+- Use `cascadeOnDelete` carefully — deleting a user cascades to posts, which cascades to comments — entire tree gone
+- Always verify ownership before attaching: `abort_unless($post->user_id === auth()->id(), 403)`
+- Use `syncWithoutDetaching` when users should only add, never remove relationships they do not own
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between hasMany and belongsToMany?"
+  difficulty="easy"
+>
+  `hasMany` is a one-to-many relationship — one user has many posts, but each
+  post belongs to only one user. The foreign key lives on the child table
+  (posts.user_id). `belongsToMany` is a many-to-many relationship — a post
+  can have many tags and a tag can belong to many posts. It requires a pivot
+  table (post_tag) that stores both foreign keys. Neither model stores the
+  foreign key directly.
+</InterviewQ>
+
+<InterviewQ
+  question="What is a polymorphic relationship and when would you use it?"
+  difficulty="mid"
+>
+  A polymorphic relationship lets one model belong to multiple different model
+  types using a single set of columns — a `type` column stores the class name
+  and an `id` column stores the record ID. Use it when multiple models share
+  the same related feature: comments on both posts and videos, images for both
+  products and users, tags on both posts and events. Without polymorphism you
+  would need separate tables for each combination.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between attach(), detach(), and sync() in belongsToMany?"
+  difficulty="mid"
+>
+  `attach()` adds records to the pivot table without removing anything —
+  calling it twice creates duplicates. `detach()` removes records from the
+  pivot table. `sync()` takes an array of IDs and makes the pivot table
+  match exactly — it attaches IDs not in the pivot and detaches IDs not in
+  the array. `sync()` is idempotent — safe to call multiple times with the
+  same result. Use `sync()` when the user submits a complete list of
+  selections (like checkboxes). Use `attach/detach` when adding or removing
+  individual items.
+</InterviewQ>
+
+<InterviewQ
+  question="Why does eager loading prevent the N+1 query problem?"
+  difficulty="mid"
+>
+  Without eager loading, Eloquent fires one SQL query per relationship access
+  in a loop — 100 posts means 100 additional queries for their users.
+  `with('user')` tells Eloquent to load all users in a single second query
+  using a WHERE IN clause: `SELECT * FROM users WHERE id IN (1,2,3...)`.
+  Eloquent then maps each user to its post in memory — no more per-iteration
+  queries. The total is always 2 queries regardless of how many posts there are.
+</InterviewQ>
+
+<InterviewQ
+  question="How would you implement a nested comments system (replies to replies) using Eloquent?"
+  difficulty="hard"
+>
+  Define a self-referencing relationship on the Comment model: `parent()`
+  as `belongsTo(Comment::class, 'parent_id')` and `replies()` as
+  `hasMany(Comment::class, 'parent_id')`. For a fixed depth (2-3 levels),
+  eager load: `Comment::with('replies.replies.user')`. For unlimited depth,
+  use a recursive relationship or a package like `staudenmeir/laravel-adjacency-list`
+  which uses recursive CTEs. For the database, add a `parent_id` nullable
+  foreign key on the comments table referencing the same table.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The most confusing thing when I started: forgetting to include the foreign
+  key when using `select()` with eager loading. `Post::with('user')->select('id', 'title')`
+  returns null for every user because `user_id` is not selected and Eloquent
+  cannot match the records. Always include the foreign key or just use
+  `Post::with('user:id,name')` which handles column selection on the related
+  model side.
+</MyNotes>
+
+<MyNotes>
+  Polymorphic relationships clicked for me when I thought about it this way:
+  instead of having a `post_id` AND a `video_id` column on the comments table
+  (one always null), you have `commentable_id` and `commentable_type`. The
+  type column is the class name string — Laravel handles the mapping
+  automatically. Much cleaner than nullable foreign keys everywhere.
+</MyNotes>
+
+<MyNotes>
+  `sync()` vs `attach()` confusion cost me a bug in production — a user
+  updating their selected tags was accumulating duplicates because I used
+  `attach()` instead of `sync()`. Always use `sync()` when the user is
+  submitting a complete updated list. Use `attach/detach` only for single
+  add/remove actions.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Morph Map — Clean Type Names in Database
+
+```php
+// app/Providers/AppServiceProvider.php
+// Instead of storing full class names like 'App\Models\Post' in the database
+// use short aliases — cleaner and refactor-safe
+
+use Illuminate\Database\Eloquent\Relations\Relation;
+
+public function boot(): void
+{
+    Relation::morphMap([
+        'post'    => \App\Models\Post::class,
+        'video'   => \App\Models\Video::class,
+        'product' => \App\Models\Product::class,
+        'user'    => \App\Models\User::class,
+    ]);
+}
+
+// Now database stores 'post' instead of 'App\Models\Post'
+// Much cleaner and works even if you move/rename the class
+```
+
+---
+
+### Relationship Existence Checks
+
+```php
+// Check if relationship exists without loading it
+if ($post->comments()->exists()) { ... }
+
+// Count without loading
+$count = $post->comments()->count();
+
+// Load count after the fact
+$post->loadCount('comments');
+echo $post->comments_count;
+
+// Load multiple counts
+$post->loadCount(['comments', 'tags']);
+
+// Load aggregate
+$post->loadAvg('reviews', 'rating');
+echo $post->reviews_avg_rating;
+```
+
+---
+
+### Detach All Before Sync — Safe Update Pattern
+
+```php
+// Safe pattern for updating pivot relationships
+// when you want to completely replace the current set
+
+public function updateTags(Post $post, array $tagIds): void
+{
+    // Verify ownership
+    abort_unless($post->user_id === auth()->id(), 403);
+
+    // sync() handles attach + detach automatically
+    $post->tags()->sync($tagIds);
+}
+
+public function addTag(Post $post, int $tagId): void
+{
+    // syncWithoutDetaching — never removes existing
+    $post->tags()->syncWithoutDetaching([$tagId]);
+}
+
+public function removeTag(Post $post, int $tagId): void
+{
+    $post->tags()->detach($tagId);
+}
+```
+
+---
+
+*Tags: `laravel` `eloquent` `relationships` `hasMany` `belongsTo` `belongsToMany` `polymorphic` `database` `intermediate`*

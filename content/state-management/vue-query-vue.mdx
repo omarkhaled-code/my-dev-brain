@@ -1,0 +1,770 @@
+---
+title: "Server State Management with TanStack Query (Vue Query)"
+description: "How to fetch, cache, sync, and update server state in Vue 3 and Nuxt 3 using TanStack Query v5 with SSR support, Laravel API integration, and TypeScript support."
+category: state-management
+tools: [vue, nuxt]
+tags: [vue-query, tanstack-query, server-state, fetching, caching, vue3, nuxt3, laravel]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+TanStack Query for Vue (Vue Query) is the Vue 3 version of the same library used in React. It manages **server state** — data that lives on your backend (Laravel API, database) and your app only holds a temporary cached copy of it.
+
+In **Vite + Vue**, TanStack Query is a plugin you register once and use via composables (`useQuery`, `useMutation`) anywhere in your app.
+
+In **Nuxt 3**, you have a choice: use TanStack Query via `@tanstack/vue-query` for complex caching needs, or use Nuxt's built-in `useFetch` / `useAsyncData` for simpler cases. Both are valid — the rule is: if you need advanced caching, background refetching, mutations with cache invalidation, or pagination — use TanStack Query. If you just need to fetch once on page load — use `useFetch`.
+
+```text
+┌─────────────────────────────────────────────────┐
+│                  Your Vue App                   │
+│                                                 │
+│   Server State          │   Client/UI State     │
+│   ─────────────         │   ────────────        │
+│   TanStack Query        │   Pinia               │
+│   • API responses       │   • sidebar open      │
+│   • Cached DB data      │   • modal visible     │
+│   • Paginated lists     │   • theme             │
+│   • Mutations           │   • form wizard step  │
+└─────────────────────────────────────────────────┘
+```
+<Callout type="note">
+  **Vue vs Nuxt difference:** In Vite + Vue, TanStack Query is the go-to
+  solution for all server data fetching. In Nuxt 3, you already have
+  `useFetch` and `useAsyncData` built in with SSR support — use TanStack Query
+  on top when you need its advanced caching and mutation features. They can
+  coexist in the same Nuxt project.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **Automatic Caching:** Same data requested from multiple components triggers only one network request.
+- **Background Refetching:** Stale data is automatically refreshed when the user returns to the tab or reconnects to the internet.
+- **Loading / Error States Built-in:** No more manual `const loading = ref(false)` around every fetch call.
+- **Mutations with Cache Invalidation:** After a POST/PUT/DELETE to your Laravel API, related queries automatically refetch.
+- **SSR Support in Nuxt:** Prefetch on the server, hydrate on the client with zero duplicate requests.
+- **Pagination and Infinite Scroll:** First-class support for paginated and cursor-based APIs.
+
+---
+
+## When NOT to Use It
+
+- **Client-only UI state:** Sidebar, modal, theme — use Pinia for these.
+- **Simple one-time SSR fetch in Nuxt:** If you just need data on page load with no caching needs, `useFetch` is simpler and built in.
+- **WebSocket / real-time data:** TanStack Query is poll-based. For true real-time use WebSockets or SSE directly.
+- **Static reference data:** Country lists, config that never changes — just import a JSON file or use a Pinia store seeded once.
+
+---
+
+## Real-World Use Cases
+
+- **User Profile Page:** Fetch and cache user data from `GET /api/user/{id}` shared across multiple components.
+- **Product Listings:** Paginated product list from Laravel with automatic background refresh.
+- **Dashboard Widgets:** Multiple components each fetching their own data independently with shared cache.
+- **Form Submissions:** POST to Laravel API, then invalidate the list query so the UI updates automatically.
+- **Infinite Scroll Feed:** Load more posts as the user scrolls using `useInfiniteQuery`.
+
+---
+
+## Code Examples
+
+### Setup — Vite + Vue
+
+```bash
+npm install @tanstack/vue-query
+```
+
+```ts
+// main.ts
+import { createApp } from 'vue'
+import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query'
+import App from './App.vue'
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60 * 1000, // 1 minute
+      retry: 2,
+    },
+  },
+})
+
+const app = createApp(App)
+app.use(VueQueryPlugin, { queryClient })
+app.mount('#app')
+```
+
+---
+
+### Setup — Nuxt 3
+
+```bash
+npm install @tanstack/vue-query
+```
+
+```ts
+// plugins/vue-query.ts
+import {
+  VueQueryPlugin,
+  QueryClient,
+  dehydrate,
+  hydrate,
+} from '@tanstack/vue-query'
+
+export default defineNuxtPlugin((nuxt) => {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 60 * 1000,
+        retry: 2,
+      },
+    },
+  })
+
+  nuxt.vueApp.use(VueQueryPlugin, { queryClient })
+
+  // SSR: dehydrate state from server and hydrate on client
+  if (process.server) {
+    nuxt.hooks.hook('app:rendered', () => {
+      nuxt.payload.vueQueryState = dehydrate(queryClient)
+    })
+  }
+
+  if (process.client) {
+    nuxt.hooks.hook('app:created', () => {
+      hydrate(queryClient, nuxt.payload.vueQueryState)
+    })
+  }
+})
+```
+
+---
+
+### Basic Query — Fetch from Laravel API
+
+```ts
+// lib/api/users.ts
+const API_URL = import.meta.env.VITE_API_URL // e.g. http://localhost:8000/api
+
+export interface User {
+  id: string
+  name: string
+  email: string
+  role: 'admin' | 'user'
+}
+
+export async function fetchUsers(): Promise<User[]> {
+  const res = await fetch(`${API_URL}/users`)
+  if (!res.ok) throw new Error('Failed to fetch users')
+  return res.json()
+}
+
+export async function fetchUserById(id: string): Promise<User> {
+  const res = await fetch(`${API_URL}/users/${id}`)
+  if (!res.ok) throw new Error('Failed to fetch user')
+  return res.json()
+}
+```
+
+```vue
+<!-- components/UserList.vue -->
+<script setup lang="ts">
+import { useQuery } from '@tanstack/vue-query'
+import { fetchUsers } from '@/lib/api/users'
+
+const { data, isLoading, isError, error } = useQuery({
+  queryKey: ['users'],
+  queryFn: fetchUsers,
+})
+</script>
+
+<template>
+  <div>
+    <div v-if="isLoading">Loading...</div>
+    <div v-else-if="isError">Error: {{ error?.message }}</div>
+    <ul v-else>
+      <li v-for="user in data" :key="user.id">
+        {{ user.name }} — {{ user.email }}
+      </li>
+    </ul>
+  </div>
+</template>
+```
+
+---
+
+### Query with Parameters
+
+```vue
+<!-- components/UserProfile.vue -->
+<script setup lang="ts">
+import { useQuery } from '@tanstack/vue-query'
+import { fetchUserById } from '@/lib/api/users'
+import { toRef } from 'vue'
+
+const props = defineProps<{ userId: string }>()
+const userId = toRef(props, 'userId')
+
+const { data: user, isLoading } = useQuery({
+  queryKey: ['users', userId],          // reactive — refetches when userId changes
+  queryFn: () => fetchUserById(userId.value),
+  enabled: computed(() => !!userId.value), // only run if userId exists
+})
+</script>
+
+<template>
+  <div>
+    <div v-if="isLoading">Loading profile...</div>
+    <div v-else-if="user">
+      <h1>{{ user.name }}</h1>
+      <p>{{ user.email }}</p>
+    </div>
+  </div>
+</template>
+```
+
+---
+
+### Mutation — POST / PUT / DELETE to Laravel API
+
+```ts
+// lib/api/posts.ts
+export interface Post {
+  id: string
+  title: string
+  body: string
+}
+
+export async function createPost(data: Omit<Post, 'id'>): Promise<Post> {
+  const res = await fetch(`${import.meta.env.VITE_API_URL}/posts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Failed to create post')
+  return res.json()
+}
+
+export async function deletePost(id: string): Promise<void> {
+  const res = await fetch(`${import.meta.env.VITE_API_URL}/posts/${id}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) throw new Error('Failed to delete post')
+}
+```
+
+```vue
+<!-- components/CreatePostForm.vue -->
+<script setup lang="ts">
+import { useMutation, useQueryClient } from '@tanstack/vue-query'
+import { createPost } from '@/lib/api/posts'
+import { ref } from 'vue'
+
+const queryClient = useQueryClient()
+const title = ref('')
+
+const { mutate, isPending, isError, error } = useMutation({
+  mutationFn: createPost,
+  onSuccess: () => {
+    // Invalidate posts list so it refetches automatically
+    queryClient.invalidateQueries({ queryKey: ['posts'] })
+    title.value = ''
+  },
+  onError: (err) => {
+    console.error('Failed to create post:', err)
+  },
+})
+
+function handleSubmit() {
+  mutate({ title: title.value, body: '' })
+}
+</script>
+
+<template>
+  <div>
+    <input v-model="title" placeholder="Post title" />
+    <button @click="handleSubmit" :disabled="isPending">
+      {{ isPending ? 'Creating...' : 'Create Post' }}
+    </button>
+    <p v-if="isError">Error: {{ error?.message }}</p>
+  </div>
+</template>
+```
+
+---
+
+### Auth Token in Every Request — Vite + Vue
+
+```ts
+// lib/api/client.ts
+import { useAuthStore } from '@/stores/useAuthStore'
+
+export async function apiFetch<T>(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<T> {
+  const auth = useAuthStore()
+
+  const res = await fetch(`${import.meta.env.VITE_API_URL}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+      ...options.headers,
+    },
+  })
+
+  if (res.status === 401) {
+    auth.logout()
+    throw new Error('Unauthorized')
+  }
+
+  if (!res.ok) throw new Error(`API error: ${res.status}`)
+
+  return res.json()
+}
+```
+
+---
+
+### Auth Token in Every Request — Nuxt 3
+
+```ts
+// composables/useApiFetch.ts
+export function useApiFetch<T>(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<T> {
+  const auth = useAuthStore()
+  const config = useRuntimeConfig()
+
+  return $fetch<T>(endpoint, {
+    baseURL: config.public.apiBase,
+    headers: {
+      ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+    },
+    ...options,
+  })
+}
+```
+
+---
+
+### SSR Prefetching — Nuxt 3
+
+```vue
+<!-- pages/posts/index.vue -->
+<script setup lang="ts">
+import { useQuery, useQueryClient } from '@tanstack/vue-query'
+import { fetchPosts } from '@/lib/api/posts'
+
+const queryClient = useQueryClient()
+
+// Prefetch on server — data is in cache before client hydrates
+if (process.server) {
+  await queryClient.prefetchQuery({
+    queryKey: ['posts'],
+    queryFn: fetchPosts,
+  })
+}
+
+const { data: posts, isLoading } = useQuery({
+  queryKey: ['posts'],
+  queryFn: fetchPosts,
+  // On first render: data already here from SSR — no loading spinner
+})
+</script>
+
+<template>
+  <div>
+    <div v-if="isLoading">Loading...</div>
+    <ul v-else>
+      <li v-for="post in posts" :key="post.id">{{ post.title }}</li>
+    </ul>
+  </div>
+</template>
+```
+
+---
+
+### Pagination
+
+```vue
+<!-- components/PaginatedPosts.vue -->
+<script setup lang="ts">
+import { useQuery, keepPreviousData } from '@tanstack/vue-query'
+import { ref, computed } from 'vue'
+
+const page = ref(1)
+
+async function fetchPostsPage(p: number) {
+  const res = await fetch(`${import.meta.env.VITE_API_URL}/posts?page=${p}`)
+  return res.json()
+}
+
+const { data, isLoading, isPlaceholderData } = useQuery({
+  queryKey: computed(() => ['posts', page.value]),
+  queryFn: () => fetchPostsPage(page.value),
+  placeholderData: keepPreviousData, // keep old page visible while new one loads
+})
+</script>
+
+<template>
+  <div>
+    <div v-if="isLoading">Loading...</div>
+    <ul v-else>
+      <li v-for="post in data?.data" :key="post.id">{{ post.title }}</li>
+    </ul>
+
+    <div>
+      <button @click="page--" :disabled="page === 1">Previous</button>
+      <span> Page {{ page }} </span>
+      <button
+        @click="page++"
+        :disabled="isPlaceholderData || !data?.next_page_url"
+      >
+        Next
+      </button>
+    </div>
+  </div>
+</template>
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```vue
+<script setup lang="ts">
+// Manual fetch in onMounted — this is exactly what Vue Query replaces
+const users = ref([])
+const loading = ref(false)
+
+onMounted(async () => {
+  loading.value = true
+  const res = await fetch('/api/users')
+  users.value = await res.json()
+  loading.value = false
+})
+</script>
+```
+</Wrong>
+<Right>
+```vue
+<script setup lang="ts">
+// Let TanStack Query handle everything
+const { data: users, isLoading } = useQuery({
+  queryKey: ['users'],
+  queryFn: fetchUsers,
+})
+</script>
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Non-reactive queryKey — won't refetch when userId changes!
+const { data } = useQuery({
+  queryKey: ['users', props.userId],   // evaluated once, never updates
+  queryFn: () => fetchUserById(props.userId),
+})
+```
+</Wrong>
+<Right>
+```ts
+// Use computed or toRef to make the key reactive
+const userId = toRef(props, 'userId')
+
+const { data } = useQuery({
+  queryKey: computed(() => ['users', userId.value]),
+  queryFn: () => fetchUserById(userId.value),
+})
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Forgetting to invalidate after mutation — UI stays stale!
+const mutation = useMutation({
+  mutationFn: deletePost,
+  // no onSuccess — list never refreshes
+})
+```
+</Wrong>
+<Right>
+```ts
+const queryClient = useQueryClient()
+
+const mutation = useMutation({
+  mutationFn: deletePost,
+  onSuccess: () => {
+    queryClient.invalidateQueries({ queryKey: ['posts'] })
+  },
+})
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** In Vue, `queryKey` must be **reactive** when it contains variables. If you pass a plain array with `props.userId`, the query will not refetch when the prop changes. Always wrap dynamic keys in `computed()` or use `toRef`.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Put all fetch functions in `lib/api/` — never write `fetch()` directly inside a component or composable.
+- Use a query key factory for consistency:
+
+```ts
+// lib/api/queryKeys.ts
+export const queryKeys = {
+  users: {
+    all: ['users'] as const,
+    byId: (id: string) => ['users', id] as const,
+  },
+  posts: {
+    all: ['posts'] as const,
+    paginated: (page: number) => ['posts', page] as const,
+    byId: (id: string) => ['posts', id] as const,
+  },
+}
+```
+
+**Performance tips**
+
+```ts
+// Use select to transform data inside the query — transformation is memoized
+const { data: userNames } = useQuery({
+  queryKey: ['users'],
+  queryFn: fetchUsers,
+  select: (data) => data.map((u) => u.name),
+})
+
+// staleTime: Infinity for static data that never changes
+const { data: categories } = useQuery({
+  queryKey: ['categories'],
+  queryFn: fetchCategories,
+  staleTime: Infinity,
+})
+```
+
+**Security considerations**
+- Never put auth tokens in `queryKey` arrays — they appear in DevTools plainly.
+- Always throw errors in fetch functions when `res.ok` is false — Vue Query needs thrown errors to trigger `isError` and retry logic.
+- In Nuxt 3, never use `useAuthStore` inside `server/` API routes — Pinia only runs on the client.
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="When would you use TanStack Query over Nuxt's built-in useFetch?"
+  difficulty="easy"
+>
+  Use `useFetch` for simple one-time data fetching on page load where you just
+  need the data rendered. Use TanStack Query when you need advanced features:
+  shared cache between multiple components, background refetching, mutations
+  with automatic cache invalidation, pagination, infinite scroll, or retry
+  logic. They can coexist in the same Nuxt project.
+</InterviewQ>
+
+<InterviewQ
+  question="Why must queryKey be reactive in Vue Query when it contains variables?"
+  difficulty="easy"
+>
+  TanStack Query watches the queryKey for changes to know when to refetch with
+  new parameters. In Vue, if you pass a plain array like `['users', props.userId]`,
+  it is evaluated once at setup time and never updates. Wrapping it in
+  `computed()` makes it a reactive reference that TanStack Query can track, so
+  it automatically refetches whenever `userId` changes.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between staleTime and gcTime in TanStack Query v5?"
+  difficulty="mid"
+>
+  `staleTime` controls how long fetched data is considered fresh. During this
+  window no background refetch happens even if the component remounts. After it
+  expires, the data is stale and will be refetched in the background on next
+  mount — but the stale data is still shown immediately while new data loads.
+  `gcTime` controls how long unused cached data stays in memory before being
+  garbage collected. A query is unused when no component is actively subscribed
+  to it.
+</InterviewQ>
+
+<InterviewQ
+  question="How does SSR prefetching work with TanStack Query in Nuxt 3?"
+  difficulty="mid"
+>
+  On the server, you call `queryClient.prefetchQuery` inside a `process.server`
+  block which fetches and caches the data. The Nuxt plugin dehydrates the cache
+  into `nuxt.payload` which is serialized into the HTML sent to the client. On
+  the client, the plugin hydrates the QueryClient from `nuxt.payload` so the
+  data is already in cache when components mount — no loading spinner and no
+  duplicate network request.
+</InterviewQ>
+
+<InterviewQ
+  question="How would you implement optimistic updates with Vue Query?"
+  difficulty="hard"
+>
+  Use `onMutate` to immediately update the cache before the server responds,
+  `onError` to roll back if the request fails, and `onSettled` to always sync
+  with the real server data afterward:
+
+```ts
+const queryClient = useQueryClient()
+
+const mutation = useMutation({
+  mutationFn: updatePost,
+  onMutate: async (newPost) => {
+    await queryClient.cancelQueries({ queryKey: ['posts', newPost.id] })
+    const previous = queryClient.getQueryData(['posts', newPost.id])
+    queryClient.setQueryData(['posts', newPost.id], newPost)
+    return { previous }
+  },
+  onError: (err, newPost, context) => {
+    queryClient.setQueryData(['posts', newPost.id], context?.previous)
+  },
+  onSettled: (data, err, newPost) => {
+    queryClient.invalidateQueries({ queryKey: ['posts', newPost.id] })
+  },
+})
+```
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The most important Vue-specific gotcha: reactive query keys. Coming from React,
+  I kept passing plain arrays with variables and wondering why queries never
+  refetched when route params changed. Always wrap dynamic keys in computed().
+  This is the number one mistake when moving from React Query to Vue Query.
+</MyNotes>
+
+<MyNotes>
+  In Nuxt 3 projects I usually use useFetch for simple page-level data and
+  TanStack Query for anything shared across multiple components or that needs
+  mutations with cache invalidation. Mixing both works perfectly fine — they
+  solve slightly different problems.
+</MyNotes>
+
+<MyNotes>
+  For connecting to Laravel API: make sure Laravel returns proper HTTP status
+  codes. A 422 for validation errors, 401 for unauthenticated, 403 for
+  unauthorized. TanStack Query error handling depends on your fetch function
+  throwing errors, which depends on you checking res.ok or $fetch throwing
+  automatically in Nuxt.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Typed Query Composable Factory
+
+```ts
+// composables/useApiQuery.ts
+import { useQuery, type UseQueryOptions } from '@tanstack/vue-query'
+import { apiFetch } from '@/lib/api/client'
+
+export function createApiQuery<T>(
+  key: readonly unknown[],
+  endpoint: string,
+  options?: Omit<UseQueryOptions<T>, 'queryKey' | 'queryFn'>
+) {
+  return function useApiQuery() {
+    return useQuery<T>({
+      queryKey: key,
+      queryFn: () => apiFetch<T>(endpoint),
+      ...options,
+    })
+  }
+}
+
+// Create once — use anywhere, fully typed
+export const useUsers = createApiQuery<User[]>(['users'], '/users')
+export const useCategories = createApiQuery<Category[]>(
+  ['categories'],
+  '/categories',
+  { staleTime: Infinity }
+)
+```
+
+---
+
+### Global Error Handler — Vite + Vue
+
+```ts
+// main.ts
+import { QueryCache, QueryClient, VueQueryPlugin } from '@tanstack/vue-query'
+import { useAuthStore } from '@/stores/useAuthStore'
+
+const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error) => {
+      const auth = useAuthStore()
+      if (error.message === 'Unauthorized') {
+        auth.logout()
+      } else {
+        // show toast notification
+        console.error(error.message)
+      }
+    },
+  }),
+  defaultOptions: {
+    queries: { staleTime: 60 * 1000 },
+  },
+})
+
+app.use(VueQueryPlugin, { queryClient })
+```
+
+---
+
+### Delete with Optimistic UI
+
+```ts
+// composables/useDeletePost.ts`
+export function useDeletePost() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: deletePost,
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: ['posts'] })
+      const previous = queryClient.getQueryData<Post[]>(['posts'])
+
+      // Optimistically remove from list
+      queryClient.setQueryData<Post[]>(['posts'], (old) =>
+        old?.filter((p) => p.id !== id) ?? []
+      )
+
+      return { previous }
+    },
+    onError: (err, id, context) => {
+      // Rollback on error
+      queryClient.setQueryData(['posts'], context?.previous)
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['posts'] })
+    },
+  })
+}
+```
+
+---
+
+*Tags: `vue` `nuxt` `tanstack-query` `vue-query` `server-state` `laravel` `intermediate`*

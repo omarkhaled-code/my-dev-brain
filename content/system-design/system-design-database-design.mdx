@@ -1,0 +1,406 @@
+---
+title: "Database Design & Normalization"
+description: "How to design clean, scalable MySQL databases — covering normalization, relationships, indexing, and common patterns used in real Laravel projects."
+category: system-design
+tools: [mysql, laravel, sqlite]
+tags: [database, mysql, normalization, indexing, schema, laravel, system-design]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## Concept Explanation
+
+Database design is about structuring your tables so data is stored **once**, queries are **fast**, and the schema is **easy to extend** as your app grows.
+
+Bad database design causes: duplicate data, update anomalies, slow queries, and painful refactors later.
+
+```
+Bad design:
+  orders table:
+  | id | customer_name | customer_email | product_name | product_price |
+  |----|---------------|----------------|--------------|---------------|
+  | 1  | Ahmed         | a@mail.com     | iPhone       | 999           |
+  | 2  | Ahmed         | a@mail.com     | iPad         | 799           |
+  ← Ahmed's email is stored TWICE. If he changes it, you update 2 rows (or forget one).
+
+Good design:
+  users:    id, name, email
+  products: id, name, price
+  orders:   id, user_id, product_id   ← only IDs, no duplication
+```
+
+---
+
+## Why It's Used
+
+- **No duplicate data** → one source of truth, no inconsistencies.
+- **Faster queries** → proper indexes mean MySQL finds rows in milliseconds not seconds.
+- **Easy to change** → update a user's email in one place, it reflects everywhere.
+- **Scalable** → a well-designed schema handles millions of rows gracefully.
+
+---
+
+## Normalization (Plain English)
+
+Normalization is a set of rules to eliminate duplicate data. You only need to know 3 levels:
+
+### 1NF — Each column holds one value
+
+```sql
+-- ❌ Bad: multiple values in one column
+| id | name  | phone_numbers          |
+|----|-------|------------------------|
+| 1  | Ahmed | 0100000, 0111111       |  ← two phones in one cell
+
+-- ✅ Good: one value per cell
+users:         id, name
+user_phones:   id, user_id, phone_number
+```
+
+### 2NF — Every column depends on the FULL primary key
+
+```sql
+-- ❌ Bad: order_items table where product_name depends only on product_id, not the full key
+| order_id | product_id | product_name | quantity |
+|----------|------------|--------------|----------|
+| 1        | 5          | iPhone       | 2        |
+  ↑ product_name only depends on product_id, not on (order_id + product_id)
+
+-- ✅ Good: move product_name to products table
+products:     id, name, price
+order_items:  order_id, product_id, quantity
+```
+
+### 3NF — Columns depend only on the primary key, not on other columns
+
+```sql
+-- ❌ Bad: city depends on zip_code, not on user id
+| id | name  | zip_code | city  |
+|----|-------|----------|-------|
+| 1  | Ahmed | 11511    | Cairo |
+  ↑ city is determined by zip_code, not by user id
+
+-- ✅ Good: separate table
+users:      id, name, zip_code
+zip_codes:  zip_code, city
+```
+
+---
+
+## Real-World Use Cases
+
+- **E-commerce:** users → orders → order_items → products
+- **Blog:** users → posts → comments → likes
+- **SaaS:** companies → users → subscriptions → invoices
+
+---
+
+## Code Examples
+
+### Designing a Real Schema — E-Commerce
+
+```sql
+-- Users
+CREATE TABLE users (
+    id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name        VARCHAR(100) NOT NULL,
+    email       VARCHAR(150) NOT NULL UNIQUE,
+    password    VARCHAR(255) NOT NULL,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at  TIMESTAMP NULL  -- soft delete
+);
+
+-- Categories
+CREATE TABLE categories (
+    id        BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name      VARCHAR(100) NOT NULL,
+    slug      VARCHAR(100) NOT NULL UNIQUE,
+    parent_id BIGINT UNSIGNED NULL REFERENCES categories(id)  -- self-referencing for subcategories
+);
+
+-- Products
+CREATE TABLE products (
+    id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    category_id BIGINT UNSIGNED NOT NULL REFERENCES categories(id),
+    name        VARCHAR(200) NOT NULL,
+    slug        VARCHAR(200) NOT NULL UNIQUE,
+    description TEXT,
+    price       DECIMAL(10, 2) NOT NULL,  -- DECIMAL for money, never FLOAT
+    stock       INT UNSIGNED DEFAULT 0,
+    is_active   BOOLEAN DEFAULT TRUE,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Orders
+CREATE TABLE orders (
+    id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id    BIGINT UNSIGNED NOT NULL REFERENCES users(id),
+    status     ENUM('pending','processing','shipped','delivered','cancelled') DEFAULT 'pending',
+    total      DECIMAL(10, 2) NOT NULL,
+    notes      TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Order Items (pivot between orders and products)
+CREATE TABLE order_items (
+    id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    order_id   BIGINT UNSIGNED NOT NULL REFERENCES orders(id),
+    product_id BIGINT UNSIGNED NOT NULL REFERENCES products(id),
+    quantity   INT UNSIGNED NOT NULL,
+    unit_price DECIMAL(10, 2) NOT NULL,  -- snapshot price at time of order
+    subtotal   DECIMAL(10, 2) NOT NULL
+);
+```
+
+### Same Schema in Laravel Migrations
+
+```php
+// database/migrations/create_products_table.php
+Schema::create('products', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('category_id')->constrained()->cascadeOnDelete();
+    $table->string('name', 200);
+    $table->string('slug', 200)->unique();
+    $table->text('description')->nullable();
+    $table->decimal('price', 10, 2);        // ✅ decimal for money
+    $table->unsignedInteger('stock')->default(0);
+    $table->boolean('is_active')->default(true);
+    $table->timestamps();
+});
+
+// database/migrations/create_order_items_table.php
+Schema::create('order_items', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('order_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('product_id')->constrained()->restrictOnDelete(); // don't delete product if it's in an order
+    $table->unsignedInteger('quantity');
+    $table->decimal('unit_price', 10, 2);   // snapshot — store price AT TIME OF ORDER
+    $table->decimal('subtotal', 10, 2);
+    $table->timestamps();
+});
+```
+
+### Indexes — Making Queries Fast
+
+```sql
+-- Add indexes on columns you frequently query/filter/join on
+
+-- Single column index
+CREATE INDEX idx_products_category ON products(category_id);
+CREATE INDEX idx_orders_user ON orders(user_id);
+CREATE INDEX idx_orders_status ON orders(status);
+
+-- Composite index — for queries filtering by multiple columns together
+CREATE INDEX idx_products_category_active ON products(category_id, is_active);
+-- This speeds up: WHERE category_id = 5 AND is_active = 1
+
+-- Full-text index — for search
+CREATE FULLTEXT INDEX idx_products_search ON products(name, description);
+-- Used with: WHERE MATCH(name, description) AGAINST('iPhone' IN BOOLEAN MODE)
+```
+
+```php
+// In Laravel migrations
+$table->index('category_id');
+$table->index(['category_id', 'is_active']);  // composite
+$table->fullText(['name', 'description']);    // full-text search
+```
+
+### Many-to-Many Relationships
+
+```php
+// Products ↔ Tags (a product has many tags, a tag has many products)
+
+Schema::create('tags', function (Blueprint $table) {
+    $table->id();
+    $table->string('name', 50)->unique();
+    $table->string('slug', 50)->unique();
+});
+
+// Pivot table — by convention: alphabetical order, singular, snake_case
+Schema::create('product_tag', function (Blueprint $table) {
+    $table->foreignId('product_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('tag_id')->constrained()->cascadeOnDelete();
+    $table->primary(['product_id', 'tag_id']); // composite primary key
+});
+```
+
+```php
+// In models
+class Product extends Model
+{
+    public function tags()
+    {
+        return $this->belongsToMany(Tag::class);
+    }
+}
+
+// Usage
+$product->tags()->attach([1, 2, 3]);
+$product->tags()->sync([1, 3]);      // replaces all tags
+$product->tags()->detach(2);
+```
+
+### Polymorphic Relationships
+
+```php
+// Comments that can belong to Posts OR Videos OR Products
+
+Schema::create('comments', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->constrained();
+    $table->morphs('commentable');   // adds commentable_id + commentable_type columns
+    $table->text('body');
+    $table->timestamps();
+});
+
+// commentable_type stores: "App\Models\Post", "App\Models\Video", etc.
+// commentable_id  stores: the ID of that record
+```
+
+```php
+class Post extends Model
+{
+    public function comments()
+    {
+        return $this->morphMany(Comment::class, 'commentable');
+    }
+}
+
+class Comment extends Model
+{
+    public function commentable()
+    {
+        return $this->morphTo();
+    }
+}
+
+// Usage
+$post->comments()->create(['user_id' => 1, 'body' => 'Great post!']);
+$comment->commentable; // returns the Post (or Video, or Product)
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```sql
+-- Using FLOAT for money
+price FLOAT   -- ❌ floating point errors: 19.99 might store as 19.990000001
+```
+</Wrong>
+<Right>
+```sql
+price DECIMAL(10, 2)  -- ✅ exact precision, no rounding errors
+-- DECIMAL(10, 2) = up to 99,999,999.99
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Not storing price snapshot in order_items
+Schema::create('order_items', function (Blueprint $table) {
+    $table->foreignId('product_id')->constrained();
+    $table->integer('quantity');
+    // ❌ No price stored — if product price changes, historical orders show wrong total
+});
+```
+</Wrong>
+<Right>
+```php
+Schema::create('order_items', function (Blueprint $table) {
+    $table->foreignId('product_id')->constrained();
+    $table->integer('quantity');
+    $table->decimal('unit_price', 10, 2); // ✅ snapshot price at time of purchase
+});
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```sql
+-- No indexes on foreign keys
+SELECT * FROM orders WHERE user_id = 1;
+-- ❌ Full table scan on 1 million orders — very slow
+```
+</Wrong>
+<Right>
+```sql
+CREATE INDEX idx_orders_user_id ON orders(user_id);
+-- ✅ MySQL jumps directly to user's orders — milliseconds not seconds
+```
+</Right>
+</WrongRight>
+
+---
+
+## Best Practices
+
+- Use `BIGINT UNSIGNED` for IDs — `INT` maxes out at ~2 billion rows.
+- Always use `DECIMAL` for money, never `FLOAT` or `DOUBLE`.
+- Index every foreign key column.
+- Store price snapshots in order items — product prices change over time.
+- Use `deleted_at` (soft deletes) for anything users might want to recover.
+- Name pivot tables alphabetically: `product_tag` not `tag_product`.
+- Add `created_at` / `updated_at` to every table — you'll always want to know when things happened.
+- Use `ENUM` for fixed status values, but only when the list truly never changes.
+
+---
+
+## Interview Questions
+
+<InterviewQ question="What is database normalization and why does it matter?" difficulty="easy">
+  Normalization is the process of organizing a database to reduce data duplication and improve
+  integrity. It matters because duplicate data leads to update anomalies — if you store a
+  customer's email in 100 order rows and they change it, you must update 100 rows or have
+  inconsistent data. Normalized design stores the email once in the users table and references
+  it by ID everywhere else.
+</InterviewQ>
+
+<InterviewQ question="When would you intentionally denormalize a database?" difficulty="mid">
+  When read performance is critical and the data rarely changes. For example, storing a
+  pre-calculated order total on the orders table instead of summing order_items on every
+  request. Or storing a user's full name on comments so you don't JOIN to users on every
+  comment load. This is a deliberate trade-off: you accept some duplication to avoid expensive
+  JOINs at read time. Always normalize first, denormalize only when you have a measured
+  performance problem.
+</InterviewQ>
+
+<InterviewQ question="What is an index and when should you add one?" difficulty="easy">
+  An index is a separate data structure MySQL maintains to find rows quickly without scanning
+  the entire table. Add indexes on columns used in WHERE clauses, JOIN conditions, and ORDER BY.
+  The cost is slightly slower writes (the index must be updated) and more disk space.
+  Always index foreign key columns. For columns with very low cardinality (like a boolean),
+  indexes are less effective.
+</InterviewQ>
+
+<InterviewQ question="What is a composite index and when is it better than two separate indexes?" difficulty="mid">
+  A composite index covers multiple columns together. It's better when you frequently query
+  by both columns together — for example `WHERE category_id = 5 AND is_active = 1`. MySQL
+  can use the composite index for this, whereas two separate indexes would require MySQL
+  to merge results. The order of columns in a composite index matters — put the most
+  selective column first, and the index can only be used left-to-right.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The price snapshot lesson I learned the hard way. Built an order system without storing
+  unit_price in order_items. Three months later the client updated product prices and every
+  historical order showed the wrong total. Always snapshot the price at the time of the transaction.
+</MyNotes>
+
+<MyNotes>
+  I start every new schema design on paper (or Excalidraw) before writing a single migration.
+  Drawing the entities and relationships first saves hours of refactoring later. A 10-minute
+  sketch prevents a 3-hour migration headache.
+</MyNotes>

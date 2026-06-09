@@ -1,0 +1,373 @@
+---
+title: "Scaling & Load Balancing"
+description: "How to scale a Laravel application when one server isn't enough — covering vertical vs horizontal scaling, load balancing, stateless apps, and database scaling."
+category: system-design
+tools: [laravel, mysql, redis, nginx]
+tags: [scaling, load-balancing, performance, nginx, system-design]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## Concept Explanation
+
+Scaling means making your app handle more users. There are two ways to do it:
+
+```
+Vertical Scaling (Scale Up):
+  Make your one server bigger — more CPU, more RAM
+  Simple, but has limits. You can't scale infinitely on one machine.
+
+  [Server: 2 CPU, 4GB RAM]  →  [Server: 16 CPU, 64GB RAM]
+
+Horizontal Scaling (Scale Out):
+  Add more servers — spread traffic across many machines
+  More complex, but unlimited. Big tech companies do this.
+
+  [Server A]                   [Server A]
+                    →          [Server B]  ← Load Balancer distributes traffic
+                               [Server C]
+```
+
+**Load Balancer** = a server that sits in front and distributes incoming requests across your servers.
+
+```
+Users → Load Balancer → Server A (handles request 1, 4, 7...)
+                     → Server B (handles request 2, 5, 8...)
+                     → Server C (handles request 3, 6, 9...)
+```
+
+---
+
+## Why It's Used
+
+- **Handle more traffic:** One server handles 1,000 requests/minute. Three servers handle 3,000.
+- **High availability:** If Server A crashes, the load balancer sends traffic to B and C. Zero downtime.
+- **Zero-downtime deploys:** Update servers one at a time while others keep serving traffic.
+- **Cost efficiency:** Scale up during peak hours, scale down at night.
+
+---
+
+## Real-World Use Cases
+
+- An e-commerce app gets 10x traffic during a sale → spin up extra servers temporarily.
+- A server crashes at 2am → load balancer detects it and stops sending traffic to it automatically.
+- Deploy a new version without taking the site down → rolling update across servers one by one.
+
+---
+
+## Code Examples
+
+### Making Laravel Stateless (Required for Horizontal Scaling)
+
+The biggest challenge with horizontal scaling: if a user logs in on Server A, Server B doesn't know about it. You must move all shared state out of individual servers.
+
+```
+Problem with multiple servers:
+  User logs in → Server A creates session → stored on Server A's disk
+  Next request → Load Balancer sends to Server B → No session! User is logged out 😱
+
+Solution: Store sessions in Redis (shared across all servers)
+  User logs in → Server A creates session → stored in Redis
+  Next request → Server B → reads session from Redis → User is logged in ✅
+```
+
+```env
+# .env — move everything to shared storage (Redis)
+SESSION_DRIVER=redis
+CACHE_DRIVER=redis
+QUEUE_CONNECTION=redis
+
+# File storage → use S3 or compatible service
+FILESYSTEM_DISK=s3
+```
+
+```php
+// config/filesystems.php
+// Move uploaded files to S3 (shared across all servers)
+// Local disk is per-server — Server B can't access files uploaded on Server A
+
+'s3' => [
+    'driver' => 's3',
+    'key'    => env('AWS_ACCESS_KEY_ID'),
+    'secret' => env('AWS_SECRET_ACCESS_KEY'),
+    'region' => env('AWS_DEFAULT_REGION'),
+    'bucket' => env('AWS_BUCKET'),
+    'url'    => env('AWS_URL'),
+],
+```
+
+### Nginx Load Balancer Config
+
+```nginx
+# /etc/nginx/nginx.conf on your load balancer server
+
+upstream app_servers {
+    # Load balancing algorithms:
+    # (default) round-robin → requests distributed equally in order
+    # least_conn            → send to server with fewest active connections
+    # ip_hash               → same client always goes to same server (sticky sessions)
+
+    least_conn;
+
+    server 10.0.0.1:3000;    # Server A (private IP)
+    server 10.0.0.2:3000;    # Server B
+    server 10.0.0.3:3000;    # Server C
+
+    # Health check — stop sending traffic to failed servers
+    server 10.0.0.4:3000 backup;  # only used if others are down
+}
+
+server {
+    listen 80;
+    server_name myapp.com;
+
+    location / {
+        proxy_pass http://app_servers;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Health check
+        proxy_next_upstream error timeout invalid_header http_500;
+    }
+}
+```
+
+### Handling Real IP Behind Load Balancer
+
+```php
+// When behind a load balancer, $request->ip() returns the load balancer's IP, not the user's
+// Fix in Laravel:
+
+// app/Http/Middleware/TrustProxies.php
+class TrustProxies extends Middleware
+{
+    // Trust your load balancer's IP
+    protected $proxies = [
+        '10.0.0.10',  // load balancer private IP
+    ];
+
+    // Or trust all proxies (if using services like Cloudflare)
+    protected $proxies = '*';
+
+    protected $headers = Request::HEADER_X_FORWARDED_FOR |
+                         Request::HEADER_X_FORWARDED_HOST |
+                         Request::HEADER_X_FORWARDED_PORT |
+                         Request::HEADER_X_FORWARDED_PROTO;
+}
+```
+
+### Database Scaling — Read Replicas
+
+```
+When your database becomes the bottleneck:
+  Most apps do 90% reads, 10% writes
+  Solution: one primary (writes) + multiple replicas (reads)
+
+  App writes → Primary DB → replicates to → Replica 1
+                                          → Replica 2
+  App reads  → Replica 1 or Replica 2 (distributed)
+```
+
+```php
+// config/database.php
+'mysql' => [
+    'driver'   => 'mysql',
+    'read'     => [
+        'host' => [
+            '10.0.1.1',   // Replica 1
+            '10.0.1.2',   // Replica 2
+        ],
+    ],
+    'write'    => [
+        'host' => ['10.0.1.0'],  // Primary
+    ],
+    // Laravel automatically routes read queries to replicas
+    // and writes to primary — zero code changes needed!
+    'database' => env('DB_DATABASE'),
+    'username' => env('DB_USERNAME'),
+    'password' => env('DB_PASSWORD'),
+],
+```
+
+```php
+// Force a read to use the write connection (after just writing data)
+// Avoids replication lag issues
+$user = User::on('mysql::write')->find($id);
+
+// Or use sticky connections (reads after writes go to primary in same request)
+// config/database.php
+'sticky' => true,
+```
+
+### Horizontal Scaling Checklist for Laravel
+
+```php
+// ✅ 1. Sessions in Redis
+SESSION_DRIVER=redis
+
+// ✅ 2. Cache in Redis
+CACHE_DRIVER=redis
+
+// ✅ 3. Queues in Redis
+QUEUE_CONNECTION=redis
+
+// ✅ 4. File uploads to S3
+FILESYSTEM_DISK=s3
+
+// ✅ 5. No local file storage (logs → cloud logging or centralized)
+LOG_CHANNEL=stack   // Consider: Papertrail, Logtail, CloudWatch
+
+// ✅ 6. Trust proxies middleware configured
+
+// ✅ 7. APP_KEY same on all servers (used for encryption)
+// Copy the same APP_KEY to all server .env files
+
+// ✅ 8. Config cached per server
+php artisan config:cache
+php artisan route:cache
+```
+
+### Scaling Database Writes — Sharding (Advanced)
+
+```
+When even the primary database is too slow for writes:
+  Shard by splitting data across multiple databases
+
+  Users A-M → Database 1
+  Users N-Z → Database 2
+
+  This is complex and usually not needed until millions of users.
+  Most apps never need this — optimize queries and add replicas first.
+```
+
+### Simple Performance Wins Before Scaling
+
+```php
+// Before adding servers, try these first:
+
+// 1. Cache expensive queries (see Caching file)
+$products = Cache::remember('homepage_products', 3600, fn() => Product::featured()->get());
+
+// 2. Add database indexes
+$table->index('user_id');
+$table->index(['category_id', 'is_active']);
+
+// 3. Eager load relationships (fix N+1 — see Database Design file)
+Product::with(['category', 'tags'])->paginate(20);
+
+// 4. Paginate everything — never load unbounded collections
+Product::paginate(20);   // not Product::all()
+
+// 5. Queue slow tasks (see Queues file)
+SendEmailJob::dispatch($user);
+
+// 6. Run php artisan optimize in production
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+php artisan optimize
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Storing sessions on disk (breaks with multiple servers)
+SESSION_DRIVER=file   // ❌ Each server has its own sessions — users randomly get logged out
+```
+</Wrong>
+<Right>
+```php
+SESSION_DRIVER=redis   // ✅ All servers share the same session store
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Vertical scaling first when horizontal is better
+// "My server is slow, let me upgrade from $20/month to $200/month plan"
+// ❌ 10x cost, still single point of failure, still limited ceiling
+```
+</Wrong>
+<Right>
+```php
+// Three $20/month servers + $10 load balancer = $70/month
+// ✅ 3x capacity, no single point of failure, easily add more servers
+```
+</Right>
+</WrongRight>
+
+---
+
+## Best Practices
+
+- Fix slow queries and add caching before adding servers — scaling is expensive, optimization is free.
+- Design stateless apps from day one — sessions and files in shared storage.
+- Use `sticky: true` in database config to avoid replication lag bugs.
+- Health check endpoints: add `GET /health` that returns 200 so load balancers can check server status.
+- Monitor before scaling — use Laravel Telescope, Debugbar, or New Relic to find actual bottlenecks.
+- Scale horizontally for web servers, vertically for databases (databases are harder to shard).
+
+```php
+// Simple health check endpoint
+Route::get('/health', function () {
+    return response()->json([
+        'status'    => 'ok',
+        'timestamp' => now()->toIso8601String(),
+        'db'        => DB::connection()->getPdo() ? 'ok' : 'error',
+    ]);
+});
+```
+
+---
+
+## Interview Questions
+
+<InterviewQ question="What is the difference between vertical and horizontal scaling?" difficulty="easy">
+  Vertical scaling (scale up) means making one server more powerful — more CPU, RAM, or storage.
+  It's simple but has hard limits and creates a single point of failure. Horizontal scaling
+  (scale out) means adding more servers and distributing load between them. It's more complex
+  but has no theoretical limit and provides redundancy — if one server fails, others continue serving.
+</InterviewQ>
+
+<InterviewQ question="What makes an application stateless and why does it matter for scaling?" difficulty="mid">
+  A stateless application stores no user-specific data on the server between requests — sessions
+  go to Redis, files go to S3, no server-local state. It matters for scaling because when you
+  add a second server, any server can handle any request — the user doesn't need to be "stuck"
+  to one server. If your app stores sessions in local files, a user on Server A is logged out
+  when their next request hits Server B.
+</InterviewQ>
+
+<InterviewQ question="What is a database read replica and when would you use it?" difficulty="mid">
+  A read replica is a copy of your primary database that stays synchronized and handles read
+  queries. You use it when your database is under heavy read load — most web apps are 80-90%
+  reads. By sending reads to replicas and writes to the primary, you multiply your read capacity.
+  Laravel supports this natively in database config with the read/write keys. The trade-off is
+  slight replication lag — replicas may be milliseconds behind the primary.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The most important scaling lesson: don't scale prematurely. Most performance problems are
+  N+1 queries, missing indexes, or cacheable data. Fix those first. Adding servers to a
+  slow application gives you a slightly less slow application. Fixing the underlying problem
+  gives you a fast application.
+</MyNotes>
+
+<MyNotes>
+  The `sticky: true` database option saved me hours of debugging. Without it, you write a user
+  record then immediately read it — but the read goes to a replica that hasn't caught up yet,
+  so you get stale data. With sticky enabled, any reads after a write in the same request go
+  to the primary. Enable it by default on every project.
+</MyNotes>

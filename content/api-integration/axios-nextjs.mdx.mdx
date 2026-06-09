@@ -1,0 +1,796 @@
+---
+title: "API Integration with Axios in Next.js"
+description: "How to set up Axios in Next.js App Router with interceptors, global error handling, request/response transformation, and CRUD patterns connected to a Laravel API through Route Handlers."
+category: api-integration
+tools: [nextjs, react]
+tags: [axios, api, crud, nextjs, laravel, interceptors, typescript, error-handling]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+Axios is an HTTP client library that works in both the browser and Node.js. Compared to plain fetch, Axios adds automatic JSON parsing, request/response interceptors, automatic error throwing on non-2xx responses, request cancellation, and timeout support out of the box.
+
+In Next.js the same architecture applies — client components never call Laravel directly. The difference is where you use Axios:
+```tsx
+Where Axios runs in Next.js:
+Server-side (Route Handlers, Server Components):
+→ Axios calls Laravel with Bearer token from httpOnly cookie
+Client-side (Client Components):
+→ Axios calls your Next.js Route Handlers
+→ Never calls Laravel directly
+```
+**Axios vs fetch in Next.js:**
+
+| Feature | fetch | Axios |
+|---------|-------|-------|
+| JSON auto-parse | Next.js only (Server) | Always |
+| Error on non-2xx | No — must check res.ok | Yes — throws automatically |
+| Interceptors | Manual wrapper | Built-in |
+| Request cancellation | AbortController | CancelToken / AbortController |
+| Timeout | Manual | Built-in option |
+| Progress tracking | No | Yes |
+| Bundle size | 0kb (native) | ~14kb |
+
+<Callout type="note">
+  **When to use Axios over fetch?** Use Axios when you need interceptors for
+  global error handling, token refresh logic, request logging, or when you
+  want consistent behavior across server and client without writing wrappers
+  manually. For simple one-off requests, plain fetch is fine.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **Interceptors:** One place to handle auth errors, logging, and token refresh — no per-request boilerplate.
+- **Automatic error throwing:** No `if (!res.ok)` checks — non-2xx responses throw automatically.
+- **Instance pattern:** Create separate Axios instances for server-side (with token) and client-side calls.
+- **TypeScript:** Full generic support — `axios.get<User>('/users')` returns typed data directly.
+- **Timeout:** Set a global timeout so hung requests don't freeze your UI.
+
+---
+
+## Real-World Use Cases
+
+- **Global 401 handling:** Interceptor catches every 401, clears auth state, redirects to login — zero per-request handling.
+- **Request logging:** Log every outgoing request in development with one interceptor.
+- **Error message normalization:** Transform Laravel error shapes into a consistent format in one place.
+- **File upload with progress:** Track upload progress with `onUploadProgress`.
+- **Request timeout:** Kill requests that take more than 10 seconds automatically.
+
+---
+
+## When NOT to Use It
+
+- **Simple one-off requests:** Plain `fetch` is shorter and has zero bundle cost.
+- **Server Components with caching:** Next.js extends native `fetch` with caching — Axios does not benefit from this. Use `fetch` in Server Components when you need `next: { revalidate }` or cache tags.
+- **Edge Runtime:** Axios does not work in the Edge Runtime (Next.js Middleware). Use native `fetch` there.
+
+---
+
+## Code Examples
+
+### Install
+
+```bash
+npm install axios
+```
+
+---
+
+### Base Types
+
+```ts
+// lib/types/api.ts
+export interface PaginatedResponse<T> {
+  data: T[]
+  current_page: number
+  last_page: number
+  per_page: number
+  total: number
+  next_page_url: string | null
+  prev_page_url: string | null
+}
+
+export interface ApiError {
+  message: string
+  errors?: Record<string, string[]>
+  status: number
+}
+
+export interface Post {
+  id: string
+  title: string
+  body: string
+  user_id: string
+  created_at: string
+  updated_at: string
+}
+
+export interface User {
+  id: string
+  name: string
+  email: string
+  role: string
+}
+```
+
+---
+
+### Server-Side Axios Instance — For Route Handlers
+
+```ts
+// lib/api/axiosServer.ts
+// Used in Route Handlers and Server Components — reads httpOnly cookie
+import axios from 'axios'
+import { cookies } from 'next/headers'
+
+export async function createServerAxios() {
+  const cookieStore = await cookies()
+  const token = cookieStore.get('auth_token')?.value
+
+  const instance = axios.create({
+    baseURL: process.env.LARAVEL_API_URL,
+    timeout: 10000,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  })
+
+  // Response interceptor — normalize errors
+  instance.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      const status = error.response?.status
+      const data = error.response?.data
+
+      if (status === 401) {
+        throw new Error('Unauthorized')
+      }
+
+      const apiError: ApiError = {
+        message: data?.message ?? 'Something went wrong',
+        errors: data?.errors,
+        status: status ?? 500,
+      }
+
+      return Promise.reject(apiError)
+    }
+  )
+
+  return instance
+}
+```
+
+---
+
+### Client-Side Axios Instance — For Client Components
+
+```ts
+// lib/api/axiosClient.ts
+// Used in Client Components — calls Next.js Route Handlers only
+import axios from 'axios'
+import type { ApiError } from '@/lib/types/api'
+
+const axiosClient = axios.create({
+  baseURL: '/', // calls own Next.js routes
+  timeout: 10000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+})
+
+// Request interceptor — log in development
+axiosClient.interceptors.request.use((config) => {
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[API] ${config.method?.toUpperCase()} ${config.url}`)
+  }
+  return config
+})
+
+// Response interceptor — global error handling
+axiosClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error.response?.status
+    const data = error.response?.data
+
+    // Global 401 handling — redirect to login
+    if (status === 401) {
+      window.location.href = '/login'
+      return Promise.reject(error)
+    }
+
+    // Normalize error shape
+    const apiError: ApiError = {
+      message: data?.message ?? 'Something went wrong',
+      errors: data?.errors,
+      status: status ?? 500,
+    }
+
+    return Promise.reject(apiError)
+  }
+)
+
+export { axiosClient }
+```
+
+---
+
+### Route Handlers — CRUD with Axios
+
+```ts
+// app/api/posts/route.ts — GET list + POST create
+import { NextRequest, NextResponse } from 'next/server'
+import { createServerAxios } from '@/lib/api/axiosServer'
+import type { PaginatedResponse, Post, ApiError } from '@/lib/types/api'
+
+// GET /api/posts?page=1
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url)
+    const page = searchParams.get('page') ?? '1'
+    const perPage = searchParams.get('per_page') ?? '15'
+
+    const axios = await createServerAxios()
+    const { data } = await axios.get<PaginatedResponse<Post>>(
+      `/posts?page=${page}&per_page=${perPage}`
+    )
+
+    return NextResponse.json(data)
+  } catch (error) {
+    const err = error as ApiError
+    if (err.message === 'Unauthorized') {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
+    }
+    return NextResponse.json(
+      { message: err.message, errors: err.errors },
+      { status: err.status ?? 500 }
+    )
+  }
+}
+
+// POST /api/posts
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+
+    const axios = await createServerAxios()
+    const { data } = await axios.post<Post>('/posts', body)
+
+    return NextResponse.json(data, { status: 201 })
+  } catch (error) {
+    const err = error as ApiError
+    if (err.message === 'Unauthorized') {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
+    }
+    return NextResponse.json(
+      { message: err.message, errors: err.errors },
+      { status: err.status ?? 500 }
+    )
+  }
+}
+```
+
+```ts
+// app/api/posts/[id]/route.ts — GET single + PATCH + DELETE
+import { NextRequest, NextResponse } from 'next/server'
+import { createServerAxios } from '@/lib/api/axiosServer'
+import type { Post, ApiError } from '@/lib/types/api'
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const axios = await createServerAxios()
+    const { data } = await axios.get<Post>(`/posts/${params.id}`)
+    return NextResponse.json(data)
+  } catch (error) {
+    const err = error as ApiError
+    return NextResponse.json(
+      { message: err.message },
+      { status: err.status ?? 500 }
+    )
+  }
+}
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const body = await req.json()
+    const axios = await createServerAxios()
+    const { data } = await axios.patch<Post>(`/posts/${params.id}`, body)
+    return NextResponse.json(data)
+  } catch (error) {
+    const err = error as ApiError
+    return NextResponse.json(
+      { message: err.message, errors: err.errors },
+      { status: err.status ?? 500 }
+    )
+  }
+}
+
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const axios = await createServerAxios()
+    await axios.delete(`/posts/${params.id}`)
+    return NextResponse.json({ success: true })
+  } catch (error) {
+    const err = error as ApiError
+    return NextResponse.json(
+      { message: err.message },
+      { status: err.status ?? 500 }
+    )
+  }
+}
+```
+
+---
+
+### Client Component — Using axiosClient
+
+```tsx
+// components/posts/PostList.tsx
+'use client'
+
+import { useEffect, useState } from 'react'
+import { axiosClient } from '@/lib/api/axiosClient'
+import type { Post, PaginatedResponse, ApiError } from '@/lib/types/api'
+
+export function PostList() {
+  const [posts, setPosts] = useState<Post[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const [lastPage, setLastPage] = useState(1)
+
+  useEffect(() => {
+    fetchPosts()
+  }, [page])
+
+  async function fetchPosts() {
+    setLoading(true)
+    setError(null)
+
+    try {
+      const { data } = await axiosClient.get<PaginatedResponse<Post>>(
+        '/api/posts',
+        { params: { page, per_page: 15 } }
+      )
+
+      setPosts(data.data)
+      setLastPage(data.last_page)
+    } catch (err) {
+      const apiError = err as ApiError
+      setError(apiError.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleDelete(id: string) {
+    try {
+      await axiosClient.delete(`/api/posts/${id}`)
+      setPosts((prev) => prev.filter((p) => p.id !== id))
+    } catch (err) {
+      const apiError = err as ApiError
+      alert(apiError.message)
+    }
+  }
+
+  if (loading) return <div>Loading...</div>
+  if (error) return <div>Error: {error}</div>
+
+  return (
+    <div>
+      <ul>
+        {posts.map((post) => (
+          <li key={post.id}>
+            <span>{post.title}</span>
+            <button onClick={() => handleDelete(post.id)}>Delete</button>
+          </li>
+        ))}
+      </ul>
+
+      <div>
+        <button
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page === 1}
+        >
+          Previous
+        </button>
+        <span>Page {page} of {lastPage}</span>
+        <button
+          onClick={() => setPage((p) => p + 1)}
+          disabled={page === lastPage}
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+### Advanced — Token Refresh Interceptor
+
+```ts
+// lib/api/axiosClient.ts — with token refresh
+import axios from 'axios'
+import type { ApiError } from '@/lib/types/api'
+
+const axiosClient = axios.create({
+  baseURL: '/',
+  timeout: 10000,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+let isRefreshing = false
+let failedQueue: Array<{
+  resolve: (value: unknown) => void
+  reject: (reason?: unknown) => void
+}> = []
+
+function processQueue(error: unknown) {
+  failedQueue.forEach(({ resolve, reject }) => {
+    if (error) reject(error)
+    else resolve(null)
+  })
+  failedQueue = []
+}
+
+axiosClient.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config
+    const status = error.response?.status
+
+    // If 401 and not already retrying
+    if (status === 401 && !originalRequest._retry) {
+      if (isRefreshing) {
+        // Queue this request until refresh is done
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject })
+        }).then(() => axiosClient(originalRequest))
+          .catch((err) => Promise.reject(err))
+      }
+
+      originalRequest._retry = true
+      isRefreshing = true
+
+      try {
+        // Try to refresh the token
+        await axiosClient.post('/api/auth/refresh')
+        processQueue(null)
+        return axiosClient(originalRequest) // retry original request
+      } catch (refreshError) {
+        processQueue(refreshError)
+        window.location.href = '/login'
+        return Promise.reject(refreshError)
+      } finally {
+        isRefreshing = false
+      }
+    }
+
+    const data = error.response?.data
+    const apiError: ApiError = {
+      message: data?.message ?? 'Something went wrong',
+      errors: data?.errors,
+      status: status ?? 500,
+    }
+
+    return Promise.reject(apiError)
+  }
+)
+
+export { axiosClient }
+```
+
+---
+
+### File Upload with Progress
+
+```tsx
+// components/FileUpload.tsx
+'use client'
+
+import { useState } from 'react'
+import { axiosClient } from '@/lib/api/axiosClient'
+
+export function FileUpload() {
+  const [progress, setProgress] = useState(0)
+  const [uploading, setUploading] = useState(false)
+  const [url, setUrl] = useState<string | null>(null)
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    setUploading(true)
+    setProgress(0)
+
+    try {
+      const { data } = await axiosClient.post<{ url: string }>(
+        '/api/upload',
+        formData,
+        {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          onUploadProgress: (progressEvent) => {
+            const percent = Math.round(
+              (progressEvent.loaded * 100) / (progressEvent.total ?? 1)
+            )
+            setProgress(percent)
+          },
+        }
+      )
+      setUrl(data.url)
+    } catch {
+      console.error('Upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <div>
+      <input type="file" onChange={handleUpload} disabled={uploading} />
+      {uploading && (
+        <div>
+          <div style={{ width: `${progress}%` }} />
+          <span>{progress}%</span>
+        </div>
+      )}
+      {url && <img src={url} alt="Uploaded" />}
+    </div>
+  )
+}
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```ts
+// Creating a new Axios instance on every request — loses interceptors
+async function fetchPosts() {
+  const instance = axios.create({ baseURL: '/' }) // ❌ new instance every time
+  const { data } = await instance.get('/api/posts')
+}
+```
+</Wrong>
+<Right>
+```ts
+// Import the shared instance — interceptors are registered once
+import { axiosClient } from '@/lib/api/axiosClient'
+
+async function fetchPosts() {
+  const { data } = await axiosClient.get('/api/posts') // ✅
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Using axiosClient (browser) in a Route Handler — wrong instance
+import { axiosClient } from '@/lib/api/axiosClient'
+
+export async function GET() {
+  const { data } = await axiosClient.get('/posts') // ❌ calls localhost:3000/posts not Laravel
+}
+```
+</Wrong>
+<Right>
+```ts
+// Use createServerAxios in Route Handlers — reads cookie, calls Laravel
+import { createServerAxios } from '@/lib/api/axiosServer'
+
+export async function GET() {
+  const axios = await createServerAxios()
+  const { data } = await axios.get('/posts') // ✅ calls LARAVEL_API_URL/posts
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Accessing error.message directly without checking Axios error shape
+} catch (error) {
+  setError(error.message) // ❌ might be "Request failed with status code 422"
+}
+```
+</Wrong>
+<Right>
+```ts
+// After interceptor normalization, cast to ApiError
+} catch (error) {
+  const apiError = error as ApiError
+  setError(apiError.message) // ✅ normalized message from Laravel
+  if (apiError.errors) {
+    // handle field errors
+  }
+}
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** Axios in a Next.js Route Handler is a Node.js environment — it does not have access to `window` or browser APIs. Keep `axiosClient` (with `window.location.href` redirect) strictly for client-side use. The server instance `createServerAxios` should never redirect — throw errors and let the Route Handler return the appropriate response.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Two separate instances: `axiosServer.ts` for Route Handlers, `axiosClient.ts` for Client Components
+- Register interceptors once at module level — never inside components or functions
+- Always type Axios calls with generics: `axios.get<Post[]>('/posts')`
+- Keep `axiosClient` base URL as `'/'` — it only calls your own Next.js routes
+
+**Performance tips**
+```ts
+// Set a global timeout — never let requests hang forever
+const axiosClient = axios.create({
+  timeout: 10000, // 10 seconds
+})
+
+// Cancel requests when component unmounts
+useEffect(() => {
+  const controller = new AbortController()
+
+  axiosClient.get('/api/posts', {
+    signal: controller.signal,
+  }).then(({ data }) => setPosts(data.data))
+    .catch((err) => {
+      if (axios.isCancel(err)) return // ignore cancellation
+      setError(err.message)
+    })
+
+  return () => controller.abort() // cancel on unmount
+}, [])
+```
+
+**Security considerations**
+- Never put the Bearer token in `axiosClient` headers — it runs in the browser
+- Keep `createServerAxios` in `lib/api/axiosServer.ts` — never import it in client components
+- Never log Axios request config in production — it may contain the Authorization header
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between Axios interceptors and a manual fetch wrapper?"
+  difficulty="easy"
+>
+  Both solve the same problem but interceptors are more powerful. A manual
+  fetch wrapper wraps one function call — you have to remember to use it
+  everywhere. Axios interceptors are registered once on the instance and
+  automatically apply to every request made through that instance, including
+  ones inside libraries or composables that use the same instance. Interceptors
+  also support async operations like token refresh before retrying.
+</InterviewQ>
+
+<InterviewQ
+  question="Why does Axios throw on non-2xx responses while fetch does not?"
+  difficulty="easy"
+>
+  It is a design choice. Axios treats HTTP error status codes as errors by
+  default — any response outside the 2xx range triggers the error interceptor
+  and throws. This matches how most developers think about errors. fetch
+  follows the spec strictly — a response with status 404 or 500 is still a
+  successful network request, just with an error status. You must check
+  `res.ok` manually. Axios removes this boilerplate.
+</InterviewQ>
+
+<InterviewQ
+  question="How does the token refresh interceptor work with a request queue?"
+  difficulty="hard"
+>
+  When a 401 is received and a refresh is not already in progress, the
+  interceptor sets `isRefreshing = true` and calls the refresh endpoint.
+  Any other requests that get 401 while the refresh is in progress are added
+  to `failedQueue` as promises. When the refresh completes, `processQueue`
+  resolves all queued promises and they retry their original requests. If
+  the refresh fails, all queued requests are rejected and the user is
+  redirected to login. The `_retry` flag prevents infinite loops if the
+  refresh endpoint itself returns 401.
+</InterviewQ>
+
+<InterviewQ
+  question="Why should you use two separate Axios instances in Next.js instead of one?"
+  difficulty="mid"
+>
+  Server-side and client-side have fundamentally different requirements.
+  The server instance needs to read the httpOnly cookie and set the Bearer
+  token header — it uses `process.env.LARAVEL_API_URL` as the base URL and
+  runs in Node.js. The client instance never touches the token — it uses
+  `'/'` as the base URL to call Next.js Route Handlers and handles 401 by
+  redirecting via `window.location.href`. Mixing these in one instance would
+  either expose the token to the browser or break server-side rendering.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The two-instance pattern took me a while to settle on. I kept trying to
+  use one shared Axios instance and running into issues — the server instance
+  tried to use window on the server, the client instance tried to read cookies
+  it could not access. Keeping them completely separate with different files
+  solved everything. Never import axiosServer in a Client Component and never
+  import axiosClient in a Route Handler.
+</MyNotes>
+
+<MyNotes>
+  The token refresh queue is worth understanding even if you do not use it
+  immediately. Without the queue, if 3 requests fire simultaneously and all
+  get 401, you end up with 3 parallel refresh calls and race conditions.
+  The queue serializes them so only one refresh happens and the rest wait.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### useAxiosQuery Hook — Axios + Loading State
+
+```ts
+// hooks/useAxiosQuery.ts
+import { useState, useEffect } from 'react'
+import { axiosClient } from '@/lib/api/axiosClient'
+import type { ApiError } from '@/lib/types/api'
+
+export function useAxiosQuery<T>(url: string, params?: Record<string, unknown>) {
+  const [data, setData] = useState<T | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    axiosClient
+      .get<T>(url, { params, signal: controller.signal })
+      .then(({ data }) => setData(data))
+      .catch((err: ApiError) => {
+        if (axios.isCancel(err)) return
+        setError(err.message)
+      })
+      .finally(() => setLoading(false))
+
+    return () => controller.abort()
+  }, [url, JSON.stringify(params)])
+
+  return { data, loading, error }
+}
+
+// Usage:
+// const { data, loading, error } = useAxiosQuery<PaginatedResponse<Post>>(
+//   '/api/posts',
+//   { page: 1 }
+// )
+```
+
+---
+
+*Tags: `nextjs` `react` `axios` `api` `crud` `interceptors` `laravel` `typescript` `intermediate`*

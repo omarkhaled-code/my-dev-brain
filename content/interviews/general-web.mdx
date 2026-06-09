@@ -1,0 +1,165 @@
+---
+title: "General Web Development Interview Questions"
+description: "Quick-review general web development interview questions — HTTP, REST APIs, browsers, CSS, web security, performance, and web fundamentals"
+category: interviews
+tags: [http, rest, browser, css, security, performance, web, interview]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+relatedTopics:
+  - interviews/javascript
+  - interviews/react-nextjs
+  - interviews/laravel-php
+---
+
+## HTTP & Networking
+
+<InterviewQ question="What is the difference between HTTP and HTTPS?" difficulty="easy">
+  HTTP (HyperText Transfer Protocol) transfers data in plain text — anyone intercepting the traffic can read it. HTTPS adds TLS (Transport Layer Security) encryption — data is encrypted between client and server, preventing eavesdropping and man-in-the-middle attacks. HTTPS also verifies server identity via SSL certificates. Always use HTTPS in production — modern browsers mark HTTP sites as "Not Secure" and many APIs require it.
+</InterviewQ>
+
+<InterviewQ question="What are HTTP methods and when do you use each?" difficulty="easy">
+  `GET` — retrieve data, no body, idempotent, safe. `POST` — create new resource, has body, not idempotent. `PUT` — replace entire resource, idempotent. `PATCH` — partially update resource, not always idempotent. `DELETE` — remove resource, idempotent. `HEAD` — like GET but no body — used to check if resource exists. `OPTIONS` — describes communication options — used in CORS preflight. Idempotent means calling multiple times has the same effect as calling once.
+</InterviewQ>
+
+<InterviewQ question="What are HTTP status codes and what are the common ones?" difficulty="easy">
+  Five categories: 1xx (informational), 2xx (success), 3xx (redirect), 4xx (client error), 5xx (server error). Common ones: `200 OK`, `201 Created` (POST success), `204 No Content` (DELETE success), `301 Moved Permanently`, `302 Found` (temporary redirect), `400 Bad Request` (invalid input), `401 Unauthorized` (not authenticated), `403 Forbidden` (authenticated but not allowed), `404 Not Found`, `422 Unprocessable Entity` (validation errors), `429 Too Many Requests` (rate limited), `500 Internal Server Error`.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between HTTP/1.1, HTTP/2, and HTTP/3?" difficulty="mid">
+  HTTP/1.1 opens a new TCP connection per request (or reuses with keep-alive) — browsers are limited to 6 concurrent connections per domain. HTTP/2 multiplexes multiple requests over one connection — no head-of-line blocking, header compression, server push. HTTP/3 replaces TCP with QUIC (UDP-based) — faster connection establishment, no head-of-line blocking at the transport layer, better on poor networks. Most modern servers support HTTP/2 — use it.
+</InterviewQ>
+
+<InterviewQ question="What is CORS and why does it exist?" difficulty="mid">
+  CORS (Cross-Origin Resource Sharing) is a browser security mechanism that restricts web pages from making requests to a different domain than the one that served the page. It exists to prevent malicious sites from making authenticated API calls on behalf of a logged-in user. The server adds `Access-Control-Allow-Origin` headers to permit specific origins. Preflight requests (OPTIONS) check permissions before the actual request. CORS is a browser restriction — server-to-server calls are not affected.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between a cookie, localStorage, and sessionStorage?" difficulty="mid">
+  Cookies are sent automatically with every HTTP request to the server — ideal for auth tokens. Configurable with expiry, `httpOnly` (no JS access), `secure` (HTTPS only), `sameSite` (CSRF protection). `localStorage` persists until explicitly cleared — survives browser restart, accessible by JS. `sessionStorage` clears when the tab closes — not shared between tabs. For auth tokens: use `httpOnly` cookies — `localStorage` is vulnerable to XSS (any JS on the page can read it).
+</InterviewQ>
+
+<InterviewQ question="What is the difference between authentication and authorization?" difficulty="easy">
+  Authentication answers "who are you?" — verifying identity via credentials (password, token, biometric). Authorization answers "what can you do?" — checking if the authenticated user has permission to perform an action or access a resource. You can be authenticated but not authorized — a logged-in user trying to access another user's private data. Always authenticate first, then authorize.
+</InterviewQ>
+
+---
+
+## REST APIs
+
+<InterviewQ question="What are the principles of REST?" difficulty="mid">
+  REST (Representational State Transfer) has six constraints: Stateless — each request contains all information needed, no server-side session. Client-Server — separation of concerns. Cacheable — responses indicate if they can be cached. Uniform Interface — consistent resource-based URLs, HTTP methods, status codes. Layered System — client doesn't know if it's talking to the real server or a proxy. Code on Demand (optional) — server can send executable code. Most APIs follow the first four strictly.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between REST and GraphQL?" difficulty="mid">
+  REST uses multiple fixed endpoints — one per resource type. Clients get all fields in the response (over-fetching) or need multiple requests (under-fetching). GraphQL has one endpoint — clients specify exactly which fields they need in a query. Eliminates over/under-fetching. GraphQL adds complexity: query language, schema definition, resolver functions, N+1 problem in resolvers. Use REST for most APIs — it is simpler, cacheable at the HTTP level, and well-understood. Use GraphQL when clients have very different data needs (mobile vs web) or highly nested data.
+</InterviewQ>
+
+<InterviewQ question="What makes a good REST API URL structure?" difficulty="mid">
+  Use nouns not verbs — resources are things, actions are HTTP methods. `/posts` not `/getPosts`. Use plural nouns: `/users`, `/posts`. Nest resources for relationships: `/users/{id}/posts`. Avoid deep nesting beyond two levels. Use query strings for filtering/sorting: `/posts?status=published&sort=date`. Version your API: `/api/v1/posts`. HTTP method indicates the action: `GET /posts` (list), `POST /posts` (create), `GET /posts/{id}` (show), `PATCH /posts/{id}` (update), `DELETE /posts/{id}` (delete).
+</InterviewQ>
+
+<InterviewQ question="What is the difference between PUT and PATCH?" difficulty="easy">
+  `PUT` replaces the entire resource — you send the complete new version. If you omit a field, it is removed or reset. `PATCH` partially updates — you send only the fields you want to change. In practice most APIs use `PATCH` for updates because sending the entire resource is wasteful and risky — you might accidentally reset fields you didn't mean to change.
+</InterviewQ>
+
+<InterviewQ question="What is API rate limiting and why is it important?" difficulty="mid">
+  Rate limiting restricts how many requests a client can make in a time window — for example 100 requests per minute. It protects the server from abuse, prevents DoS attacks, ensures fair usage among clients, and controls costs. APIs return `429 Too Many Requests` when the limit is exceeded, usually with a `Retry-After` header. Laravel's `throttle` middleware implements rate limiting. Good APIs also implement exponential backoff on the client side for retries.
+</InterviewQ>
+
+---
+
+## Browser & Web Performance
+
+<InterviewQ question="What happens when you type a URL and press Enter?" difficulty="mid">
+  DNS lookup — resolves the domain to an IP address (checked in browser cache, OS cache, DNS resolver). TCP connection — three-way handshake with the server. TLS handshake — if HTTPS, negotiate encryption. HTTP request — browser sends GET request with headers. Server processes — finds the route, generates response. HTTP response — server sends HTML with status code. Browser parses HTML — builds DOM, discovers CSS and JS. Render pipeline — CSSOM built, render tree created, layout calculated, painted to screen. JavaScript executes — may modify DOM causing reflows and repaints.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between the DOM and the virtual DOM?" difficulty="mid">
+  The DOM (Document Object Model) is the browser's tree representation of the HTML — each element is a node. DOM manipulation is slow because any change can trigger reflow (recalculate layout) and repaint. The virtual DOM is a lightweight JavaScript object representation of the DOM — used by React and Vue. When state changes, a new virtual DOM is created, diffed against the previous, and only real DOM nodes that changed are updated — batching expensive DOM operations for better performance.
+</InterviewQ>
+
+<InterviewQ question="What is the critical rendering path?" difficulty="hard">
+  The critical rendering path is the sequence of steps the browser takes to convert HTML, CSS, and JavaScript into pixels: Parse HTML → build DOM. Parse CSS → build CSSOM. Combine DOM + CSSOM → render tree (only visible elements). Layout — calculate size and position of every element. Paint — fill in pixels. Composite — combine layers. JavaScript blocks HTML parsing (render-blocking). CSS blocks rendering until CSSOM is built. Optimize by: deferring non-critical JS, inlining critical CSS, minimizing render-blocking resources.
+</InterviewQ>
+
+<InterviewQ question="What is lazy loading and when should you use it?" difficulty="easy">
+  Lazy loading defers loading resources until they are needed — images load when they scroll into the viewport, components load when they are first rendered. For images: `<img loading="lazy">` is native browser support. For JavaScript: dynamic `import()` and framework-level code splitting. Use lazy loading for: images below the fold, heavy components not visible on first load, routes not immediately needed. Don't lazy load above-the-fold content — it delays the initial render and hurts LCP.
+</InterviewQ>
+
+<InterviewQ question="What are Core Web Vitals?" difficulty="mid">
+  Google's metrics for measuring real-world page experience: LCP (Largest Contentful Paint) — time to render the largest visible element, should be under 2.5s. FID (First Input Delay) / INP (Interaction to Next Paint) — response time to first user interaction, should be under 100ms. CLS (Cumulative Layout Shift) — how much elements move unexpectedly, should be under 0.1. These directly affect Google search ranking. Measure with Lighthouse in Chrome DevTools.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between reflow and repaint?" difficulty="hard">
+  Reflow (layout) recalculates the geometry of elements — triggered by changes that affect size or position: adding/removing elements, changing width, height, font-size, or content. It is expensive because it may cascade — changing one element can affect many others. Repaint fills in pixels after a reflow or when visual properties change (color, background, visibility) — no layout change. Reflow always triggers repaint; repaint doesn't always trigger reflow. Minimize both by batching DOM changes, using CSS transforms instead of position changes (transforms don't trigger reflow), and avoiding layout thrashing (reading then writing layout properties in a loop).
+</InterviewQ>
+
+---
+
+## Web Security
+
+<InterviewQ question="What is XSS and how do you prevent it?" difficulty="mid">
+  XSS (Cross-Site Scripting) is an attack where malicious JavaScript is injected into a page and executed in other users' browsers — stealing cookies, tokens, or performing actions as the user. Types: stored (persisted in database), reflected (in URL parameters), DOM-based (client-side only). Prevention: escape all user-generated content before rendering (React does this automatically), use Content Security Policy headers, set `httpOnly` on auth cookies (prevents JS access), validate and sanitize input, avoid `innerHTML` with user data.
+</InterviewQ>
+
+<InterviewQ question="What is CSRF and how do you prevent it?" difficulty="mid">
+  CSRF (Cross-Site Request Forgery) tricks a logged-in user into unknowingly submitting a request to another site. If a user is logged into your bank and visits a malicious site, the site can submit a form to your bank using the user's cookies. Prevention: CSRF tokens (random token in forms, verified on server — Laravel does this automatically for web routes), `SameSite=Lax` cookie attribute (cookies not sent on cross-site requests), check `Origin`/`Referer` headers. API routes using Bearer tokens are naturally CSRF-safe — the token can't be read cross-site.
+</InterviewQ>
+
+<InterviewQ question="What is SQL injection and how do you prevent it?" difficulty="mid">
+  SQL injection inserts malicious SQL into a query — `' OR '1'='1` in a login form might bypass authentication. Prevention: always use parameterized queries or prepared statements — never interpolate user input into SQL strings. ORMs like Eloquent use PDO parameter binding automatically — `User::where('email', $email)` is safe. Never use: `DB::statement("WHERE email = '{$email}'")`— always use bindings: `DB::select('WHERE email = ?', [$email])`.
+</InterviewQ>
+
+<InterviewQ question="What are security headers and which ones are important?" difficulty="hard">
+  HTTP response headers that instruct browsers to apply security policies. Important ones: `Content-Security-Policy` — restricts what resources can load, prevents XSS. `X-Frame-Options: DENY` — prevents clickjacking (embedding in iframes). `X-Content-Type-Options: nosniff` — prevents MIME type sniffing. `Strict-Transport-Security` — forces HTTPS. `Referrer-Policy` — controls what referrer info is sent. `Permissions-Policy` — restricts browser features (camera, geolocation). Use `securityheaders.com` to scan your site.
+</InterviewQ>
+
+---
+
+## CSS & Layout
+
+<InterviewQ question="What is the difference between Flexbox and CSS Grid?" difficulty="mid">
+  Flexbox is one-dimensional — it lays out items in a row OR a column. Best for: navigation bars, centering elements, distributing space along one axis, component-level layout. Grid is two-dimensional — rows AND columns simultaneously. Best for: page layouts, card grids, any layout that needs alignment in both directions. Use Flexbox for components, Grid for page structure. They are complementary — use both together.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between position relative, absolute, fixed, and sticky?" difficulty="mid">
+  `static` — default, follows normal document flow. `relative` — positioned relative to its normal position, creates a positioning context for children. `absolute` — removed from flow, positioned relative to nearest positioned ancestor. `fixed` — removed from flow, positioned relative to the viewport — stays in place on scroll. `sticky` — hybrid: behaves like `relative` until it reaches a scroll threshold, then acts like `fixed` until the parent element leaves the viewport.
+</InterviewQ>
+
+<InterviewQ question="What is the CSS box model?" difficulty="easy">
+  Every element is a rectangular box with: content (text, images), padding (space inside the border), border, and margin (space outside the border). `box-sizing: border-box` (now standard) includes padding and border in the element's declared width/height — much more intuitive. `box-sizing: content-box` (old default) adds padding and border on top of the width — causes layout surprises. Always set `*, *::before, *::after { box-sizing: border-box }`.
+</InterviewQ>
+
+<InterviewQ question="What is CSS specificity?" difficulty="mid">
+  Specificity determines which CSS rule wins when multiple rules target the same element. Calculated as: inline styles (1,0,0,0) > IDs (0,1,0,0) > classes/attributes/pseudo-classes (0,0,1,0) > elements/pseudo-elements (0,0,0,1). `!important` overrides everything (avoid it). Higher specificity wins — if equal, the last rule wins. Tailwind CSS avoids specificity issues by using only utility classes — all have the same specificity.
+</InterviewQ>
+
+---
+
+## Common Gotchas
+
+<InterviewQ question="What is the difference between null, undefined, and not defined in JavaScript?" difficulty="easy">
+  `undefined` — variable declared but not assigned, or missing function argument, or missing object property. JavaScript sets it automatically. `null` — explicitly assigned empty value — intentional absence. `not defined` (ReferenceError) — variable never declared at all — accessing it throws a ReferenceError. `typeof undefined` is `"undefined"`. `typeof null` is `"object"` (historical bug). `typeof notDeclared` is `"undefined"` (no error from typeof).
+</InterviewQ>
+
+<InterviewQ question="What is the difference between a 401 and 403 HTTP response?" difficulty="easy">
+  `401 Unauthorized` means the user is not authenticated — they need to log in. Despite the name "Unauthorized" it actually means unauthenticated. `403 Forbidden` means the user IS authenticated but does not have permission — they are logged in but not allowed to access this resource. When building APIs: return 401 when there is no valid auth token, return 403 when the token is valid but the user lacks the required role or ownership.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between synchronous and asynchronous code?" difficulty="easy">
+  Synchronous code executes line by line — each line waits for the previous to finish. Asynchronous code initiates an operation and continues executing without waiting — the result is handled later. JavaScript is single-threaded but achieves async behavior through the event loop and Web APIs. Async is essential for network requests, file I/O, and timers — blocking the single thread while waiting would freeze the entire UI.
+</InterviewQ>
+
+---
+
+## My Notes
+
+<MyNotes>
+  The "what happens when you type a URL" question is a classic system design opener. Cover: DNS → TCP → TLS → HTTP request → server processing → response → browser parsing → render pipeline. Don't go too deep on any one step — give a complete picture. It shows you understand the full web stack.
+
+  CORS is asked in almost every fullstack interview because it is a daily pain point. Key insight: CORS is a BROWSER restriction — it does not affect server-to-server requests. That is why your Next.js Route Handlers calling Laravel never have CORS issues — the browser never makes that request.
+
+  The cookie vs localStorage for auth tokens question is really a security question. httpOnly cookies are safer because JavaScript cannot read them — XSS cannot steal the token. localStorage tokens are readable by any JS on the page. Always argue for httpOnly cookies for auth.
+
+  Core Web Vitals matter more than people realize — they directly affect Google ranking. Know LCP (loading), INP (interactivity), CLS (visual stability) and what affects each. Shows you think about real-world performance, not just code quality.
+</MyNotes>

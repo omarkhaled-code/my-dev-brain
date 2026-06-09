@@ -1,0 +1,165 @@
+---
+title: "Vue & Nuxt Interview Questions"
+description: "Quick-review Vue 3 and Nuxt 3 interview questions — reactivity, composables, Pinia, SSR, performance, and common gotchas"
+category: interviews
+tags: [vue, nuxt, interview, composables, pinia, ssr, reactivity]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+relatedTopics:
+  - interviews/javascript
+  - interviews/typescript
+  - interviews/react-nextjs
+---
+
+## Vue 3 Fundamentals
+
+<InterviewQ question="What is the difference between the Options API and the Composition API?" difficulty="easy">
+  Options API organizes code by option type — `data`, `methods`, `computed`, `watch` are all separate sections. This makes small components easy to read but large components hard to maintain — related logic is scattered across sections. Composition API organizes code by feature — all logic for one concern (a search feature, an auth flow) lives together in one place. It also enables reusable composables. Vue 3 supports both — Composition API with `<script setup>` is the modern standard.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between ref and reactive?" difficulty="mid">
+  `ref` wraps a single value (primitive or object) in a reactive container — accessed via `.value` in JavaScript, automatically unwrapped in templates. `reactive` makes an entire object reactive — no `.value` needed but loses reactivity if destructured. Use `ref` for primitives and when you need to reassign the whole value. Use `reactive` for complex objects where you never reassign the top level. Most teams use `ref` for everything for consistency.
+</InterviewQ>
+
+<InterviewQ question="What is reactivity in Vue 3 and how does it work?" difficulty="mid">
+  Vue 3's reactivity system uses JavaScript `Proxy` to intercept property reads and writes. When a reactive property is read inside a computed or watchEffect, Vue tracks it as a dependency. When the property changes, Vue notifies all tracked dependents to update. This is why destructuring a reactive object breaks reactivity — you get the raw value, not the proxy. `toRefs()` solves this by wrapping each property in a `ref`.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between computed and watch?" difficulty="mid">
+  `computed` is for deriving a value from reactive data — it is cached and only recalculates when dependencies change. It must return a value. `watch` is for running a side effect in response to data changes — like fetching data, calling an API, or writing to localStorage. It does not return a value. Rule: if you need a derived value, use `computed`. If you need to do something when a value changes, use `watch`.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between watch and watchEffect?" difficulty="mid">
+  `watch(source, callback)` is explicit — you declare what to watch and the callback receives old and new values. It is lazy by default (does not run on mount). `watchEffect(callback)` automatically tracks any reactive dependencies accessed inside it — no need to declare them. It runs immediately on mount. Use `watch` when you need old/new values or lazy execution. Use `watchEffect` for immediate effects that should re-run when any dependency changes.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between v-show and v-if?" difficulty="easy">
+  `v-if` conditionally renders or destroys the element and its component tree — higher toggle cost but zero DOM cost when false. `v-show` always renders the element but toggles `display: none` — lower toggle cost but element always exists in DOM. Use `v-if` when the condition rarely changes or when you want to avoid rendering heavy components. Use `v-show` for elements that toggle frequently.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between v-for with and without a key?" difficulty="easy">
+  Without a `key`, Vue uses an in-place patch strategy — it reuses existing DOM elements and updates their content. This is efficient but wrong when items have state (form inputs, animations) — the state stays on the old element. With a `key`, Vue tracks each element's identity and moves, adds, or removes elements correctly. Always use a unique, stable key (like an ID) — never use the array index when items can be reordered or filtered.
+</InterviewQ>
+
+---
+
+## Composition API & Composables
+
+<InterviewQ question="What is a composable and why is it better than a mixin?" difficulty="mid">
+  A composable is a function that uses the Composition API to encapsulate and reuse stateful logic. It starts with `use` by convention — `useAuth`, `useCart`, `useWindowSize`. Unlike mixins, composables have no naming conflicts (you control the variable names when you call them), clear source of data (you know exactly where each value comes from), and can accept arguments and return typed values. Mixins are implicit and conflict-prone — composables replaced them entirely in Vue 3.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between defineProps and withDefaults?" difficulty="easy">
+  `defineProps<Props>()` declares component props with TypeScript types. `withDefaults(defineProps<Props>(), defaults)` adds default values for optional props. You need `withDefaults` because you can't add default values directly in the generic type definition. In Vue 3.4+ you can use the new `defineProps` with defaults syntax directly without `withDefaults`.
+</InterviewQ>
+
+<InterviewQ question="What is defineEmits and how do you type it?" difficulty="easy">
+  `defineEmits` declares the events a component can emit. With TypeScript: `defineEmits<{ submit: [data: FormData]; cancel: [] }>()`. This gives type safety when emitting — `emit('submit', data)` — and when listening — `@submit="handler"`. The parent gets type-checked event payloads. Always define emits explicitly — it documents the component's contract.
+</InterviewQ>
+
+<InterviewQ question="What is provide/inject and when would you use it?" difficulty="mid">
+  `provide(key, value)` makes a value available to all descendants without prop drilling. `inject(key, default)` reads it in any descendant component. Use for: plugin-like APIs, deeply nested component trees (like a form that provides validation context to deeply nested inputs), or design system tokens. Prefer Pinia for app-wide state — use provide/inject for component-tree-scoped dependencies where a full store is overkill.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between toRef and toRefs?" difficulty="mid">
+  `toRef(object, 'key')` creates a single reactive ref linked to one property of a reactive object — useful when you want to pass one property to a composable while keeping reactivity. `toRefs(object)` converts all properties of a reactive object into refs — useful when destructuring a reactive object to avoid losing reactivity. Both create two-way links — changes to the ref update the original object and vice versa.
+</InterviewQ>
+
+<InterviewQ question="What lifecycle hooks are available in the Composition API?" difficulty="mid">
+  `onMounted`, `onUnmounted`, `onUpdated`, `onBeforeMount`, `onBeforeUnmount`, `onBeforeUpdate` — equivalent to Options API lifecycle hooks. Also: `onErrorCaptured` (catches errors from descendants), `onActivated`/`onDeactivated` (for keep-alive components). In `<script setup>` there is no `created` equivalent — code at the top level of setup runs synchronously like `created`. `onMounted` is the equivalent of `mounted`.
+</InterviewQ>
+
+---
+
+## Pinia & State Management
+
+<InterviewQ question="What is the difference between Pinia and Vuex?" difficulty="easy">
+  Pinia is the official replacement for Vuex. Key differences: no mutations in Pinia — you update state directly in actions. Full TypeScript support with automatic type inference. Composition API style store definition with `ref` and `computed`. Multiple flat stores instead of nested Vuex modules. DevTools integration works out of the box. Vuex required actions → mutations → state — Pinia removes the mutation step entirely.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between the Options Store and Setup Store in Pinia?" difficulty="mid">
+  Options Store uses `{ state, getters, actions }` object syntax — familiar to Vuex users. Setup Store uses Composition API syntax — `ref()` for state, `computed()` for getters, plain functions for actions. Both work identically. Setup Store is more flexible and aligns with the rest of Vue 3 — it also supports composables inside the store. The practical difference: Setup Store lets you use any composable, Options Store has a simpler structure for straightforward cases.
+</InterviewQ>
+
+<InterviewQ question="Why do you need storeToRefs when destructuring from a Pinia store?" difficulty="mid">
+  Pinia stores use Vue's reactivity system. When you destructure state or getters directly — `const { count } = useStore()` — you get the raw value at that moment, losing the reactive connection. `storeToRefs(store)` wraps each property in a `ref` so they stay reactive. Actions are plain functions and don't need `storeToRefs` — you can destructure them directly. This is the most common Pinia mistake beginners make.
+</InterviewQ>
+
+<InterviewQ question="How do you reset a Pinia store?" difficulty="mid">
+  In Options Store, `store.$reset()` is built in — it resets state to initial values. In Setup Store, `$reset()` is not automatically available — you must implement it manually as an action that sets all refs back to their initial values. A common pattern is to define the initial state outside the store function and call `Object.assign(state, initialState)` in the reset action. For logging out, create a `resetAllStores()` utility that calls reset on each store.
+</InterviewQ>
+
+---
+
+## Nuxt 3
+
+<InterviewQ question="What is the difference between useFetch and $fetch in Nuxt 3?" difficulty="mid">
+  `useFetch` is a composable that returns reactive `data`, `pending`, and `error` refs — it runs on the server during SSR and passes the result to the client without a duplicate request. It is SSR-aware and cached by URL key. `$fetch` is a plain async function built on `ofetch` — it always makes a network request when called, throws on non-2xx responses, and is better for mutations in event handlers. Use `useFetch` for page-level data, `$fetch` for form submissions and actions.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between useAsyncData and useFetch?" difficulty="mid">
+  `useFetch(url)` is a convenience wrapper around `useAsyncData` — it calls `$fetch(url)` internally and uses the URL as the cache key. `useAsyncData(key, fetcher)` gives you full control — you provide a custom key and any async function as the fetcher. Use `useFetch` for simple API calls. Use `useAsyncData` when you need a custom cache key, want to call multiple APIs in one fetch, or the data source is not a simple URL.
+</InterviewQ>
+
+<InterviewQ question="How does Nuxt 3 handle SSR and when would you disable it?" difficulty="mid">
+  Nuxt 3 renders pages on the server by default — full HTML is sent to the browser, then Vue hydrates it on the client. Disable SSR per component with `<ClientOnly>` — renders only on client, shows fallback on server. Disable for a whole page with `ssr: false` in `definePageMeta`. Disable globally in `nuxt.config.ts` with `ssr: false` to make a pure SPA. Disable SSR for browser-only libraries (maps, canvas, libraries using `window`).
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Nuxt route middleware and server middleware?" difficulty="mid">
+  Route middleware runs in the Vue Router layer on the client side — it controls navigation, redirects users, and checks auth state. Defined in `middleware/` folder and applied with `definePageMeta`. Server middleware runs on every HTTP request to the Nuxt server before routing — used for logging, authentication at the HTTP level, CORS headers, and request modification. Defined in `server/middleware/`. Route middleware = Vue Router guard. Server middleware = HTTP layer interceptor.
+</InterviewQ>
+
+<InterviewQ question="What is Nuxt's auto-import system and what does it import?" difficulty="easy">
+  Nuxt automatically imports: Vue composables (`ref`, `computed`, `watch`), Nuxt composables (`useFetch`, `useRoute`, `useRouter`, `useState`), components from `components/` directory, composables from `composables/` directory, utilities from `utils/` directory, and Pinia stores from `stores/`. You never need to write `import { ref } from 'vue'` in a Nuxt project. This reduces boilerplate and makes code cleaner — but you must be careful with naming conflicts.
+</InterviewQ>
+
+<InterviewQ question="How do you share state between pages in Nuxt without Pinia?" difficulty="mid">
+  Use `useState(key, initialValue)` — Nuxt's built-in SSR-safe state composable. Unlike `ref`, `useState` is shared across components and pages by key — all components using `useState('user')` access the same reactive value. It is also hydration-safe — state set on the server is transferred to the client. Use it for simple shared state. Use Pinia when you need actions, getters, DevTools integration, or persist middleware.
+</InterviewQ>
+
+---
+
+## Performance
+
+<InterviewQ question="What is the difference between v-memo and computed for performance?" difficulty="hard">
+  `computed` caches a derived value — prevents recomputation. `v-memo` skips re-rendering a template block entirely if specified values haven't changed — prevents DOM patching. They solve different problems: use `computed` to avoid expensive JavaScript calculations, use `v-memo` in large `v-for` lists to avoid re-rendering rows whose data hasn't changed. `v-memo` is particularly useful when list items have complex templates and only a few items change at a time (like a selected row changing).
+</InterviewQ>
+
+<InterviewQ question="What is defineAsyncComponent and when should you use it?" difficulty="mid">
+  `defineAsyncComponent(() => import('./Component.vue'))` creates a component that is loaded asynchronously — its code is only fetched when the component first renders. Use it for heavy components like rich text editors, chart libraries, map components, or admin panels. In Nuxt, prefix any component with `Lazy` to achieve the same effect automatically — `<LazyHeavyComponent />`. This reduces initial bundle size and improves first page load.
+</InterviewQ>
+
+---
+
+## Common Gotchas
+
+<InterviewQ question="Why does destructuring a reactive object break reactivity?" difficulty="mid">
+  `reactive()` uses a Proxy to intercept property access. When you destructure — `const { name } = reactive({ name: 'Ahmed' })` — you extract the raw value at that moment. The variable `name` is a plain string, not a reactive reference — changes to the original object don't update it and changes to `name` don't update the object. Fix: use `toRefs()` to destructure while keeping reactivity, or use `ref()` instead of `reactive()` from the start.
+</InterviewQ>
+
+<InterviewQ question="Why does v-for with v-if on the same element cause problems?" difficulty="mid">
+  When `v-if` and `v-for` are on the same element, `v-if` has higher priority in Vue 3 — it runs first. This means `v-if` cannot access the loop variable because the loop hasn't run yet. Fix: wrap the `v-for` in a `<template>` tag and put `v-if` inside, or move the `v-if` condition to a computed property that pre-filters the array. Never put both directives on the same element.
+</InterviewQ>
+
+<InterviewQ question="What is the problem with using array index as v-for key?" difficulty="easy">
+  When items are reordered, filtered, or removed, array indexes shift. Vue matches old and new elements by key — if indexes are keys, Vue matches the wrong elements, causing incorrect component state (form inputs keep old values, animations play on wrong items). Always use a stable, unique identifier like an ID. The only safe time to use index as key is for completely static lists that never change.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between emit and v-model in Vue 3?" difficulty="mid">
+  `emit('event', value)` sends any named event with any payload to the parent. `v-model` is a shorthand for a specific two-way binding pattern — it binds `modelValue` prop and listens for `update:modelValue` emit. `<MyInput v-model="name">` is equivalent to `<MyInput :modelValue="name" @update:modelValue="name = $event">`. Use `emit` for general events (submit, close, select). Use `v-model` when the component wraps an input and needs two-way data binding.
+</InterviewQ>
+
+---
+
+## My Notes
+
+<MyNotes>
+  The `ref` vs `reactive` question is in every Vue interview. My answer: use `ref` for everything — it is consistent, works for primitives and objects, and you always know to use `.value`. The main gotcha with `reactive` is destructuring loses reactivity — if you know `toRefs` exists, mention it.
+
+  The Pinia `storeToRefs` mistake is the number one bug I see in Vue codebases. Always destructure state and getters with `storeToRefs`, always destructure actions directly. This comes up in interviews and code reviews constantly.
+
+  The `v-if` vs `v-show` question is easy but make sure you know the performance implication — `v-if` has a higher toggle cost (creates/destroys), `v-show` has a higher initial cost (always renders). Interviewers want to hear you know when to use each.
+
+  For Nuxt questions, the `useFetch` vs `$fetch` distinction always comes up. Short answer: `useFetch` for page data (SSR-aware, cached), `$fetch` for mutations and event handlers (always fresh, throws on error).
+</MyNotes>

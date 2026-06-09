@@ -1,0 +1,499 @@
+---
+title: "Next.js Middleware & Auth Guards"
+description: "How to use Next.js middleware to protect routes, redirect unauthenticated users, handle role-based access, and run code before every request using middleware.ts"
+category: routing
+tools: [nextjs]
+tags: [middleware, auth-guard, redirect, protected-routes, next.js]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+---
+
+## Concept explanation
+
+Middleware in Next.js runs **before** a request is processed — before the page renders, before the API route responds, even before static files are served. You define it in a single `middleware.ts` file at the root of your project. It runs on the **Edge Runtime** — extremely fast, close to the user, but with limited Node.js APIs. The most common use is protecting routes — redirect unauthenticated users to `/login` before they ever see a protected page.
+
+```
+User visits /dashboard
+      ↓
+middleware.ts runs first
+      ↓
+Has valid session?
+  ├── YES → continue to /dashboard page
+  └── NO  → redirect to /login
+```
+
+## Why it's used
+
+- Protects routes without adding auth checks to every page component
+- Runs before rendering — unauthenticated users never see a flash of protected content
+- Handles redirects, rewrites, and header modifications globally
+- Role-based access control in one central place
+
+## Real-world use cases
+
+- Redirect unauthenticated users from `/dashboard` to `/login`
+- Redirect authenticated users away from `/login` back to `/dashboard`
+- Role-based guards — only admins can access `/admin/*`
+- Locale detection and redirect (`/` → `/en` or `/ar`)
+- A/B testing — rewrite requests to different page variants
+- Rate limiting headers on API routes
+
+## Code example
+
+### Basic middleware setup
+
+```ts
+// middleware.ts  ← must be in project root (same level as app/)
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+export function middleware(request: NextRequest) {
+  console.log("Middleware running for:", request.nextUrl.pathname);
+  return NextResponse.next(); // continue to the page
+}
+
+// Config — which routes middleware runs on
+export const config = {
+  matcher: [
+    /*
+     * Match all paths except:
+     * - _next/static  (static files)
+     * - _next/image   (image optimization)
+     * - favicon.ico
+     * - public files
+     */
+    "/((?!_next/static|_next/image|favicon.ico|.*\\..*).*).",
+  ],
+};
+```
+
+### Auth guard — redirect if not logged in
+
+```ts
+// middleware.ts
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+// Routes that require authentication
+const protectedRoutes = [
+  "/dashboard",
+  "/settings",
+  "/profile",
+];
+
+// Routes that authenticated users should not see
+const authRoutes = [
+  "/login",
+  "/register",
+  "/forgot-password",
+];
+
+export function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  // Read session token from cookie
+  const token = request.cookies.get("session-token")?.value;
+  const isAuthenticated = Boolean(token);
+
+  const isProtectedRoute = protectedRoutes.some((route) =>
+    pathname.startsWith(route)
+  );
+
+  const isAuthRoute = authRoutes.some((route) =>
+    pathname.startsWith(route)
+  );
+
+  // Not logged in trying to access protected route → redirect to login
+  if (isProtectedRoute && !isAuthenticated) {
+    const loginUrl = new URL("/login", request.url);
+    // Save the page they tried to visit so we can redirect back after login
+    loginUrl.searchParams.set("callbackUrl", pathname);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  // Already logged in trying to visit login/register → redirect to dashboard
+  if (isAuthRoute && isAuthenticated) {
+    return NextResponse.redirect(new URL("/dashboard", request.url));
+  }
+
+  return NextResponse.next();
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)"],
+};
+```
+
+### With NextAuth.js session
+
+```ts
+// middleware.ts — using NextAuth v5
+import NextAuth from "next-auth";
+import { authConfig } from "@/lib/auth.config";
+
+// NextAuth provides its own middleware
+const { auth } = NextAuth(authConfig);
+
+export default auth((req) => {
+  const { nextUrl } = req;
+  const isAuthenticated = !!req.auth; // req.auth is the session
+
+  const isProtectedRoute = nextUrl.pathname.startsWith("/dashboard");
+  const isAuthRoute = ["/login", "/register"].some((r) =>
+    nextUrl.pathname.startsWith(r)
+  );
+
+  if (isProtectedRoute && !isAuthenticated) {
+    return Response.redirect(new URL("/login", nextUrl));
+  }
+
+  if (isAuthRoute && isAuthenticated) {
+    return Response.redirect(new URL("/dashboard", nextUrl));
+  }
+});
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)"],
+};
+```
+
+### Role-based access control
+
+```ts
+// middleware.ts
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { verifyToken } from "@/lib/auth";
+
+type UserRole = "admin" | "editor" | "viewer";
+
+// Define which roles can access which routes
+const roleRoutes: Record<string, UserRole[]> = {
+  "/admin":    ["admin"],
+  "/editor":   ["admin", "editor"],
+  "/dashboard":["admin", "editor", "viewer"],
+};
+
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+  const token = request.cookies.get("session-token")?.value;
+
+  if (!token) {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+
+  // Verify token and extract user role
+  const user = await verifyToken(token);
+
+  if (!user) {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+
+  // Check role-based access
+  for (const [route, allowedRoles] of Object.entries(roleRoutes)) {
+    if (pathname.startsWith(route)) {
+      if (!allowedRoles.includes(user.role as UserRole)) {
+        // User doesn't have permission → redirect to unauthorized page
+        return NextResponse.redirect(new URL("/unauthorized", request.url));
+      }
+    }
+  }
+
+  // Attach user info to request headers for use in pages
+  const response = NextResponse.next();
+  response.headers.set("x-user-id",   user.id);
+  response.headers.set("x-user-role", user.role);
+  return response;
+}
+
+export const config = {
+  matcher: ["/admin/:path*", "/editor/:path*", "/dashboard/:path*"],
+};
+```
+
+### Reading headers set by middleware in a page
+
+```tsx
+// app/dashboard/page.tsx
+import { headers } from "next/headers";
+
+export default async function DashboardPage() {
+  const headersList = await headers();
+  const userId   = headersList.get("x-user-id");
+  const userRole = headersList.get("x-user-role");
+
+  return (
+    <div>
+      <p>User ID: {userId}</p>
+      <p>Role: {userRole}</p>
+    </div>
+  );
+}
+```
+
+### Redirect with callbackUrl — go back after login
+
+```ts
+// middleware.ts
+if (isProtectedRoute && !isAuthenticated) {
+  const loginUrl = new URL("/login", request.url);
+  loginUrl.searchParams.set("callbackUrl", request.nextUrl.pathname);
+  return NextResponse.redirect(loginUrl);
+}
+```
+
+```tsx
+// app/login/page.tsx — read callbackUrl and redirect after login
+"use client";
+
+import { useSearchParams, useRouter } from "next/navigation";
+import { Suspense } from "react";
+
+function LoginForm() {
+  const searchParams = useSearchParams();
+  const router       = useRouter();
+  const callbackUrl  = searchParams.get("callbackUrl") ?? "/dashboard";
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await signIn(); // your auth logic
+    router.push(callbackUrl); // redirect back to where they came from
+  };
+
+  return (
+    <form onSubmit={handleLogin}>
+      {/* login form */}
+      <button type="submit">Login</button>
+    </form>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+```
+
+### Locale detection and redirect
+
+```ts
+// middleware.ts
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+const supportedLocales = ["en", "ar", "fr"];
+const defaultLocale    = "en";
+
+export function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  // Check if pathname already has a locale
+  const hasLocale = supportedLocales.some(
+    (locale) => pathname.startsWith(`/${locale}/`) || pathname === `/${locale}`
+  );
+
+  if (!hasLocale) {
+    // Detect preferred locale from Accept-Language header
+    const acceptLanguage = request.headers.get("accept-language") ?? "";
+    const preferredLocale =
+      supportedLocales.find((locale) =>
+        acceptLanguage.toLowerCase().includes(locale)
+      ) ?? defaultLocale;
+
+    return NextResponse.redirect(
+      new URL(`/${preferredLocale}${pathname}`, request.url)
+    );
+  }
+
+  return NextResponse.next();
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)"],
+};
+```
+
+### Rewrite — show different content without changing URL
+
+```ts
+// middleware.ts
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+export function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  // A/B test — 50% of users see variant B
+  if (pathname === "/landing") {
+    const bucket = Math.random() < 0.5 ? "a" : "b";
+    return NextResponse.rewrite(
+      new URL(`/landing-${bucket}`, request.url)
+    );
+    // URL stays /landing but renders /landing-a or /landing-b
+  }
+
+  return NextResponse.next();
+}
+```
+
+### Adding security headers
+
+```ts
+// middleware.ts
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+export function middleware(request: NextRequest) {
+  const response = NextResponse.next();
+
+  // Security headers
+  response.headers.set("X-Frame-Options",           "DENY");
+  response.headers.set("X-Content-Type-Options",    "nosniff");
+  response.headers.set("Referrer-Policy",           "strict-origin-when-cross-origin");
+  response.headers.set("Permissions-Policy",        "camera=(), microphone=(), geolocation=()");
+  response.headers.set(
+    "Strict-Transport-Security",
+    "max-age=31536000; includeSubDomains"
+  );
+
+  return response;
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+};
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```ts
+// middleware.ts in the wrong location
+// Must be in project ROOT — not inside app/
+app/
+  middleware.ts  // ❌ wrong location
+
+// Also wrong — named incorrectly
+middleware/
+  index.ts       // ❌ must be a single middleware.ts file
+```
+</Wrong>
+<Right>
+```ts
+// middleware.ts must be at the project root
+// same level as app/, package.json, next.config.ts
+my-project/
+  app/
+  middleware.ts  // ✅ correct location
+  package.json
+  next.config.ts
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Using full Node.js APIs in middleware — crashes at runtime
+// Middleware runs on Edge Runtime — not full Node.js
+import fs from "fs"                    // ❌ not available
+import { PrismaClient } from "@prisma/client" // ❌ not available
+
+export function middleware(request: NextRequest) {
+  const data = fs.readFileSync("data.json") // ❌ crashes
+}
+```
+</Wrong>
+<Right>
+```ts
+// Edge Runtime only supports Web APIs + limited packages
+// Use cookies, headers, URL, fetch — not fs, prisma, bcrypt
+import { NextResponse } from "next/server"
+
+export function middleware(request: NextRequest) {
+  const token = request.cookies.get("session")?.value // ✅ Web API
+  const user  = await verifyJWT(token) // ✅ lightweight JWT only
+  // Database calls → do in page/API route, not middleware
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// No matcher config — middleware runs on EVERY request
+// including _next/static, images, favicon → massive slowdown
+export function middleware(request: NextRequest) {
+  // runs on every single file request ❌
+}
+
+// No config export
+```
+</Wrong>
+<Right>
+```ts
+// Always add matcher to skip static files
+export const config = {
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|.*\\..*).*).",
+  ],
+}; // ✅ only runs on actual page/API requests
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always add a `matcher` config — without it middleware runs on every static file request
+- Never use Node.js-only APIs (fs, Prisma, bcrypt) — middleware runs on Edge Runtime
+- Keep middleware fast and lightweight — it runs on every matching request
+- Use `NextResponse.redirect()` for URL changes, `NextResponse.rewrite()` to change content without changing URL
+- Store the `callbackUrl` in searchParams so users return to their intended page after login
+- Pass user info to pages via response headers — avoids re-fetching session in every page
+- Use specific matchers (`/dashboard/:path*`) instead of catching everything when possible
+
+<Callout type="warning">
+  Never do database queries directly in middleware. It runs on Edge Runtime which doesn't support Prisma, Mongoose, or most ORMs. Instead verify a lightweight JWT token in middleware and do full database lookups in the page or API route.
+</Callout>
+
+<Callout type="tip">
+  Test your middleware matcher at **https://nextjs.org/docs/app/building-your-application/routing/middleware#matcher** — paste your matcher pattern to see which routes it matches before deploying.
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between middleware redirect and redirect() in a page?" difficulty="mid">
+  Middleware runs before the page renders — the redirect happens instantly, the user never sees the protected page even for a millisecond. `redirect()` inside a Server Component runs after the page starts rendering — slightly later in the lifecycle but still server-side. For auth guards, middleware is preferred because it prevents any flash of protected content. Use `redirect()` in pages for data-driven redirects — like redirecting to a 404 if a database record doesn't exist.
+</InterviewQ>
+
+<InterviewQ question="Why can't you use Prisma or other ORMs in Next.js middleware?" difficulty="mid">
+  Next.js middleware runs on the Edge Runtime — a lightweight V8-based environment that only supports Web APIs (fetch, Request, Response, URL, crypto). It doesn't support Node.js-specific APIs like `fs`, `net`, TCP connections, or native bindings. Prisma and most ORMs use TCP connections to communicate with databases — these aren't available on the Edge. The solution is to verify a lightweight JWT in middleware (which only needs crypto) and do actual database queries in Server Components or API routes.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between NextResponse.redirect and NextResponse.rewrite?" difficulty="easy">
+  `NextResponse.redirect(url)` sends the user to a new URL — the browser URL bar changes and a new request is made. The user sees the URL change. `NextResponse.rewrite(url)` serves content from a different URL while keeping the original URL in the browser. The user never sees the internal URL change. Use redirect for auth flows (send user to `/login`). Use rewrite for A/B testing, locale routing, or serving different content under the same URL.
+</InterviewQ>
+
+<InterviewQ question="How do you protect an entire section of routes without listing every route?" difficulty="easy">
+  Use the `matcher` config with a path pattern — `"/dashboard/:path*"` matches `/dashboard` and every route under it. Or check `pathname.startsWith("/dashboard")` inside the middleware function. This way you define the protected section once and every new page you add under `/dashboard/` is automatically protected.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The Edge Runtime limitation is the biggest gotcha. I tried using Prisma in middleware on my first Next.js project and got a cryptic build error. The fix is always: verify a JWT in middleware, get full user data in the page.
+
+  The `callbackUrl` pattern is essential for good UX. Without it, users who get redirected to `/login` always end up at `/dashboard` after logging in — even if they were trying to visit `/dashboard/users/settings`. Always store where they were trying to go.
+
+  The matcher regex looks scary but you only need one:
+```ts
+  "/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)."
+```
+  This skips all static assets and runs middleware only on actual page requests. Copy-paste it into every project.
+</MyNotes>

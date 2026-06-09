@@ -1,0 +1,314 @@
+---
+title: "Toast Notifications with Vue + Tailwind CSS"
+description: "How to build a reusable toast notification system in Vue 3 with auto-dismiss, multiple types, stacking, and smooth animations using Tailwind CSS and a composable"
+category: ui-patterns
+tools: [vue, tailwind]
+tags: [toast, notification, alert, feedback, composable]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - ui-patterns/toast-nextjs
+  - ui-patterns/modal-vue
+---
+
+## Concept explanation
+
+A toast is a temporary notification that appears on screen to confirm an action or show a status message — then disappears automatically. In Vue 3 we build this as a **composable** (`useToast`) that manages a reactive list of toasts, and a `ToastContainer` component that renders them. Any component in the app can call `useToast()` and show a notification without prop drilling.
+
+<Callout type="note">
+  **Vue vs Nuxt difference:** Code is identical in both. Nuxt auto-imports composables from the `composables/` folder — so if you put `useToast.ts` there, you don't need to import it anywhere.
+</Callout>
+
+## Why it's used
+
+- Gives instant feedback after user actions (save, delete, error)
+- Non-blocking — user can keep working while the toast is visible
+- Auto-dismisses so users don't have to manually close it
+- Stacks multiple toasts without breaking the layout
+
+## Real-world use cases
+
+- "Changes saved successfully" after a form submit
+- "Failed to load data. Please try again." on API error
+- "Link copied to clipboard!" after clicking copy
+- "User deleted" after a destructive action
+- "New message received" for real-time events
+
+## Code example
+
+### Step 1 — The composable
+
+```ts
+// composables/useToast.ts
+import { ref } from 'vue'
+
+export type ToastType = 'success' | 'error' | 'warning' | 'info'
+
+export type Toast = {
+  id: string
+  message: string
+  type: ToastType
+  duration?: number
+}
+
+// Module-level state — shared across all components
+const toasts = ref<Toast[]>([])
+
+export function useToast() {
+
+  const add = (message: string, type: ToastType = 'info', duration = 3500) => {
+    const id = Math.random().toString(36).slice(2)
+    toasts.value.push({ id, message, type, duration })
+
+    // Auto-remove after duration
+    setTimeout(() => remove(id), duration)
+  }
+
+  const remove = (id: string) => {
+    toasts.value = toasts.value.filter((t) => t.id !== id)
+  }
+
+  // Shorthand helpers
+  const success = (message: string, duration?: number) => add(message, 'success', duration)
+  const error   = (message: string, duration?: number) => add(message, 'error', duration)
+  const warning = (message: string, duration?: number) => add(message, 'warning', duration)
+  const info    = (message: string, duration?: number) => add(message, 'info', duration)
+
+  return { toasts, add, remove, success, error, warning, info }
+}
+```
+
+### Step 2 — The ToastContainer component
+
+```vue
+<!-- components/ToastContainer.vue -->
+<script setup lang="ts">
+import { useToast } from '@/composables/useToast'
+
+const { toasts, remove } = useToast()
+
+const icons = {
+  success: '✅',
+  error:   '❌',
+  warning: '⚠️',
+  info:    'ℹ️',
+}
+
+const styles = {
+  success: 'bg-green-50 border-green-200 text-green-800 dark:bg-green-950 dark:border-green-800 dark:text-green-200',
+  error:   'bg-red-50 border-red-200 text-red-800 dark:bg-red-950 dark:border-red-800 dark:text-red-200',
+  warning: 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-200',
+  info:    'bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-950 dark:border-blue-800 dark:text-blue-200',
+}
+</script>
+
+<template>
+  <Teleport to="body">
+    <div class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-80">
+      <TransitionGroup
+        enter-active-class="transition duration-300 ease-out"
+        enter-from-class="opacity-0 translate-y-4 scale-95"
+        enter-to-class="opacity-100 translate-y-0 scale-100"
+        leave-active-class="transition duration-200 ease-in"
+        leave-from-class="opacity-100 translate-y-0 scale-100"
+        leave-to-class="opacity-0 translate-y-2 scale-95"
+      >
+        <div
+          v-for="toast in toasts"
+          :key="toast.id"
+          :class="[
+            'flex items-start gap-3 px-4 py-3 rounded-xl border shadow-lg text-sm',
+            styles[toast.type]
+          ]"
+        >
+          <!-- Icon -->
+          <span class="shrink-0 mt-0.5">{{ icons[toast.type] }}</span>
+
+          <!-- Message -->
+          <p class="flex-1 leading-relaxed">{{ toast.message }}</p>
+
+          <!-- Close button -->
+          <button
+            @click="remove(toast.id)"
+            class="shrink-0 opacity-60 hover:opacity-100 transition-opacity mt-0.5"
+            aria-label="Dismiss"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+      </TransitionGroup>
+    </div>
+  </Teleport>
+</template>
+```
+
+### Step 3 — Add ToastContainer to your app layout
+
+```vue
+<!-- App.vue or layouts/default.vue -->
+<script setup lang="ts">
+import ToastContainer from '@/components/ToastContainer.vue'
+</script>
+
+<template>
+  <div>
+    <slot />
+    <!-- One instance at the root level -->
+    <ToastContainer />
+  </div>
+</template>
+```
+
+### Step 4 — Use it anywhere in your app
+
+```vue
+<!-- pages/users.vue -->
+<script setup lang="ts">
+import { useToast } from '@/composables/useToast'
+
+const { success, error, warning, info } = useToast()
+
+const handleSave = async () => {
+  try {
+    await saveUser()
+    success('User saved successfully!')
+  } catch {
+    error('Failed to save user. Please try again.')
+  }
+}
+
+const handleDelete = async () => {
+  try {
+    await deleteUser()
+    success('User deleted.')
+  } catch {
+    error('Could not delete user.')
+  }
+}
+
+const handleCopy = () => {
+  navigator.clipboard.writeText('https://example.com')
+  info('Link copied to clipboard!')
+}
+</script>
+
+<template>
+  <div class="space-y-3">
+    <button @click="handleSave"   class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Save</button>
+    <button @click="handleDelete" class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm">Delete</button>
+    <button @click="handleCopy"   class="px-4 py-2 bg-neutral-200 rounded-lg text-sm">Copy Link</button>
+    <button @click="() => warning('You have unsaved changes!')"
+      class="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm">
+      Warn
+    </button>
+  </div>
+</template>
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```ts
+// Defining toasts inside the composable function
+// Each component gets its own separate list — toasts don't share state
+export function useToast() {
+  const toasts = ref<Toast[]>([]) // ❌ new ref every call
+  // ...
+}
+```
+</Wrong>
+<Right>
+```ts
+// Define toasts at module level — outside the function
+// All components share the same reactive list
+const toasts = ref<Toast[]>([]) // ✅ shared singleton
+
+export function useToast() {
+  // toasts is shared across all components
+  return { toasts, add, remove }
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Not clearing the timeout when toast is manually dismissed
+// Timer fires after manual close and tries to remove already-gone toast
+const add = (message: string) => {
+  const id = crypto.randomUUID()
+  toasts.value.push({ id, message })
+  setTimeout(() => remove(id), 3000) // ❌ no cleanup
+}
+```
+</Wrong>
+<Right>
+```ts
+// Store timeout ref and clear it on manual dismiss
+const timers = new Map<string, ReturnType<typeof setTimeout>>()
+
+const add = (message: string) => {
+  const id = crypto.randomUUID()
+  toasts.value.push({ id, message })
+  const timer = setTimeout(() => remove(id), 3000)
+  timers.set(id, timer) // ✅ store timer
+}
+
+const remove = (id: string) => {
+  clearTimeout(timers.get(id)) // ✅ clear timer
+  timers.delete(id)
+  toasts.value = toasts.value.filter((t) => t.id !== id)
+}
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Define the `toasts` ref at **module level** outside the composable function so all components share the same list
+- Store timeout references in a `Map` and clear them when a toast is manually dismissed
+- Use `Teleport to="body"` so toasts always appear above everything else
+- Use `TransitionGroup` for smooth enter/leave animations on the list
+- Limit the number of visible toasts (e.g. max 5) to prevent screen overflow
+- Add a progress bar inside each toast to show how much time is left
+
+<Callout type="tip">
+  To limit max visible toasts, slice the array in the template:
+```vue
+  <div v-for="toast in toasts.slice(0, 5)" :key="toast.id">
+```
+  Or filter in the composable before pushing:
+```ts
+  if (toasts.value.length >= 5) toasts.value.shift()
+  toasts.value.push({ id, message, type })
+```
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="Why must the toasts ref be defined outside the composable function?" difficulty="mid">
+  If `toasts` is defined inside `useToast()`, each call to `useToast()` creates a new independent ref. Component A's toasts and Component B's toasts are completely separate lists — adding a toast in A won't show it in B. By defining `toasts` at module level (outside the function), all components share the same singleton ref. This is the standard pattern for shared state in Vue composables without Pinia.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Toast and Modal?" difficulty="easy">
+  A modal is blocking — it sits on top of the entire UI and requires the user to interact with it before doing anything else. A toast is non-blocking — it appears in a corner, the user can keep working, and it disappears automatically after a few seconds. Use modals for decisions that require user input (confirm delete, fill a form). Use toasts for feedback on completed actions (saved, copied, error).
+</InterviewQ>
+
+<InterviewQ question="How would you add a progress bar to each toast showing time remaining?" difficulty="hard">
+  Add a CSS animation that shrinks a bar from 100% to 0% width over the toast duration. Use an inline style with `animation-duration` set to the toast's duration value. When the animation ends, it visually signals the toast is about to disappear — which happens via the `setTimeout` in the composable. No JS needed for the animation itself — pure CSS handles it.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The module-level `toasts` ref is the key insight. I made the mistake of defining it inside the function on my first project and spent an hour debugging why toasts weren't showing — each component had its own separate list.
+
+  For Nuxt — put `useToast.ts` in the `composables/` folder and Nuxt auto-imports it everywhere. No import needed in any component.
+
+  The timer cleanup with `Map` is optional for simple apps but becomes important when users spam-click actions — without it you get ghost removals that try to delete toasts that were already manually closed.
+</MyNotes>

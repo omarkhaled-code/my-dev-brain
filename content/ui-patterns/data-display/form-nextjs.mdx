@@ -1,0 +1,598 @@
+---
+title: "Form UI with Next.js + Tailwind CSS"
+description: "How to build reusable, accessible form components in Next.js — inputs, selects, checkboxes, radio buttons, and switches — without validation logic, using Tailwind CSS"
+category: ui-patterns
+tools: [nextjs, tailwind]
+tags: [form, input, select, checkbox, radio, switch, accessible]
+difficulty: beginner
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - ui-patterns/form-vue
+  - ui-patterns/modal-nextjs
+---
+
+## Concept explanation
+
+Form UI components are the building blocks for collecting user input — text fields, selects, checkboxes, radio buttons, and toggles. This page covers the **visual and structural** side only. Validation logic (Zod, React Hook Form) is covered separately in the `forms-validation` category. In React all form inputs use `value` + `onChange` for controlled state.
+
+<Callout type="note">
+  **Next.js vs React difference:** All components here are pure React — no Next.js-specific APIs. They work identically in plain React (Vite). Mark each one `"use client"` since they use `onChange` event handlers.
+</Callout>
+
+## Why it's used
+
+- Every app needs to collect user input at some point
+- Consistent form styling improves UX and looks professional
+- Reusable input components reduce duplication across pages
+- Accessible forms work for keyboard and screen reader users
+
+## Real-world use cases
+
+- Login and register pages
+- User profile edit form
+- Create / edit resource forms (product, post, user)
+- Settings and preferences pages
+- Contact and feedback forms
+
+## Code example
+
+### Form field wrapper component
+
+```tsx
+// components/form/FormField.tsx
+type Props = {
+  label: string;
+  hint?: string;
+  error?: string;
+  required?: boolean;
+  children: React.ReactNode;
+};
+
+export function FormField({ label, hint, error, required, children }: Props) {
+  return (
+    <div className="space-y-1.5">
+      {/* Label */}
+      <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+        {label}
+        {required && <span className="text-red-500 ml-0.5">*</span>}
+      </label>
+
+      {/* Input */}
+      {children}
+
+      {/* Hint */}
+      {hint && !error && (
+        <p className="text-xs text-neutral-400">{hint}</p>
+      )}
+
+      {/* Error */}
+      {error && (
+        <p className="text-xs text-red-500 flex items-center gap-1">
+          <span>⚠</span> {error}
+        </p>
+      )}
+    </div>
+  );
+}
+```
+
+### Text input
+
+```tsx
+// components/form/Input.tsx
+type Props = {
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+  placeholder?: string;
+  disabled?: boolean;
+  error?: boolean;
+};
+
+export function Input({
+  value,
+  onChange,
+  type = "text",
+  placeholder,
+  disabled,
+  error,
+}: Props) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      disabled={disabled}
+      className={`
+        w-full px-3 py-2 text-sm rounded-lg border transition-colors
+        bg-white dark:bg-neutral-900
+        text-neutral-900 dark:text-neutral-100
+        placeholder:text-neutral-400
+        focus:outline-none focus:ring-2
+        disabled:opacity-50 disabled:cursor-not-allowed
+        ${error
+          ? "border-red-400 focus:ring-red-400"
+          : "border-neutral-200 dark:border-neutral-700 focus:ring-blue-500 focus:border-blue-500"
+        }
+      `}
+    />
+  );
+}
+```
+
+### Textarea
+
+```tsx
+// components/form/Textarea.tsx
+type Props = {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  rows?: number;
+  disabled?: boolean;
+  error?: boolean;
+};
+
+export function Textarea({
+  value,
+  onChange,
+  placeholder,
+  rows = 4,
+  disabled,
+  error,
+}: Props) {
+  return (
+    <textarea
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      rows={rows}
+      disabled={disabled}
+      className={`
+        w-full px-3 py-2 text-sm rounded-lg border transition-colors resize-y
+        bg-white dark:bg-neutral-900
+        text-neutral-900 dark:text-neutral-100
+        placeholder:text-neutral-400
+        focus:outline-none focus:ring-2
+        disabled:opacity-50 disabled:cursor-not-allowed
+        ${error
+          ? "border-red-400 focus:ring-red-400"
+          : "border-neutral-200 dark:border-neutral-700 focus:ring-blue-500 focus:border-blue-500"
+        }
+      `}
+    />
+  );
+}
+```
+
+### Select
+
+```tsx
+// components/form/Select.tsx
+type Option = { value: string; label: string };
+
+type Props = {
+  value: string;
+  onChange: (value: string) => void;
+  options: Option[];
+  placeholder?: string;
+  disabled?: boolean;
+  error?: boolean;
+};
+
+export function Select({
+  value,
+  onChange,
+  options,
+  placeholder,
+  disabled,
+  error,
+}: Props) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      className={`
+        w-full px-3 py-2 text-sm rounded-lg border transition-colors
+        bg-white dark:bg-neutral-900
+        text-neutral-900 dark:text-neutral-100
+        focus:outline-none focus:ring-2
+        disabled:opacity-50 disabled:cursor-not-allowed
+        ${error
+          ? "border-red-400 focus:ring-red-400"
+          : "border-neutral-200 dark:border-neutral-700 focus:ring-blue-500 focus:border-blue-500"
+        }
+      `}
+    >
+      {placeholder && (
+        <option value="" disabled>
+          {placeholder}
+        </option>
+      )}
+      {options.map((opt) => (
+        <option key={opt.value} value={opt.value}>
+          {opt.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+```
+
+### Checkbox
+
+```tsx
+// components/form/Checkbox.tsx
+type Props = {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  disabled?: boolean;
+};
+
+export function Checkbox({ checked, onChange, label, disabled }: Props) {
+  return (
+    <label className="flex items-center gap-3 cursor-pointer group">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        disabled={disabled}
+        className="w-4 h-4 rounded border-neutral-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+      />
+      <span className="text-sm text-neutral-700 dark:text-neutral-300 group-hover:text-neutral-900 dark:group-hover:text-neutral-100 transition-colors">
+        {label}
+      </span>
+    </label>
+  );
+}
+```
+
+### Radio group
+
+```tsx
+// components/form/RadioGroup.tsx
+type Option = {
+  value: string;
+  label: string;
+  description?: string;
+};
+
+type Props = {
+  value: string;
+  onChange: (value: string) => void;
+  options: Option[];
+  name: string;
+  disabled?: boolean;
+};
+
+export function RadioGroup({ value, onChange, options, name, disabled }: Props) {
+  return (
+    <div className="space-y-2">
+      {options.map((opt) => (
+        <label
+          key={opt.value}
+          className={`
+            flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors
+            ${value === opt.value
+              ? "border-blue-500 bg-blue-50 dark:bg-blue-950"
+              : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600"
+            }
+          `}
+        >
+          <input
+            type="radio"
+            name={name}
+            value={opt.value}
+            checked={value === opt.value}
+            onChange={() => onChange(opt.value)}
+            disabled={disabled}
+            className="mt-0.5 w-4 h-4 text-blue-600 border-neutral-300 focus:ring-blue-500"
+          />
+          <div>
+            <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+              {opt.label}
+            </p>
+            {opt.description && (
+              <p className="text-xs text-neutral-400 mt-0.5">{opt.description}</p>
+            )}
+          </div>
+        </label>
+      ))}
+    </div>
+  );
+}
+```
+
+### Toggle switch
+
+```tsx
+// components/form/Switch.tsx
+type Props = {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label?: string;
+  description?: string;
+  disabled?: boolean;
+};
+
+export function Switch({ checked, onChange, label, description, disabled }: Props) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      {label && (
+        <div>
+          <p className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+            {label}
+          </p>
+          {description && (
+            <p className="text-xs text-neutral-400">{description}</p>
+          )}
+        </div>
+      )}
+
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={`
+          relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent
+          transition-colors duration-200
+          focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+          disabled:opacity-50 disabled:cursor-not-allowed
+          ${checked ? "bg-blue-600" : "bg-neutral-200 dark:bg-neutral-700"}
+        `}
+      >
+        <span
+          className={`
+            pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-sm
+            transform transition-transform duration-200
+            ${checked ? "translate-x-5" : "translate-x-0"}
+          `}
+        />
+      </button>
+    </div>
+  );
+}
+```
+
+### Full form example using all components
+
+```tsx
+// app/users/create/page.tsx
+"use client";
+
+import { useState } from "react";
+import { FormField } from "@/components/form/FormField";
+import { Input } from "@/components/form/Input";
+import { Textarea } from "@/components/form/Textarea";
+import { Select } from "@/components/form/Select";
+import { Checkbox } from "@/components/form/Checkbox";
+import { RadioGroup } from "@/components/form/RadioGroup";
+import { Switch } from "@/components/form/Switch";
+import { useToast } from "@/components/toast/ToastProvider";
+
+const roleOptions = [
+  { value: "admin",  label: "Admin" },
+  { value: "editor", label: "Editor" },
+  { value: "viewer", label: "Viewer" },
+];
+
+const planOptions = [
+  { value: "free", label: "Free",  description: "Up to 3 projects" },
+  { value: "pro",  label: "Pro",   description: "Unlimited projects + priority support" },
+  { value: "team", label: "Team",  description: "Everything in Pro + team features" },
+];
+
+export default function CreateUserPage() {
+  const { success } = useToast();
+  const [loading, setLoading] = useState(false);
+
+  const [form, setForm] = useState({
+    name:          "",
+    email:         "",
+    bio:           "",
+    role:          "",
+    plan:          "free",
+    notifications: true,
+    agreeToTerms:  false,
+  });
+
+  const set = <K extends keyof typeof form>(key: K, value: typeof form[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    await new Promise((r) => setTimeout(r, 1000)); // simulate API call
+    console.log(form);
+    success("User created successfully!");
+    setLoading(false);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="max-w-lg space-y-6">
+
+      <FormField label="Full name" required>
+        <Input
+          value={form.name}
+          onChange={(v) => set("name", v)}
+          placeholder="Omar Hassan"
+        />
+      </FormField>
+
+      <FormField label="Email" hint="We'll never share your email." required>
+        <Input
+          value={form.email}
+          onChange={(v) => set("email", v)}
+          type="email"
+          placeholder="omar@example.com"
+        />
+      </FormField>
+
+      <FormField label="Bio" hint="Max 200 characters">
+        <Textarea
+          value={form.bio}
+          onChange={(v) => set("bio", v)}
+          placeholder="Tell us about yourself..."
+          rows={3}
+        />
+      </FormField>
+
+      <FormField label="Role" required>
+        <Select
+          value={form.role}
+          onChange={(v) => set("role", v)}
+          options={roleOptions}
+          placeholder="Select a role"
+        />
+      </FormField>
+
+      <FormField label="Plan">
+        <RadioGroup
+          value={form.plan}
+          onChange={(v) => set("plan", v)}
+          options={planOptions}
+          name="plan"
+        />
+      </FormField>
+
+      <Switch
+        checked={form.notifications}
+        onChange={(v) => set("notifications", v)}
+        label="Email notifications"
+        description="Receive updates about your account activity"
+      />
+
+      <Checkbox
+        checked={form.agreeToTerms}
+        onChange={(v) => set("agreeToTerms", v)}
+        label="I agree to the Terms of Service and Privacy Policy"
+      />
+
+      <div className="flex items-center gap-3 pt-2">
+        <button
+          type="button"
+          className="px-4 py-2 text-sm font-medium text-neutral-600 border border-neutral-200 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={loading}
+          className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {loading ? "Saving..." : "Create User"}
+        </button>
+      </div>
+
+    </form>
+  );
+}
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```tsx
+// Using uncontrolled inputs — reading value from DOM directly
+// state is unpredictable and hard to reset or submit
+const nameRef = useRef<HTMLInputElement>(null)
+
+const handleSubmit = () => {
+  const name = nameRef.current?.value // ❌ reading from DOM
+}
+```
+</Wrong>
+<Right>
+```tsx
+// Always use controlled inputs — state lives in React
+// easy to reset, submit, and validate
+const [name, setName] = useState("")
+
+const handleSubmit = () => {
+  console.log(name) // ✅ reading from state
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// One setState call per field — verbose and repetitive
+const [name, setName] = useState("")
+const [email, setEmail] = useState("")
+const [bio, setBio] = useState("")
+// ...5 more useState calls ❌
+```
+</Wrong>
+<Right>
+```tsx
+// Group related form fields in one state object
+const [form, setForm] = useState({
+  name: "", email: "", bio: "", role: "", plan: "free"
+})
+
+// Helper to update one field at a time
+const set = (key, value) =>
+  setForm(prev => ({ ...prev, [key]: value })) // ✅
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always use controlled inputs — value + onChange — never uncontrolled with refs
+- Group form state in one object with a `set` helper instead of one `useState` per field
+- Wrap every input in a `FormField` component that handles label, hint, and error
+- Always use semantic `<label>` elements linked to inputs
+- Add `disabled` during form submission to prevent double submissions
+- Use `type="email"`, `type="password"`, `type="number"` — helps mobile keyboards
+- Add `focus:ring` so keyboard users can see focused inputs
+- Never use `<form>` tags in artifacts — use regular `<div>` with `onClick` handlers instead
+
+<Callout type="tip">
+  Add a `set` helper to update form fields cleanly without spreading manually everywhere:
+```tsx
+  const set = <K extends keyof typeof form>(key: K, value: typeof form[K]) => {
+    setForm(prev => ({ ...prev, [key]: value }))
+  }
+  // Usage:
+  <Input value={form.name} onChange={v => set("name", v)} />
+```
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between controlled and uncontrolled inputs in React?" difficulty="mid">
+  A controlled input has its value managed by React state — `value` comes from state and `onChange` updates it. React is the single source of truth. An uncontrolled input manages its own value in the DOM — you read it via a `ref`. Controlled inputs are preferred because state is predictable, easy to validate, reset, and submit. Uncontrolled inputs are used mainly for file inputs and cases where you need to integrate with non-React libraries.
+</InterviewQ>
+
+<InterviewQ question="Why group form state in one object instead of separate useState calls?" difficulty="easy">
+  One `useState` object keeps all form fields together — easier to reset (set the whole object back to defaults), easier to submit (pass the whole object to the API), and less boilerplate than one `useState` per field. The `set` helper updates one field at a time while keeping the rest intact using the spread operator.
+</InterviewQ>
+
+<InterviewQ question="How do you handle file inputs in React?" difficulty="mid">
+  File inputs can't be fully controlled because their `value` is read-only for security. Use an uncontrolled approach — attach an `onChange` handler that reads `e.target.files` and stores the files in state separately. To clear the file input programmatically, use a `ref` and set `ref.current.value = ""`. Style it by hiding the native input and triggering it with `ref.current.click()` from a custom button.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The `set` helper pattern is the cleanest way to handle form state in React without a form library:
+```tsx
+  const set = (key, value) => setForm(prev => ({ ...prev, [key]: value }))
+```
+  Use it everywhere — no more repetitive `setName`, `setEmail`, `setBio` calls.
+
+  The `FormField` wrapper is the most copy-pasteable thing here. It handles label, hint, and error in one place. Every project I start, I create this component first.
+
+  **Vue vs React difference:** Vue uses `v-model` for two-way binding — one prop handles both value and updates. React uses `value` + `onChange` separately — more explicit but requires the `set` helper pattern to stay clean. Both achieve the same result.
+</MyNotes>

@@ -1,0 +1,1128 @@
+---
+title: "Frontend Performance Optimization"
+description: "A complete guide to frontend performance in Next.js and Nuxt 3 — covering React.memo, useMemo, useCallback, Vue computed, v-memo, lazy loading, image optimization, and bundle size reduction."
+category: performance
+tools: [nextjs, nuxt, react, vue]
+tags: [performance, react-memo, useMemo, useCallback, v-memo, lazy-loading, nextjs, nuxt, optimization]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+relatedTopics: [performance-backend, typescript-advanced, state-management]
+---
+
+## Concept Explanation
+
+Frontend performance is about two things:
+
+**1. Load performance** — how fast your app loads in the browser
+**2. Runtime performance** — how fast your app responds after it loads
+```tsx
+Load Performance                Runtime Performance
+────────────────                ───────────────────
+Bundle size too large?    →     Too many re-renders?
+Too many network requests? →    Expensive calculations?
+Large images?             →     Slow list rendering?
+No code splitting?        →     Memory leaks?
+Fix: lazy loading,              Fix: memoization,
+image optimization,             virtualization,
+prefetching,                    computed caching,
+caching                         component splitting
+```
+
+**Mental model for re-renders:**
+```tsx
+Without optimization:
+Parent re-renders → ALL children re-render → grandchildren re-render
+Even if their props didn't change!
+With optimization:
+Parent re-renders → Only children whose props CHANGED re-render
+Children with same props → skipped — no wasted work
+```
+
+<Callout type="note">
+  **Don't optimize prematurely.** Performance optimization adds complexity.
+  Only optimize when you have a real problem — your app feels slow, or you
+  can measure a specific bottleneck. Optimizing code that is already fast
+  enough wastes time and makes code harder to read.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **React.memo / v-memo:** Skip re-rendering components whose props haven't changed.
+- **useMemo / computed:** Cache expensive calculations — don't recompute on every render.
+- **useCallback:** Stable function references — prevent child re-renders caused by new function instances.
+- **Lazy loading:** Split your bundle — load code only when needed.
+- **Image optimization:** Serve correctly sized, modern format images automatically.
+
+---
+
+## Real-World Use Cases
+
+- **Dashboard with many widgets:** Memoize each widget so updating one doesn't re-render all others.
+- **Large filtered list:** Cache the filtered result with useMemo/computed instead of filtering on every render.
+- **Modal with heavy content:** Lazy load the modal component — don't load its code until it opens.
+- **Blog with many images:** Use Next.js Image or Nuxt Image for automatic optimization.
+- **Admin table:** Memoize row components so sorting one column doesn't re-render 1000 rows.
+
+---
+
+## Part 1 — React / Next.js Performance
+
+### Understanding Re-renders First
+
+```tsx
+// Every time a component's state or props change, React re-renders it
+// AND all its children — even if the children's props didn't change
+
+function ParentComponent() {
+    const [count, setCount] = useState(0)
+
+    return (
+        <div>
+            <button onClick={() => setCount(c => c + 1)}>
+                Count: {count}
+            </button>
+            {/* These re-render EVERY time count changes */}
+            <ExpensiveChild name="Ahmed" />
+            <AnotherChild title="Posts" />
+        </div>
+    )
+}
+
+// Problem: ExpensiveChild and AnotherChild re-render on every click
+// even though their props never change
+```
+
+---
+
+### React.memo — Skip Re-renders
+
+```tsx
+// React.memo wraps a component and skips re-rendering
+// if the props haven't changed (shallow comparison)
+
+// Without memo — re-renders on every parent render
+function UserCard({ user }: { user: User }) {
+    console.log('UserCard rendered') // fires every time parent renders
+    return (
+        <div>
+            <img src={user.avatar ?? '/default.png'} />
+            <h3>{user.name}</h3>
+            <p>{user.email}</p>
+        </div>
+    )
+}
+
+// With memo — only re-renders when user prop changes
+const UserCard = React.memo(function UserCard({ user }: { user: User }) {
+    console.log('UserCard rendered') // only fires when user changes
+    return (
+        <div>
+            <img src={user.avatar ?? '/default.png'} />
+            <h3>{user.name}</h3>
+            <p>{user.email}</p>
+        </div>
+    )
+})
+
+// Real-life — memoize list items
+const PostListItem = React.memo(function PostListItem({
+    post,
+    onDelete,
+}: {
+    post: Post
+    onDelete: (id: string) => void
+}) {
+    return (
+        <li>
+            <h3>{post.title}</h3>
+            <span>{post.status}</span>
+            <button onClick={() => onDelete(post.id)}>Delete</button>
+        </li>
+    )
+})
+
+// Custom comparison — control when to re-render
+const UserCard = React.memo(
+    function UserCard({ user }: { user: User }) {
+        return <div>{user.name}</div>
+    },
+    (prevProps, nextProps) => {
+        // Return true to SKIP re-render, false to re-render
+        return prevProps.user.id === nextProps.user.id &&
+               prevProps.user.name === nextProps.user.name
+    }
+)
+```
+
+---
+
+### useMemo — Cache Expensive Calculations
+
+```tsx
+// useMemo caches the result of a calculation
+// Only recomputes when dependencies change
+
+// Without useMemo — recalculates on every render
+function PostList({ posts }: { posts: Post[] }) {
+    // This runs on EVERY render — even unrelated state changes
+    const publishedPosts = posts.filter(p => p.status === 'published')
+    const totalViews = posts.reduce((sum, p) => sum + p.views, 0)
+
+    return (
+        <div>
+            <p>Total views: {totalViews}</p>
+            <ul>
+                {publishedPosts.map(post => (
+                    <li key={post.id}>{post.title}</li>
+                ))}
+            </ul>
+        </div>
+    )
+}
+
+// With useMemo — only recalculates when posts changes
+function PostList({ posts }: { posts: Post[] }) {
+    const publishedPosts = useMemo(
+        () => posts.filter(p => p.status === 'published'),
+        [posts] // only recompute when posts array changes
+    )
+
+    const totalViews = useMemo(
+        () => posts.reduce((sum, p) => sum + p.views, 0),
+        [posts]
+    )
+
+    return (
+        <div>
+            <p>Total views: {totalViews}</p>
+            <ul>
+                {publishedPosts.map(post => (
+                    <li key={post.id}>{post.title}</li>
+                ))}
+            </ul>
+        </div>
+    )
+}
+
+
+// Real-life — expensive search/filter
+function UserDashboard({ users }: { users: User[] }) {
+    const [search, setSearch] = useState('')
+    const [roleFilter, setRoleFilter] = useState<string>('all')
+    const [sortBy, setSortBy] = useState<'name' | 'date'>('name')
+
+    // Only recomputes when users, search, roleFilter, or sortBy changes
+    const filteredUsers = useMemo(() => {
+        let result = users
+
+        if (search) {
+            result = result.filter(u =>
+                u.name.toLowerCase().includes(search.toLowerCase()) ||
+                u.email.toLowerCase().includes(search.toLowerCase())
+            )
+        }
+
+        if (roleFilter !== 'all') {
+            result = result.filter(u => u.role === roleFilter)
+        }
+
+        return result.sort((a, b) =>
+            sortBy === 'name'
+                ? a.name.localeCompare(b.name)
+                : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        )
+    }, [users, search, roleFilter, sortBy])
+
+    return (
+        <div>
+            <input value={search} onChange={e => setSearch(e.target.value)} />
+            <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
+                <option value="all">All</option>
+                <option value="admin">Admin</option>
+                <option value="user">User</option>
+            </select>
+            <p>{filteredUsers.length} users found</p>
+            <ul>
+                {filteredUsers.map(user => (
+                    <UserCard key={user.id} user={user} />
+                ))}
+            </ul>
+        </div>
+    )
+}
+```
+
+---
+
+### useCallback — Stable Function References
+
+```tsx
+// Functions defined inside components are recreated on every render
+// This breaks React.memo — the child sees a "new" function and re-renders anyway
+
+// The problem:
+const PostList = React.memo(function PostList({
+    posts,
+    onDelete,
+}: {
+    posts: Post[]
+    onDelete: (id: string) => void
+}) {
+    return (
+        <ul>
+            {posts.map(post => (
+                <PostItem key={post.id} post={post} onDelete={onDelete} />
+            ))}
+        </ul>
+    )
+})
+
+function Dashboard() {
+    const [posts, setPosts] = useState<Post[]>([])
+    const [count, setCount] = useState(0)
+
+    // ❌ New function created on every render — breaks React.memo on PostList
+    const handleDelete = (id: string) => {
+        setPosts(prev => prev.filter(p => p.id !== id))
+    }
+
+    return (
+        <div>
+            <button onClick={() => setCount(c => c + 1)}>Count: {count}</button>
+            <PostList posts={posts} onDelete={handleDelete} />
+            {/* PostList re-renders on every count click because handleDelete is new! */}
+        </div>
+    )
+}
+
+
+// The fix — useCallback gives a stable function reference
+function Dashboard() {
+    const [posts, setPosts] = useState<Post[]>([])
+    const [count, setCount] = useState(0)
+
+    // ✅ Same function reference across renders — React.memo works correctly
+    const handleDelete = useCallback((id: string) => {
+        setPosts(prev => prev.filter(p => p.id !== id))
+    }, []) // empty deps — function never changes
+
+    return (
+        <div>
+            <button onClick={() => setCount(c => c + 1)}>Count: {count}</button>
+            <PostList posts={posts} onDelete={handleDelete} />
+            {/* PostList skips re-render when count changes — only re-renders when posts changes */}
+        </div>
+    )
+}
+
+
+// Real-life — complete optimized list
+function PostManager() {
+    const [posts, setPosts] = useState<Post[]>([])
+    const [search, setSearch] = useState('')
+
+    const filteredPosts = useMemo(
+        () => posts.filter(p =>
+            p.title.toLowerCase().includes(search.toLowerCase())
+        ),
+        [posts, search]
+    )
+
+    const handleDelete = useCallback(async (id: string) => {
+        await fetch(`/api/posts/${id}`, { method: 'DELETE' })
+        setPosts(prev => prev.filter(p => p.id !== id))
+    }, [])
+
+    const handleStatusChange = useCallback(async (id: string, status: string) => {
+        await fetch(`/api/posts/${id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ status }),
+        })
+        setPosts(prev =>
+            prev.map(p => p.id === id ? { ...p, status } : p)
+        )
+    }, [])
+
+    return (
+        <div>
+            <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search posts..."
+            />
+            <ul>
+                {filteredPosts.map(post => (
+                    <PostItem
+                        key={post.id}
+                        post={post}
+                        onDelete={handleDelete}
+                        onStatusChange={handleStatusChange}
+                    />
+                ))}
+            </ul>
+        </div>
+    )
+}
+
+// Memoize the list item too — completes the optimization
+const PostItem = React.memo(function PostItem({
+    post,
+    onDelete,
+    onStatusChange,
+}: {
+    post: Post
+    onDelete: (id: string) => void
+    onStatusChange: (id: string, status: string) => void
+}) {
+    return (
+        <li>
+            <h3>{post.title}</h3>
+            <button onClick={() => onDelete(post.id)}>Delete</button>
+            <button onClick={() => onStatusChange(post.id, 'published')}>Publish</button>
+        </li>
+    )
+})
+```
+
+---
+
+### Lazy Loading Components — Next.js
+
+```tsx
+// next/dynamic — load components only when needed
+// Reduces initial bundle size
+
+import dynamic from 'next/dynamic'
+
+// Basic lazy load — loads when component first renders
+const HeavyChart = dynamic(() => import('@/components/HeavyChart'))
+
+// With loading state
+const HeavyChart = dynamic(
+    () => import('@/components/HeavyChart'),
+    { loading: () => <div>Loading chart...</div> }
+)
+
+// Disable SSR — for browser-only components
+const MapComponent = dynamic(
+    () => import('@/components/MapComponent'),
+    { ssr: false } // don't render on server
+)
+
+// Real-life — lazy load modals
+const CreatePostModal = dynamic(() => import('@/components/modals/CreatePostModal'))
+const DeleteConfirmModal = dynamic(() => import('@/components/modals/DeleteConfirmModal'))
+
+function PostsPage() {
+    const [showCreate, setShowCreate] = useState(false)
+    const [deleteId, setDeleteId] = useState<string | null>(null)
+
+    return (
+        <div>
+            <button onClick={() => setShowCreate(true)}>Create Post</button>
+            <PostList onDelete={id => setDeleteId(id)} />
+
+            {/* Modal code only loads when showCreate becomes true */}
+            {showCreate && (
+                <CreatePostModal onClose={() => setShowCreate(false)} />
+            )}
+
+            {/* Modal code only loads when deleteId is set */}
+            {deleteId && (
+                <DeleteConfirmModal
+                    id={deleteId}
+                    onClose={() => setDeleteId(null)}
+                />
+            )}
+        </div>
+    )
+}
+
+// Lazy load heavy libraries
+const RichTextEditor = dynamic(
+    () => import('@/components/RichTextEditor'),
+    {
+        ssr: false,
+        loading: () => <textarea placeholder="Loading editor..." />,
+    }
+)
+```
+
+---
+
+### Image Optimization — Next.js
+
+```tsx
+// Always use next/image instead of <img>
+// Automatic: resizing, WebP conversion, lazy loading, blur placeholder
+
+import Image from 'next/image'
+
+// Basic usage
+<Image
+    src="/images/hero.jpg"
+    alt="Hero image"
+    width={1200}
+    height={600}
+/>
+
+// Fill container — responsive
+<div style={{ position: 'relative', height: '400px' }}>
+    <Image
+        src="/images/cover.jpg"
+        alt="Cover"
+        fill
+        style={{ objectFit: 'cover' }}
+    />
+</div>
+
+// Priority — load immediately (above the fold)
+<Image
+    src="/images/hero.jpg"
+    alt="Hero"
+    width={1200}
+    height={600}
+    priority // skips lazy loading — use for LCP image
+/>
+
+// Blur placeholder — shows blurred version while loading
+<Image
+    src="/images/post-cover.jpg"
+    alt="Post cover"
+    width={800}
+    height={400}
+    placeholder="blur"
+    blurDataURL="data:image/jpeg;base64,..." // tiny base64 image
+/>
+
+// Remote images — must configure domains
+// next.config.ts
+const nextConfig = {
+    images: {
+        remotePatterns: [
+            {
+                protocol: 'https',
+                hostname: 'your-laravel-api.com',
+                pathname: '/storage/**',
+            },
+        ],
+    },
+}
+```
+
+---
+
+### Next.js Specific Optimizations
+
+```tsx
+// ── SUSPENSE + STREAMING ─────────────────────────────────
+// Stream slow parts of the page — fast parts show immediately
+
+// app/dashboard/page.tsx
+import { Suspense } from 'react'
+
+export default function DashboardPage() {
+    return (
+        <div>
+            {/* Shows immediately */}
+            <DashboardHeader />
+
+            {/* Shows loading skeleton while fetching */}
+            <Suspense fallback={<StatsSkeleton />}>
+                <DashboardStats /> {/* slow — fetches from Laravel */}
+            </Suspense>
+
+            {/* Shows loading skeleton independently */}
+            <Suspense fallback={<PostsSkeleton />}>
+                <RecentPosts /> {/* slow — fetches from Laravel */}
+            </Suspense>
+        </div>
+    )
+}
+
+// ── ROUTE PREFETCHING ────────────────────────────────────
+// next/link prefetches routes automatically in production
+import Link from 'next/link'
+
+// Prefetches /posts/[slug] when link is visible in viewport
+<Link href={`/posts/${post.slug}`}>
+    {post.title}
+</Link>
+
+// Disable prefetch for less important links
+<Link href="/admin" prefetch={false}>
+    Admin
+</Link>
+
+// ── SERVER COMPONENTS ────────────────────────────────────
+// Default in App Router — zero JavaScript sent to client
+
+// This component has ZERO client-side JavaScript
+// Data fetches on server, HTML sent to browser
+async function PostList() {
+    const posts = await fetch(`${process.env.LARAVEL_API_URL}/posts`, {
+        cache: 'no-store',
+    }).then(r => r.json())
+
+    return (
+        <ul>
+            {posts.map((post: Post) => (
+                <li key={post.id}>{post.title}</li>
+            ))}
+        </ul>
+    )
+}
+
+// Only add 'use client' when you need interactivity
+// Rules: useState, useEffect, event handlers → 'use client'
+// Rules: data fetching, no interactivity → Server Component (default)
+```
+
+---
+
+## Part 2 — Vue / Nuxt Performance
+
+### computed — You Already Know This, Go Deeper
+
+```vue
+<script setup lang="ts">
+// You know computed — here are the patterns that matter for performance
+
+const posts = ref<Post[]>([])
+const search = ref('')
+const statusFilter = ref('all')
+const sortBy = ref<'title' | 'date'>('date')
+
+// ✅ Cached — only recomputes when posts, search, statusFilter, or sortBy changes
+const filteredPosts = computed(() => {
+    let result = posts.value
+
+    if (search.value) {
+        const term = search.value.toLowerCase()
+        result = result.filter(p =>
+            p.title.toLowerCase().includes(term) ||
+            p.excerpt?.toLowerCase().includes(term)
+        )
+    }
+
+    if (statusFilter.value !== 'all') {
+        result = result.filter(p => p.status === statusFilter.value)
+    }
+
+    return result.sort((a, b) =>
+        sortBy.value === 'title'
+            ? a.title.localeCompare(b.title)
+            : new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    )
+})
+
+// Computed from computed — also cached
+const publishedCount = computed(() =>
+    filteredPosts.value.filter(p => p.status === 'published').length
+)
+
+const totalViews = computed(() =>
+    filteredPosts.value.reduce((sum, p) => sum + p.views, 0)
+)
+
+// ❌ This is wrong — method recalculates every render
+// const filteredPosts = () => posts.value.filter(...)
+
+// ❌ This is wrong — no caching
+// const filteredPosts = ref(posts.value.filter(...))
+// (ref doesn't react to changes in posts)
+</script>
+```
+
+---
+
+### v-memo — Skip Re-rendering List Items
+
+```vue
+<script setup lang="ts">
+// v-memo skips re-rendering a template block if the listed values haven't changed
+// Like React.memo but for template blocks — not components
+
+const posts = ref<Post[]>([])
+const selectedId = ref<string | null>(null)
+</script>
+
+<template>
+  <ul>
+    <!--
+      Only re-renders this li when post.id, post.title, post.status,
+      OR (post.id === selectedId) changes
+      If none of these change — skips re-render entirely
+    -->
+    <li
+      v-for="post in posts"
+      :key="post.id"
+      v-memo="[post.title, post.status, post.id === selectedId]"
+    >
+      <h3>{{ post.title }}</h3>
+      <span>{{ post.status }}</span>
+      <span v-if="post.id === selectedId">Selected</span>
+    </li>
+  </ul>
+</template>
+
+<!-- Real-life — large data table with selection -->
+<template>
+  <tbody>
+    <tr
+      v-for="user in users"
+      :key="user.id"
+      v-memo="[user.name, user.email, user.role, selectedIds.includes(user.id)]"
+      @click="toggleSelect(user.id)"
+    >
+      <td>{{ user.name }}</td>
+      <td>{{ user.email }}</td>
+      <td>{{ user.role }}</td>
+      <td>
+        <input
+          type="checkbox"
+          :checked="selectedIds.includes(user.id)"
+        />
+      </td>
+    </tr>
+  </tbody>
+</template>
+```
+
+---
+
+### defineAsyncComponent — You Know This, Go Deeper
+
+```vue
+<script setup lang="ts">
+import { defineAsyncComponent } from 'vue'
+
+// Basic — you already know this
+const HeavyChart = defineAsyncComponent(
+    () => import('@/components/HeavyChart.vue')
+)
+
+// With loading and error states
+const HeavyChart = defineAsyncComponent({
+    loader: () => import('@/components/HeavyChart.vue'),
+    loadingComponent: ChartSkeleton,    // shows while loading
+    errorComponent: ChartError,         // shows if load fails
+    delay: 200,                         // wait 200ms before showing loader
+    timeout: 5000,                      // show error after 5s
+})
+
+// Real-life — lazy load modals
+const CreatePostModal  = defineAsyncComponent(
+    () => import('@/components/modals/CreatePostModal.vue')
+)
+const DeleteConfirmModal = defineAsyncComponent(
+    () => import('@/components/modals/DeleteConfirmModal.vue')
+)
+
+const showCreate = ref(false)
+const deleteId   = ref<string | null>(null)
+</script>
+
+<template>
+  <div>
+    <button @click="showCreate = true">Create Post</button>
+
+    <!-- Component code loads only when showCreate becomes true -->
+    <CreatePostModal
+      v-if="showCreate"
+      @close="showCreate = false"
+    />
+
+    <!-- Component code loads only when deleteId is set -->
+    <DeleteConfirmModal
+      v-if="deleteId"
+      :id="deleteId"
+      @close="deleteId = null"
+    />
+  </div>
+</template>
+```
+
+---
+
+### Nuxt Specific Optimizations
+
+```vue
+<!-- ── LAZY COMPONENTS — Nuxt auto-imports ──────────────── -->
+<script setup lang="ts">
+// Prefix any component with Lazy to make it load on demand
+// No import needed — Nuxt handles it automatically
+</script>
+
+<template>
+  <!-- Normal — loads immediately with the page bundle -->
+  <HeavyDashboard />
+
+  <!-- Lazy — loads only when condition is true -->
+  <LazyHeavyDashboard v-if="showDashboard" />
+  <LazyCreatePostModal v-if="showModal" @close="showModal = false" />
+  <LazyRichTextEditor v-if="isEditing" />
+</template>
+```
+
+```vue
+<!-- ── useLazyFetch — don't block page render ────────────── -->
+<script setup lang="ts">
+// useFetch blocks — page waits for data before rendering
+const { data: posts } = await useFetch('/api/posts')
+
+// useLazyFetch — page renders immediately, data fills in
+const { data: posts, pending } = useLazyFetch('/api/posts')
+</script>
+
+<template>
+  <div>
+    <!-- Page renders immediately with skeleton -->
+    <div v-if="pending">
+      <PostSkeleton v-for="i in 5" :key="i" />
+    </div>
+    <ul v-else>
+      <li v-for="post in posts?.data" :key="post.id">
+        {{ post.title }}
+      </li>
+    </ul>
+  </div>
+</template>
+```
+
+```vue
+<!-- ── Nuxt Image ────────────────────────────────────────── -->
+<!-- npm install @nuxt/image -->
+<!-- Add to nuxt.config.ts: modules: ['@nuxt/image'] -->
+
+<template>
+  <!-- Automatic: WebP, lazy loading, correct sizing -->
+  <NuxtImg
+    src="/images/hero.jpg"
+    alt="Hero"
+    width="1200"
+    height="600"
+  />
+
+  <!-- From Laravel storage -->
+  <NuxtImg
+    :src="`${config.public.laravelUrl}/storage/${post.cover_image}`"
+    :alt="post.title"
+    width="800"
+    height="400"
+    loading="lazy"
+  />
+
+  <!-- Responsive with sizes -->
+  <NuxtImg
+    src="/images/hero.jpg"
+    alt="Hero"
+    sizes="sm:100vw md:50vw lg:800px"
+  />
+</template>
+```
+
+```ts
+// ── Nuxt prefetch / preload ──────────────────────────────
+// nuxt.config.ts
+export default defineNuxtConfig({
+    // Prefetch links visible in viewport
+    experimental: {
+        viewTransition: true,
+    },
+
+    // Preload critical fonts
+    app: {
+        head: {
+            link: [
+                {
+                    rel: 'preload',
+                    as: 'font',
+                    href: '/fonts/inter.woff2',
+                    crossorigin: 'anonymous',
+                },
+            ],
+        },
+    },
+})
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```tsx
+// Over-memoizing — adding memo to everything
+// Simple components don't need memo — overhead costs more than it saves
+const SimpleLabel = React.memo(function SimpleLabel({ text }: { text: string }) {
+    return <span>{text}</span> // ❌ too simple — memo overhead > benefit
+})
+```
+</Wrong>
+<Right>
+```tsx
+// Only memoize when:
+// 1. Component is expensive to render
+// 2. It re-renders often with same props
+// 3. It's in a frequently-updating parent
+
+const ExpensiveDataGrid = React.memo(function ExpensiveDataGrid({
+    rows,
+    columns,
+    onSort,
+}: DataGridProps) {
+    // renders 100+ rows with complex logic — worth memoizing ✅
+})
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Using useMemo for cheap operations — wastes memory
+const doubled = useMemo(() => count * 2, [count]) // ❌ too simple
+const fullName = useMemo(() => `${first} ${last}`, [first, last]) // ❌ too simple
+```
+</Wrong>
+<Right>
+```tsx
+// Just compute directly — fast operations don't need caching
+const doubled = count * 2
+const fullName = `${first} ${last}`
+
+// useMemo is worth it for:
+const filteredList = useMemo(
+    () => largeArray.filter(complexCondition).sort(complexSort),
+    [largeArray] // ✅ expensive — filtering + sorting 1000+ items
+)
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Using methods for computed values — recalculates every render -->
+<template>
+  <p>{{ getPublishedCount() }}</p>  <!-- ❌ called on every render -->
+  <p>{{ getPublishedCount() }}</p>  <!-- ❌ called again — double work -->
+</template>
+
+<script setup>
+function getPublishedCount() {
+    return posts.value.filter(p => p.status === 'published').length
+}
+</script>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Use computed — cached and called once -->
+<template>
+  <p>{{ publishedCount }}</p>  <!-- ✅ cached -->
+  <p>{{ publishedCount }}</p>  <!-- ✅ same cached value — no extra work -->
+</template>
+
+<script setup>
+const publishedCount = computed(() =>
+    posts.value.filter(p => p.status === 'published').length
+)
+</script>
+```
+</Right>
+</WrongRight>
+
+**Gotcha:** `React.memo` only does a **shallow comparison** of props. If you pass an object or array as a prop, a new object/array (even with same values) will still cause a re-render. Use `useMemo` to stabilize object props too.
+
+```tsx
+// Problem — new object on every render breaks memo
+<UserCard user={{ id: '1', name: 'Ahmed' }} /> // ❌ new object every render
+
+// Fix — stabilize with useMemo
+const userProp = useMemo(() => ({ id: '1', name: 'Ahmed' }), [])
+<UserCard user={userProp} /> // ✅ same reference
+```
+
+---
+
+## Best Practices
+
+**When to optimize — the checklist:**
+```tsx
+Before optimizing, ask:
+□ Can I actually measure it's slow? (use React DevTools Profiler or Vue DevTools)
+□ Is this component rendering more than needed? (add console.log temporarily)
+□ Is the calculation actually expensive? (time it with console.time)
+□ Does the optimization make the code harder to read?
+Only optimize if you answered YES to the first two questions.
+```
+
+**Performance measurement tools:**
+```tsx
+// React — use React DevTools Profiler
+// In Chrome DevTools → React tab → Profiler → Record → interact → Stop
+// Shows which components rendered, how long each took, why they rendered
+
+// Lighthouse — built into Chrome DevTools
+// Audit → Performance → Generate report
+// Shows: LCP, FID, CLS, bundle size, unused code
+
+// Next.js bundle analyzer
+// npm install @next/bundle-analyzer
+// Shows which packages are largest in your bundle
+```
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between useMemo and useCallback?"
+  difficulty="easy"
+>
+  Both cache values across renders. `useMemo` caches the **result** of a
+  function — use it for expensive calculations like filtering or sorting a
+  large array. `useCallback` caches the **function itself** — use it when
+  passing a function as a prop to a memoized child component to prevent
+  the child from re-rendering because it received a "new" function reference.
+  `useCallback(fn, deps)` is equivalent to `useMemo(() => fn, deps)`.
+</InterviewQ>
+
+<InterviewQ
+  question="What is React.memo and when should you NOT use it?"
+  difficulty="easy"
+>
+  `React.memo` is a higher-order component that wraps a component and skips
+  re-rendering if its props haven't changed (shallow comparison). Do not use
+  it when: the component is very simple and cheap to render (the memo overhead
+  costs more than it saves), the props almost always change anyway (memo
+  check runs every render with no benefit), or the component receives objects
+  and arrays that are recreated on every parent render (memo will always
+  re-render because shallow comparison sees new references).
+</InterviewQ>
+
+<InterviewQ
+  question="Why does React.memo sometimes not work even when props look the same?"
+  difficulty="mid"
+>
+  React.memo uses shallow comparison — it checks if prop references are the
+  same, not if values are deeply equal. Functions defined inside a component
+  are recreated on every render — a new function reference even with the same
+  logic. Objects and arrays created inline are new references every render.
+  Fix: wrap functions in `useCallback` and objects/arrays in `useMemo` before
+  passing them as props to memoized components.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between computed and a method in Vue for derived values?"
+  difficulty="easy"
+>
+  A computed property is cached — it only recalculates when its reactive
+  dependencies change. If you access it 10 times in a template, the calculation
+  runs once. A method recalculates every time it is called — accessing it 10
+  times in a template runs the calculation 10 times. For any derived value
+  based on reactive data, always use computed. Use methods only for operations
+  that should run fresh each time they are called, like event handlers.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The rule I follow: start without any memoization. When I notice a component
+  re-rendering too often (I add a console.log to check), I add React.memo to
+  the component AND useCallback to the functions passed as props. Both are
+  needed together — memo without useCallback still re-renders because the
+  function prop is always new.
+</MyNotes>
+
+<MyNotes>
+  The Lazy prefix in Nuxt is genuinely great — I use it for every modal,
+  drawer, and heavy component. `<LazyCreatePostModal v-if="showModal" />`
+  means that entire component and its dependencies are not in the initial
+  bundle. For an admin dashboard with many modals this makes a noticeable
+  difference in initial load time.
+</MyNotes>
+
+<MyNotes>
+  Always use next/image and NuxtImg — never plain img tags. The automatic
+  lazy loading, WebP conversion, and correct sizing alone are worth it.
+  On one project I replaced all img tags with next/image and the Lighthouse
+  performance score went from 65 to 89 without changing anything else.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### useDebounce Hook — Delay Expensive Operations
+
+```ts
+// hooks/useDebounce.ts — React
+import { useState, useEffect } from 'react'
+
+export function useDebounce<T>(value: T, delay: number = 300): T {
+    const [debouncedValue, setDebouncedValue] = useState<T>(value)
+
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setDebouncedValue(value)
+        }, delay)
+
+        return () => clearTimeout(timer) // cleanup on next change
+    }, [value, delay])
+
+    return debouncedValue
+}
+
+// Usage — don't filter on every keystroke
+function SearchInput() {
+    const [search, setSearch] = useState('')
+    const debouncedSearch = useDebounce(search, 300)
+
+    const results = useMemo(
+        () => items.filter(i => i.title.includes(debouncedSearch)),
+        [debouncedSearch] // only filters 300ms after user stops typing
+    )
+
+    return <input value={search} onChange={e => setSearch(e.target.value)} />
+}
+```
+
+```ts
+// composables/useDebounce.ts — Vue
+import { ref, watch } from 'vue'
+
+export function useDebounce<T>(value: Ref<T>, delay: number = 300) {
+    const debouncedValue = ref<T>(value.value) as Ref<T>
+
+    watch(value, (newValue) => {
+        const timer = setTimeout(() => {
+            debouncedValue.value = newValue
+        }, delay)
+
+        return () => clearTimeout(timer)
+    })
+
+    return debouncedValue
+}
+
+// Usage
+const search = ref('')
+const debouncedSearch = useDebounce(search, 300)
+
+const results = computed(() =>
+    items.value.filter(i => i.title.includes(debouncedSearch.value))
+)
+```
+
+---
+
+*Tags: `performance` `react-memo` `useMemo` `useCallback` `v-memo` `computed` `lazy-loading` `nextjs` `nuxt` `intermediate`*

@@ -1,0 +1,384 @@
+---
+title: "Caching (Redis)"
+description: "How to use Redis to cache expensive queries, API responses, and sessions in Laravel — making your app dramatically faster."
+category: system-design
+tools: [redis, laravel, mysql]
+tags: [caching, redis, laravel, performance, system-design]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## Concept Explanation
+
+Caching means storing the result of an expensive operation so the next request gets it instantly — without repeating the work.
+
+```
+Without cache:
+  User visits /products
+      ↓
+  Laravel queries MySQL (100ms)
+      ↓
+  MySQL scans 50,000 rows, joins 3 tables
+      ↓
+  Returns result (slow 😴)
+
+With cache:
+  First user visits /products
+      ↓
+  Laravel queries MySQL (100ms) → stores result in Redis
+      ↓
+  Returns result
+
+  Every user after that visits /products
+      ↓
+  Laravel checks Redis (1ms) → found! Return immediately ✅
+      ↓
+  MySQL is never touched (fast ⚡)
+```
+
+**Redis** is an in-memory key-value store. It lives in RAM, which is why it's so fast — RAM access is ~100x faster than disk.
+
+---
+
+## Why It's Used
+
+- **Speed:** Redis responds in under 1ms. MySQL queries can take 100ms+.
+- **Reduce database load:** Cache popular queries so MySQL handles 10x less traffic.
+- **Sessions:** Store user sessions in Redis instead of files or DB.
+- **Rate limiting:** Count requests per user per minute easily.
+- **Queues:** Redis powers Laravel queues (covered in Queues file).
+
+---
+
+## Real-World Use Cases
+
+- Cache the homepage product list — it's the same for all visitors, no need to query DB every time.
+- Cache user permissions — checked on every request, expensive to recalculate.
+- Cache API responses from third-party services (weather, currency rates).
+- Rate limit API endpoints — max 60 requests per minute per user.
+- Store shopping cart data temporarily.
+
+---
+
+## Code Examples
+
+### Installing Redis
+
+```bash
+# On Ubuntu server
+sudo apt install redis-server -y
+sudo systemctl enable redis
+sudo systemctl start redis
+
+# Test it works
+redis-cli ping   # should return: PONG
+
+# In Laravel project
+composer require predis/predis
+```
+
+```env
+# .env
+CACHE_DRIVER=redis
+SESSION_DRIVER=redis
+QUEUE_CONNECTION=redis
+
+REDIS_HOST=127.0.0.1
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+```
+
+### Basic Caching in Laravel
+
+```php
+use Illuminate\Support\Facades\Cache;
+
+// ── STORE ───────────────────────────────────────────
+
+// Store for 60 minutes
+Cache::put('key', 'value', now()->addMinutes(60));
+
+// Store forever (until manually deleted)
+Cache::forever('key', 'value');
+
+// Store only if it doesn't exist
+Cache::add('key', 'value', now()->addHour());
+
+
+// ── RETRIEVE ────────────────────────────────────────
+
+// Get value (returns null if not found)
+$value = Cache::get('key');
+
+// Get with default fallback
+$value = Cache::get('key', 'default_value');
+
+// Check if exists
+Cache::has('key');
+
+
+// ── DELETE ──────────────────────────────────────────
+
+Cache::forget('key');
+Cache::flush(); // clear everything — use carefully!
+
+
+// ── REMEMBER (most used pattern) ────────────────────
+
+// "Get from cache, or run this query and cache the result"
+$products = Cache::remember('all_products', now()->addHour(), function () {
+    return Product::with('category')->where('is_active', true)->get();
+});
+// First call: runs the query, stores in Redis for 1 hour
+// Subsequent calls: returns from Redis instantly, no DB query
+
+// Remember forever
+$settings = Cache::rememberForever('site_settings', function () {
+    return Setting::all()->keyBy('key');
+});
+```
+
+### Real-World Caching Patterns
+
+```php
+// app/Http/Controllers/ProductController.php
+
+public function index(Request $request)
+{
+    $categoryId = $request->category_id;
+
+    // Cache key includes the filter so different filters have different caches
+    $cacheKey = "products:category:{$categoryId}:page:{$request->page}";
+
+    $products = Cache::remember($cacheKey, now()->addMinutes(30), function () use ($categoryId) {
+        return Product::with('category')
+            ->when($categoryId, fn($q) => $q->where('category_id', $categoryId))
+            ->where('is_active', true)
+            ->paginate(20);
+    });
+
+    return ProductResource::collection($products);
+}
+```
+
+### Cache Invalidation — Clearing Cache When Data Changes
+
+```php
+// app/Models/Product.php
+// When a product is created/updated/deleted, clear the relevant cache
+
+protected static function booted(): void
+{
+    // Clear product cache when anything changes
+    static::saved(function (Product $product) {
+        Cache::forget("products:category:{$product->category_id}:page:1");
+        Cache::tags(['products'])->flush(); // if using cache tags (see below)
+    });
+
+    static::deleted(function (Product $product) {
+        Cache::tags(['products'])->flush();
+    });
+}
+```
+
+### Cache Tags — Group Related Cache Entries
+
+```php
+// Store cache with tags
+Cache::tags(['products', 'category:5'])->put('products_list', $data, 3600);
+
+// Flush all product caches at once
+Cache::tags(['products'])->flush();
+
+// Flush only category 5 caches
+Cache::tags(['category:5'])->flush();
+
+// Remember with tags
+$products = Cache::tags(['products'])->remember('all', 3600, function () {
+    return Product::all();
+});
+```
+
+<Callout type="note">
+  Cache tags require a driver that supports them — Redis and Memcached. They don't work with the file or database cache drivers.
+</Callout>
+
+### Caching User Permissions (Per-User Cache)
+
+```php
+// app/Services/PermissionService.php
+public function getUserPermissions(int $userId): array
+{
+    return Cache::remember(
+        "user:{$userId}:permissions",   // unique key per user
+        now()->addMinutes(60),
+        function () use ($userId) {
+            return User::find($userId)
+                ->roles()
+                ->with('permissions')
+                ->get()
+                ->flatMap(fn($role) => $role->permissions)
+                ->pluck('name')
+                ->toArray();
+        }
+    );
+}
+
+// Clear when user's roles change
+public function clearPermissionCache(int $userId): void
+{
+    Cache::forget("user:{$userId}:permissions");
+}
+```
+
+### Rate Limiting
+
+```php
+use Illuminate\Support\Facades\RateLimiter;
+
+// In RouteServiceProvider or a middleware
+RateLimiter::for('api', function (Request $request) {
+    return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
+});
+
+// Manual rate limiting
+$key = "upload:user:{$userId}";
+
+if (RateLimiter::tooManyAttempts($key, maxAttempts: 5)) {
+    $seconds = RateLimiter::availableIn($key);
+    return response()->json([
+        'message' => "Too many attempts. Try again in {$seconds} seconds."
+    ], 429);
+}
+
+RateLimiter::hit($key, decaySeconds: 60);
+
+// Process the upload...
+```
+
+### Redis Directly (Beyond Laravel Cache)
+
+```php
+use Illuminate\Support\Facades\Redis;
+
+// Increment a counter
+Redis::incr('page_views');
+Redis::incrby('product:42:views', 1);
+
+// Store with expiry
+Redis::setex('otp:user:1', 300, '123456'); // expires in 5 minutes
+
+// Lists (like an array)
+Redis::rpush('recent_searches', 'laravel');
+Redis::lrange('recent_searches', 0, 9); // get last 10
+
+// Sets (unique values)
+Redis::sadd('online_users', $userId);
+Redis::sismember('online_users', $userId); // is user online?
+Redis::srem('online_users', $userId);
+
+// Sorted sets (with score — great for leaderboards)
+Redis::zadd('leaderboard', ['score' => 1500, 'member' => 'user:1']);
+Redis::zrevrange('leaderboard', 0, 9); // top 10
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Caching without considering the cache key
+Cache::remember('products', 3600, function () {
+    return Product::where('category_id', $categoryId)->get(); // ❌
+    // All categories share the same key — wrong data returned!
+});
+```
+</Wrong>
+<Right>
+```php
+// Include all filter variables in the cache key
+$key = "products:cat:{$categoryId}:page:{$page}:sort:{$sort}";
+Cache::remember($key, 3600, function () use ($categoryId, $page, $sort) {
+    return Product::where('category_id', $categoryId)->paginate(20); // ✅
+});
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Caching and never invalidating
+Cache::rememberForever('user_count', function () {
+    return User::count(); // ❌ Shows wrong count after new users register
+});
+```
+</Wrong>
+<Right>
+```php
+// Cache with reasonable TTL, or invalidate on model events
+Cache::remember('user_count', now()->addMinutes(5), function () {
+    return User::count(); // ✅ Refreshes every 5 minutes
+});
+```
+</Right>
+</WrongRight>
+
+---
+
+## Best Practices
+
+- Cache **reads**, not writes — caching write operations causes stale data problems.
+- Always include query parameters in cache keys — different filters = different cached results.
+- Set reasonable TTLs — short for frequently changing data, longer for stable data.
+- Invalidate cache when data changes using model events or observers.
+- Don't cache sensitive data (passwords, tokens) — or encrypt it first.
+- Use cache tags to group related entries for easy bulk invalidation.
+- Monitor cache hit rate — if it's below 80%, your caching strategy needs review.
+
+---
+
+## Interview Questions
+
+<InterviewQ question="What is cache invalidation and why is it hard?" difficulty="mid">
+  Cache invalidation means removing or updating cached data when the source data changes.
+  It's hard because you must decide exactly when data is stale enough to invalidate, and
+  in distributed systems, multiple servers may have different cached versions. Common
+  strategies are TTL-based expiry (let it expire naturally), event-based invalidation
+  (clear cache when data changes), and write-through caching (update cache and DB together).
+</InterviewQ>
+
+<InterviewQ question="What is a cache stampede and how do you prevent it?" difficulty="hard">
+  A cache stampede (or thundering herd) happens when a popular cached value expires and
+  thousands of simultaneous requests all miss the cache and hit the database at the same
+  time. Prevention strategies include: using a lock so only one request rebuilds the cache
+  while others wait, using probabilistic early expiry (randomly refresh before it actually
+  expires), and using stale-while-revalidate (serve stale data while refreshing in the background).
+  Laravel's Cache::remember uses an atomic lock internally to help prevent this.
+</InterviewQ>
+
+<InterviewQ question="What's the difference between Redis and Memcached?" difficulty="mid">
+  Both are in-memory caches but Redis is far more capable. Redis supports rich data structures
+  (strings, lists, sets, sorted sets, hashes), persistence to disk, pub/sub messaging, and
+  Lua scripting. Memcached is simpler — strings only, no persistence. Redis is the default
+  choice today for most applications because the extra features (queues, rate limiting,
+  leaderboards, pub/sub) make it useful beyond just caching.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The `Cache::remember()` pattern is the one I use 90% of the time. It's elegant — get from cache,
+  or run the closure and cache the result. One line replaces what used to be a check + query + store pattern.
+</MyNotes>
+
+<MyNotes>
+  Cache keys are like variable names — a bad naming convention causes bugs that are very hard to debug.
+  I use a consistent format: `{resource}:{id}:{sub-resource}:{filters}`. For example:
+  `products:category:5:page:2` or `user:42:permissions`. Always document your key structure.
+</MyNotes>

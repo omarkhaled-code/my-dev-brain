@@ -1,0 +1,388 @@
+---
+title: "Toast Notifications with Next.js + Tailwind CSS"
+description: "How to build a reusable toast notification system in Next.js using React Context, a custom useToast hook, auto-dismiss, multiple types, stacking, and smooth animations using Tailwind CSS"
+category: ui-patterns
+tools: [nextjs, tailwind]
+tags: [toast, notification, alert, feedback, context, hook]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - ui-patterns/toast-vue
+  - ui-patterns/modal-nextjs
+---
+
+## Concept explanation
+
+A toast system in React/Next.js uses **React Context** to share the toast state across the entire component tree without prop drilling. A `ToastProvider` wraps the app and provides `add`, `remove`, and shorthand helpers via a `useToast` hook. Any component anywhere in the tree calls `useToast()` and fires a notification instantly.
+
+<Callout type="note">
+  **Next.js vs React difference:** This is pure React — Context, useReducer, and createPortal. Works identically in plain React (Vite). The only Next.js-specific thing is adding the provider to `app/layout.tsx`.
+</Callout>
+
+## Why it's used
+
+- Gives instant non-blocking feedback after user actions
+- Context makes it accessible from any component without prop drilling
+- Auto-dismisses so users don't need to manually close
+- Stacks multiple notifications cleanly
+
+## Real-world use cases
+
+- "Changes saved successfully" after a form submit
+- "Failed to load data. Please try again." on API error
+- "Link copied to clipboard!" after clicking copy
+- "User deleted" after a destructive action
+- "New message received" for real-time notifications
+
+## Code example
+
+### Step 1 — Types
+
+```ts
+// lib/toast.ts
+export type ToastType = "success" | "error" | "warning" | "info";
+
+export type Toast = {
+  id: string;
+  message: string;
+  type: ToastType;
+  duration?: number;
+};
+```
+
+### Step 2 — Context + Provider + Hook
+
+```tsx
+// components/toast/ToastProvider.tsx
+"use client";
+
+import {
+  createContext,
+  useContext,
+  useReducer,
+  useCallback,
+  useRef,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
+import type { Toast, ToastType } from "@/lib/toast";
+
+// ── State ────────────────────────────────────────────────────────────────────
+
+type Action =
+  | { type: "ADD"; toast: Toast }
+  | { type: "REMOVE"; id: string };
+
+function reducer(state: Toast[], action: Action): Toast[] {
+  switch (action.type) {
+    case "ADD":    return [...state, action.toast];
+    case "REMOVE": return state.filter((t) => t.id !== action.id);
+    default:       return state;
+  }
+}
+
+// ── Context ──────────────────────────────────────────────────────────────────
+
+type ToastContextValue = {
+  add:     (message: string, type?: ToastType, duration?: number) => void;
+  remove:  (id: string) => void;
+  success: (message: string, duration?: number) => void;
+  error:   (message: string, duration?: number) => void;
+  warning: (message: string, duration?: number) => void;
+  info:    (message: string, duration?: number) => void;
+};
+
+const ToastContext = createContext<ToastContextValue | null>(null);
+
+// ── Styles ───────────────────────────────────────────────────────────────────
+
+const icons: Record<ToastType, string> = {
+  success: "✅",
+  error:   "❌",
+  warning: "⚠️",
+  info:    "ℹ️",
+};
+
+const styles: Record<ToastType, string> = {
+  success: "bg-green-50 border-green-200 text-green-800 dark:bg-green-950 dark:border-green-800 dark:text-green-200",
+  error:   "bg-red-50 border-red-200 text-red-800 dark:bg-red-950 dark:border-red-800 dark:text-red-200",
+  warning: "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-200",
+  info:    "bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-950 dark:border-blue-800 dark:text-blue-200",
+};
+
+// ── Provider ─────────────────────────────────────────────────────────────────
+
+export function ToastProvider({ children }: { children: ReactNode }) {
+  const [toasts, dispatch] = useReducer(reducer, []);
+  const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  const remove = useCallback((id: string) => {
+    clearTimeout(timers.current.get(id));
+    timers.current.delete(id);
+    dispatch({ type: "REMOVE", id });
+  }, []);
+
+  const add = useCallback(
+    (message: string, type: ToastType = "info", duration = 3500) => {
+      const id = Math.random().toString(36).slice(2);
+      dispatch({ type: "ADD", toast: { id, message, type, duration } });
+      const timer = setTimeout(() => remove(id), duration);
+      timers.current.set(id, timer);
+    },
+    [remove]
+  );
+
+  const success = useCallback((m: string, d?: number) => add(m, "success", d), [add]);
+  const error   = useCallback((m: string, d?: number) => add(m, "error",   d), [add]);
+  const warning = useCallback((m: string, d?: number) => add(m, "warning", d), [add]);
+  const info    = useCallback((m: string, d?: number) => add(m, "info",    d), [add]);
+
+  return (
+    <ToastContext.Provider value={{ add, remove, success, error, warning, info }}>
+      {children}
+
+      {/* Toast container — portaled to body */}
+      {createPortal(
+        <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-80">
+          {toasts.slice(0, 5).map((toast) => (
+            <div
+              key={toast.id}
+              className={`
+                flex items-start gap-3 px-4 py-3 rounded-xl border shadow-lg text-sm
+                animate-in slide-in-from-bottom-4 fade-in duration-300
+                ${styles[toast.type]}
+              `}
+            >
+              <span className="shrink-0 mt-0.5">{icons[toast.type]}</span>
+              <p className="flex-1 leading-relaxed">{toast.message}</p>
+              <button
+                onClick={() => remove(toast.id)}
+                className="shrink-0 opacity-60 hover:opacity-100 transition-opacity mt-0.5"
+                aria-label="Dismiss"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>,
+        document.body
+      )}
+    </ToastContext.Provider>
+  );
+}
+
+// ── Hook ─────────────────────────────────────────────────────────────────────
+
+export function useToast(): ToastContextValue {
+  const ctx = useContext(ToastContext);
+  if (!ctx) throw new Error("useToast must be used inside <ToastProvider>");
+  return ctx;
+}
+```
+
+### Step 3 — Add provider to layout
+
+```tsx
+// app/layout.tsx
+import type { Metadata } from "next";
+import "./globals.css";
+import { ToastProvider } from "@/components/toast/ToastProvider";
+
+export const metadata: Metadata = {
+  title: "My App",
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <body>
+        <ToastProvider>
+          {children}
+        </ToastProvider>
+      </body>
+    </html>
+  );
+}
+```
+
+### Step 4 — Use it anywhere
+
+```tsx
+// app/users/page.tsx
+"use client";
+
+import { useToast } from "@/components/toast/ToastProvider";
+
+export default function UsersPage() {
+  const { success, error, warning, info } = useToast();
+
+  const handleSave = async () => {
+    try {
+      await saveUser();
+      success("User saved successfully!");
+    } catch {
+      error("Failed to save user. Please try again.");
+    }
+  };
+
+  const handleDelete = async () => {
+    try {
+      await deleteUser();
+      success("User deleted.");
+    } catch {
+      error("Could not delete user.");
+    }
+  };
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText("https://example.com");
+    info("Link copied to clipboard!");
+  };
+
+  return (
+    <div className="space-y-3">
+      <button
+        onClick={handleSave}
+        className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm"
+      >
+        Save
+      </button>
+      <button
+        onClick={handleDelete}
+        className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm"
+      >
+        Delete
+      </button>
+      <button
+        onClick={handleCopy}
+        className="px-4 py-2 bg-neutral-200 rounded-lg text-sm"
+      >
+        Copy Link
+      </button>
+      <button
+        onClick={() => warning("You have unsaved changes!")}
+        className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm"
+      >
+        Warn
+      </button>
+    </div>
+  );
+}
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```tsx
+// Calling useToast outside ToastProvider
+// Throws "useToast must be used inside ToastProvider"
+// because context is null
+
+// app/layout.tsx
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        {children} {/* ❌ no ToastProvider wrapping */}
+      </body>
+    </html>
+  )
+}
+```
+</Wrong>
+<Right>
+```tsx
+// Always wrap your app with ToastProvider in layout.tsx
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <ToastProvider> {/* ✅ */}
+          {children}
+        </ToastProvider>
+      </body>
+    </html>
+  )
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Not clearing timers on manual dismiss
+// Timer fires after manual close — tries to remove
+// a toast that no longer exists
+const remove = (id: string) => {
+  dispatch({ type: "REMOVE", id }); // ❌ timer still running
+};
+```
+</Wrong>
+<Right>
+```tsx
+// Always clear the timer when manually dismissing
+const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+const remove = useCallback((id: string) => {
+  clearTimeout(timers.current.get(id)); // ✅ clear first
+  timers.current.delete(id);
+  dispatch({ type: "REMOVE", id });
+}, []);
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always throw a meaningful error in `useToast` when used outside the provider
+- Use `useReducer` instead of `useState` for the toast list — cleaner for add/remove actions
+- Store timers in a `useRef` Map — refs don't cause re-renders when updated
+- Use `createPortal` to render toasts at `document.body` level
+- Limit visible toasts with `.slice(0, 5)` to prevent screen overflow
+- Wrap `add`, `remove`, and shorthand helpers in `useCallback` to prevent unnecessary re-renders
+
+<Callout type="tip">
+  Need toasts from a Server Action? You can't use hooks in server code — instead return a status from the action and call the toast in the client component after the action resolves:
+```tsx
+  const result = await saveUser(formData)
+  if (result.success) success("Saved!")
+  else error(result.message)
+```
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="Why use React Context for toast instead of prop drilling?" difficulty="easy">
+  Toast notifications can be triggered from anywhere in the component tree — a button deep inside a nested form, a utility function, an error boundary. Passing toast functions as props through every layer would be tedious and fragile. Context makes the toast API available to any component in the tree without any wiring — just call `useToast()`.
+</InterviewQ>
+
+<InterviewQ question="Why use useReducer instead of useState for the toast list?" difficulty="mid">
+  `useReducer` is better when state transitions are explicit and testable. With `useState` you'd write `setToasts(prev => [...prev, toast])` and `setToasts(prev => prev.filter(...))` inline everywhere. With `useReducer` the ADD and REMOVE logic lives in one pure function that's easy to test and reason about. It also scales better if you add more actions like CLEAR_ALL or UPDATE.
+</InterviewQ>
+
+<InterviewQ question="Why store timers in useRef instead of useState?" difficulty="mid">
+  Timer IDs don't need to trigger re-renders — they're implementation details, not UI state. Storing them in `useState` would cause unnecessary re-renders every time a timer is set or cleared. `useRef` gives you a mutable container that persists across renders without causing them. The `Map` inside the ref lets you look up and clear timers by toast ID efficiently.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The `useRef` Map for timers is the pattern I use in every project now. Without clearing timers on manual dismiss, you get a subtle bug — the user closes a toast, then 3 seconds later the timeout fires and tries to dispatch REMOVE for an ID that no longer exists. It's harmless but sloppy.
+
+  The "throw if no provider" pattern in `useToast` saves hours of debugging:
+```tsx
+  if (!ctx) throw new Error("useToast must be used inside ToastProvider")
+```
+  Without this, you get `ctx.success is not a function` which tells you nothing.
+
+  **Vue vs React difference:** Vue uses a module-level ref as a singleton. React uses Context because module-level state doesn't play well with React's rendering model and SSR. Both achieve the same result — a globally accessible toast API.
+</MyNotes>

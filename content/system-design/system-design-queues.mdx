@@ -1,0 +1,402 @@
+---
+title: "Queues & Background Jobs"
+description: "How to use Laravel Queues to run slow tasks in the background — sending emails, processing images, sending notifications — without making users wait."
+category: system-design
+tools: [laravel, redis, mysql]
+tags: [queues, jobs, laravel, redis, background-processing, system-design]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## Concept Explanation
+
+A queue is a line of tasks waiting to be processed in the background — so the user doesn't have to wait.
+
+```
+Without queues:
+  User clicks "Register"
+      ↓
+  Laravel creates account (fast)
+      ↓
+  Laravel sends welcome email (slow — 2 seconds)
+      ↓
+  User finally sees "Account created!" (after waiting 2 seconds 😴)
+
+With queues:
+  User clicks "Register"
+      ↓
+  Laravel creates account (fast)
+      ↓
+  Laravel adds "send welcome email" to the queue (instant)
+      ↓
+  User sees "Account created!" immediately ✅
+      ↓
+  Queue worker sends the email in the background (user never waits)
+```
+
+**Queue vocabulary:**
+
+```
+Job      →  A task to run (SendWelcomeEmail, ProcessPayment, ResizeImage)
+Queue    →  The list of pending jobs
+Worker   →  A process that picks up jobs and runs them
+Driver   →  Where jobs are stored (Redis, database, SQS)
+```
+
+---
+
+## Why It's Used
+
+- **Speed:** Users get instant responses — slow tasks run in the background.
+- **Reliability:** If an email server is down, the job retries automatically.
+- **Scalability:** Run multiple workers to process jobs in parallel.
+- **Decoupling:** Your controller just dispatches jobs, it doesn't do the work.
+
+---
+
+## Real-World Use Cases
+
+- Send welcome email after registration.
+- Send order confirmation and invoice PDF.
+- Process and resize uploaded images.
+- Send push notifications to thousands of users.
+- Import a large CSV file.
+- Generate a report and email it when ready.
+- Sync data with a third-party API.
+- Charge a subscription payment.
+
+---
+
+## Code Examples
+
+### Setup
+
+```bash
+# Use Redis as queue driver (recommended)
+# Already covered in Caching setup
+
+# Or use database driver (simpler, no Redis needed)
+php artisan queue:table
+php artisan migrate
+```
+
+```env
+# .env
+QUEUE_CONNECTION=redis   # or: database, sync (sync = no queue, runs immediately)
+```
+
+### Creating and Dispatching a Job
+
+```bash
+php artisan make:job SendWelcomeEmail
+```
+
+```php
+// app/Jobs/SendWelcomeEmail.php
+<?php
+
+namespace App\Jobs;
+
+use App\Models\User;
+use App\Mail\WelcomeMail;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Mail;
+
+class SendWelcomeEmail implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public int $tries = 3;           // retry up to 3 times on failure
+    public int $timeout = 30;        // fail if takes longer than 30 seconds
+    public int $backoff = 60;        // wait 60 seconds before retrying
+
+    public function __construct(
+        public User $user            // Laravel automatically serializes/deserializes models
+    ) {}
+
+    public function handle(): void
+    {
+        Mail::to($this->user->email)->send(new WelcomeMail($this->user));
+    }
+
+    // Called when all retries are exhausted
+    public function failed(\Throwable $exception): void
+    {
+        // Log, notify admin, etc.
+        \Log::error("Failed to send welcome email to {$this->user->email}: {$exception->getMessage()}");
+    }
+}
+```
+
+```php
+// Dispatching from a controller
+use App\Jobs\SendWelcomeEmail;
+
+class AuthController extends Controller
+{
+    public function register(Request $request)
+    {
+        $user = User::create([...]);
+
+        // Dispatch immediately to default queue
+        SendWelcomeEmail::dispatch($user);
+
+        // Dispatch with delay (send after 5 minutes)
+        SendWelcomeEmail::dispatch($user)->delay(now()->addMinutes(5));
+
+        // Dispatch to a specific queue
+        SendWelcomeEmail::dispatch($user)->onQueue('emails');
+
+        // Dispatch only if condition is true
+        SendWelcomeEmail::dispatchIf($user->wants_emails, $user);
+
+        return response()->json(['message' => 'Registered successfully!']);
+    }
+}
+```
+
+### Job Chaining — Run Jobs in Sequence
+
+```php
+use Illuminate\Support\Facades\Bus;
+
+// Process order → charge payment → send confirmation — in order
+Bus::chain([
+    new ProcessOrder($order),
+    new ChargePayment($order),
+    new SendOrderConfirmation($order),
+])->dispatch();
+
+// If any job fails, the chain stops
+```
+
+### Job Batching — Run Jobs in Parallel
+
+```php
+use Illuminate\Bus\Batch;
+use Illuminate\Support\Facades\Bus;
+
+// Send notification to 10,000 users — process in parallel
+$users = User::all();
+
+$batch = Bus::batch(
+    $users->map(fn($user) => new SendNotification($user, 'New feature available!'))
+)->then(function (Batch $batch) {
+    // All jobs completed
+    Log::info("Sent notifications to {$batch->totalJobs} users");
+})->catch(function (Batch $batch, \Throwable $e) {
+    // First failure
+    Log::error("Batch failed: {$e->getMessage()}");
+})->finally(function (Batch $batch) {
+    // Always runs
+})->dispatch();
+
+// Track progress
+$batch->id;              // batch ID to look up later
+$batch->progress();      // percentage complete
+$batch->failedJobs;      // number of failed jobs
+```
+
+### Multiple Queues with Priority
+
+```php
+// Dispatch to named queues based on priority
+SendOrderConfirmation::dispatch($order)->onQueue('high');
+SendWelcomeEmail::dispatch($user)->onQueue('emails');
+GenerateReport::dispatch($report)->onQueue('low');
+
+// Run worker that processes high priority first
+// php artisan queue:work --queue=high,emails,low,default
+```
+
+### Running Queue Workers
+
+```bash
+# Start a worker (processes jobs one at a time)
+php artisan queue:work
+
+# Process specific queue
+php artisan queue:work --queue=high,default
+
+# Process only once and exit (good for cron jobs)
+php artisan queue:work --once
+
+# Stop after this many jobs (prevents memory leaks)
+php artisan queue:work --max-jobs=1000
+
+# Stop after this many seconds
+php artisan queue:work --max-time=3600
+```
+
+### Keeping Workers Running with Supervisor
+
+```bash
+# Install supervisor on your server
+sudo apt install supervisor -y
+
+# Create config file
+sudo nano /etc/supervisor/conf.d/laravel-worker.conf
+```
+
+```ini
+; /etc/supervisor/conf.d/laravel-worker.conf
+
+[program:laravel-worker]
+process_name=%(program_name)s_%(process_num)02d
+command=php /var/www/my-app/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=www-data
+numprocs=4                          ; run 4 workers in parallel
+redirect_stderr=true
+stdout_logfile=/var/www/my-app/storage/logs/worker.log
+stopwaitsecs=3600
+```
+
+```bash
+sudo supervisorctl reread
+sudo supervisorctl update
+sudo supervisorctl start laravel-worker:*
+
+# After deploying new code, restart workers
+sudo supervisorctl restart laravel-worker:*
+```
+
+### Scheduled Jobs (Cron)
+
+```php
+// app/Console/Kernel.php (or routes/console.php in Laravel 11)
+
+Schedule::job(new GenerateDailyReport)->dailyAt('06:00');
+Schedule::job(new CleanExpiredTokens)->daily();
+Schedule::job(new SyncExchangeRates)->hourly();
+Schedule::command('telescope:prune --hours=48')->daily();
+
+// Run cron every minute on server — Laravel handles the rest
+// Add to crontab: * * * * * php /var/www/my-app/artisan schedule:run
+```
+
+```bash
+# Add to server crontab
+crontab -e
+# Add this line:
+* * * * * cd /var/www/my-app && php artisan schedule:run >> /dev/null 2>&1
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Passing large data directly to jobs
+class ProcessUsers implements ShouldQueue
+{
+    public function __construct(
+        public Collection $users  // ❌ Could be thousands of users — serialized into queue payload
+    ) {}
+}
+```
+</Wrong>
+<Right>
+```php
+// Pass IDs and query inside the job
+class ProcessUsers implements ShouldQueue
+{
+    public function __construct(
+        public array $userIds  // ✅ Just IDs — tiny payload
+    ) {}
+
+    public function handle(): void
+    {
+        User::whereIn('id', $this->userIds)->chunk(100, function ($users) {
+            // process
+        });
+    }
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```bash
+# Running queue:listen in production (reloads on every job — slow)
+php artisan queue:listen   # ❌ Don't use in production
+```
+</Wrong>
+<Right>
+```bash
+# Use queue:work in production (faster — code stays in memory)
+php artisan queue:work     # ✅ But must restart after deploys (use Supervisor)
+```
+</Right>
+</WrongRight>
+
+---
+
+## Best Practices
+
+- Always set `$tries` and `$timeout` on every job.
+- Implement the `failed()` method to handle job failures gracefully.
+- Use named queues to prioritize critical jobs (payments) over low-priority ones (reports).
+- Use Supervisor in production to keep workers running automatically.
+- Restart workers after every deployment (`supervisorctl restart`) — workers cache old code.
+- Keep jobs small and focused — one job, one responsibility.
+- Use job chaining for sequential operations, batching for parallel operations.
+
+---
+
+## Interview Questions
+
+<InterviewQ question="What is a queue and why do we use it instead of running tasks synchronously?" difficulty="easy">
+  A queue is a list of background tasks waiting to be processed. We use it because some
+  tasks are slow (sending emails, processing images) and users shouldn't wait for them.
+  The controller dispatches a job instantly and returns a response. A separate worker
+  process picks up the job and runs it in the background. This keeps response times fast
+  and improves perceived performance significantly.
+</InterviewQ>
+
+<InterviewQ question="What happens when a queued job fails?" difficulty="mid">
+  Laravel retries the job up to the configured `$tries` number of times with optional
+  backoff delay between retries. After all retries are exhausted, the job is marked as
+  failed and stored in the `failed_jobs` table. The `failed()` method on the job is
+  called, where you can log the error, notify an admin, or take compensating action.
+  You can inspect and retry failed jobs with `php artisan queue:failed` and
+  `php artisan queue:retry {id}`.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between job chaining and job batching?" difficulty="mid">
+  Chaining runs jobs sequentially — job 2 only starts after job 1 completes successfully.
+  If job 1 fails, the chain stops. Use it for dependent operations like: process order →
+  charge payment → send confirmation. Batching runs jobs in parallel — all jobs run
+  concurrently and you get callbacks for when all complete, when any fail, and when
+  the batch is fully done. Use it for independent operations like sending notifications
+  to thousands of users simultaneously.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The most common mistake I see (and made myself) is forgetting to restart Supervisor after
+  deploying new code. Workers cache the application in memory — if you deploy a bug fix
+  but don't restart workers, old jobs still run old code. Always add `supervisorctl restart`
+  to your deploy script.
+</MyNotes>
+
+<MyNotes>
+  I use named queues religiously now: `critical` for payments, `high` for order confirmations,
+  `default` for general jobs, `low` for reports and bulk emails. Run the worker with
+  `--queue=critical,high,default,low` and critical jobs always get processed first even
+  when the queue is busy.
+</MyNotes>

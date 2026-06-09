@@ -1,0 +1,1050 @@
+---
+title: "TypeScript Advanced — Generics & Utility Types"
+description: "A beginner-friendly guide to TypeScript generics, utility types, and advanced patterns — with real examples from Next.js, Nuxt, and Laravel API integration."
+category: typescript
+tools: [nextjs, nuxt, react, vue]
+tags: [typescript, generics, utility-types, advanced, nextjs, nuxt, laravel]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+relatedTopics: [typescript-fundamentals]
+---
+
+## Concept Explanation
+
+### What are Generics?
+
+Generics let you write code that works with **any type** while still being type-safe. Instead of writing the same function for strings, then for numbers, then for users — you write it once with a type parameter.
+
+**Mental model — think of generics like a box with a label:**
+```tsx
+Without generics:
+StringBox  → holds strings only
+NumberBox  → holds numbers only
+UserBox    → holds users only
+(separate box for every type — copy-paste everywhere)
+With generics:
+Box<T>     → holds ANYTHING — you decide when you use it
+Box<string> → string box
+Box<number> → number box
+Box<User>   → user box
+(one box, works for everything)
+```
+
+**The `T` is just a placeholder name** — it gets replaced with the actual type when you use the generic. You can name it anything but `T` (Type), `K` (Key), `V` (Value), `E` (Element) are common conventions.
+
+```ts
+// Without generics — must write for every type
+function getFirstString(arr: string[]): string {
+    return arr[0]
+}
+function getFirstNumber(arr: number[]): number {
+    return arr[0]
+}
+function getFirstUser(arr: User[]): User {
+    return arr[0]
+}
+
+// With generics — write once, works for any type
+function getFirst<T>(arr: T[]): T {
+    return arr[0]
+}
+
+getFirst<string>(['a', 'b', 'c'])  // returns string
+getFirst<number>([1, 2, 3])        // returns number
+getFirst<User>([user1, user2])     // returns User
+
+// TypeScript infers the type automatically — no need to specify
+getFirst(['a', 'b', 'c'])  // TypeScript knows T is string
+getFirst([1, 2, 3])        // TypeScript knows T is number
+```
+
+---
+
+## Why It's Used
+
+- **Reusable code:** Write once, works for any type — no copy-paste.
+- **Type safety:** Still fully typed — unlike `any` which loses all type information.
+- **API response typing:** One `ApiResponse<T>` type works for users, posts, orders, anything.
+- **Utility types:** TypeScript's built-in utilities (Partial, Pick, Omit) are all built with generics.
+
+---
+
+## Code Examples
+
+### Generics — From Simple to Real-Life
+
+```ts
+// ── GENERIC FUNCTION ─────────────────────────────────────
+
+// T is replaced with the actual type when called
+function identity<T>(value: T): T {
+    return value
+}
+
+identity<string>('hello')  // returns string
+identity<number>(42)       // returns number
+identity(true)             // TypeScript infers boolean
+
+
+// ── GENERIC WITH CONSTRAINT ──────────────────────────────
+
+// T extends X means T must have at least these properties
+function getLength<T extends { length: number }>(value: T): number {
+    return value.length
+}
+
+getLength('hello')      // ✅ string has length
+getLength([1, 2, 3])    // ✅ array has length
+getLength(42)           // ❌ number has no length
+
+
+// ── GENERIC INTERFACE ────────────────────────────────────
+
+interface Box<T> {
+    value: T
+    label: string
+}
+
+const stringBox: Box<string> = { value: 'hello', label: 'A string box' }
+const numberBox: Box<number> = { value: 42, label: 'A number box' }
+const userBox: Box<User> = { value: user, label: 'A user box' }
+
+
+// ── GENERIC CLASS ────────────────────────────────────────
+
+class Stack<T> {
+    private items: T[] = []
+
+    push(item: T): void {
+        this.items.push(item)
+    }
+
+    pop(): T | undefined {
+        return this.items.pop()
+    }
+
+    peek(): T | undefined {
+        return this.items[this.items.length - 1]
+    }
+
+    get size(): number {
+        return this.items.length
+    }
+}
+
+const stringStack = new Stack<string>()
+stringStack.push('hello')
+stringStack.push('world')
+stringStack.pop() // returns string
+
+const numberStack = new Stack<number>()
+numberStack.push(1)
+numberStack.push(2)
+```
+
+---
+
+### Generics — Real-Life API Examples
+
+```ts
+// ── GENERIC API RESPONSE ─────────────────────────────────
+
+// One type works for ALL Laravel API responses
+interface ApiResponse<T> {
+    data: T
+    message?: string
+}
+
+interface PaginatedResponse<T> {
+    data: T[]
+    current_page: number
+    last_page: number
+    per_page: number
+    total: number
+    next_page_url: string | null
+    prev_page_url: string | null
+}
+
+// Usage
+type UserResponse     = ApiResponse<User>           // { data: User }
+type PostResponse     = ApiResponse<Post>           // { data: Post }
+type UsersResponse    = PaginatedResponse<User>     // { data: User[], ... }
+type PostsResponse    = PaginatedResponse<Post>     // { data: Post[], ... }
+
+
+// ── GENERIC FETCH FUNCTION ───────────────────────────────
+
+// One function handles any API endpoint with full type safety
+async function apiFetch<T>(
+    url: string,
+    options: RequestInit = {}
+): Promise<T> {
+    const res = await fetch(url, options)
+    if (!res.ok) throw new Error(`API error: ${res.status}`)
+    return res.json()
+}
+
+// Usage — fully typed
+const user = await apiFetch<User>('/api/users/1')
+const posts = await apiFetch<PaginatedResponse<Post>>('/api/posts')
+const created = await apiFetch<Post>('/api/posts', {
+    method: 'POST',
+    body: JSON.stringify(data),
+})
+
+// user.name ✅
+// posts.data[0].title ✅
+// posts.current_page ✅
+
+
+// ── GENERIC REACT HOOK ───────────────────────────────────
+
+// One hook for any fetch operation
+function useFetch<T>(url: string) {
+    const [data, setData] = useState<T | null>(null)
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState<string | null>(null)
+
+    useEffect(() => {
+        fetch(url)
+            .then(res => res.json())
+            .then((data: T) => setData(data))
+            .catch(err => setError(err.message))
+            .finally(() => setLoading(false))
+    }, [url])
+
+    return { data, loading, error }
+}
+
+// Usage — fully typed for any data
+const { data: user }  = useFetch<User>('/api/users/1')
+const { data: posts } = useFetch<PaginatedResponse<Post>>('/api/posts')
+
+user?.name         // ✅ TypeScript knows this is User | null
+posts?.data[0].title // ✅ TypeScript knows this is PaginatedResponse<Post> | null
+
+
+// ── GENERIC VUE COMPOSABLE ───────────────────────────────
+
+function useApiQuery<T>(url: string) {
+    const data = ref<T | null>(null)
+    const loading = ref(true)
+    const error = ref<string | null>(null)
+
+    onMounted(async () => {
+        try {
+            data.value = await $fetch<T>(url)
+        } catch (err: any) {
+            error.value = err.message
+        } finally {
+            loading.value = false
+        }
+    })
+
+    return { data, loading, error }
+}
+
+// Usage
+const { data: user }  = useApiQuery<User>('/api/users/1')
+const { data: posts } = useApiQuery<PaginatedResponse<Post>>('/api/posts')
+```
+
+---
+
+### Multiple Type Parameters
+
+```ts
+// You can have more than one type parameter
+
+// K = Key type, V = Value type
+function createMap<K extends string, V>(
+    keys: K[],
+    values: V[]
+): Record<K, V> {
+    return keys.reduce((acc, key, index) => {
+        acc[key] = values[index]
+        return acc
+    }, {} as Record<K, V>)
+}
+
+const map = createMap(['name', 'email'], ['Ahmed', 'ahmed@example.com'])
+// { name: 'Ahmed', email: 'ahmed@example.com' }
+
+
+// Real-life — transform array to map by key
+function groupBy<T, K extends keyof T>(
+    items: T[],
+    key: K
+): Record<string, T[]> {
+    return items.reduce((acc, item) => {
+        const groupKey = String(item[key])
+        acc[groupKey] = [...(acc[groupKey] ?? []), item]
+        return acc
+    }, {} as Record<string, T[]>)
+}
+
+const posts = await apiFetch<Post[]>('/api/posts')
+const byStatus = groupBy(posts, 'status')
+// { draft: [...], published: [...], archived: [...] }
+```
+
+---
+
+### Utility Types — Built-in Type Transformations
+
+```ts
+// TypeScript ships with powerful built-in utility types
+// They are all built with generics under the hood
+
+// Starting type for examples
+interface User {
+    id: string
+    name: string
+    email: string
+    password: string
+    role: 'admin' | 'user'
+    bio: string | null
+    avatar: string | null
+    createdAt: string
+}
+```
+
+---
+
+#### Partial\<T\> — All Properties Optional
+
+```ts
+// Mental model: "I might update SOME of these — not all"
+
+type UpdateUserData = Partial<User>
+// Same as:
+// {
+//   id?: string
+//   name?: string
+//   email?: string
+//   password?: string
+//   ...all optional
+// }
+
+// Real-life — update endpoint accepts partial data
+async function updateUser(id: string, data: Partial<User>): Promise<User> {
+    return apiFetch<User>(`/api/users/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+    })
+}
+
+// Can pass any subset of User properties
+updateUser('1', { name: 'New Name' })
+updateUser('1', { name: 'Ahmed', bio: 'Developer' })
+updateUser('1', { role: 'admin' })
+```
+
+---
+
+#### Required\<T\> — All Properties Required
+
+```ts
+// Mental model: "Every property MUST be provided"
+// Opposite of Partial
+
+interface CreateUserDraft {
+    name?: string
+    email?: string
+    password?: string
+}
+
+type CreateUserData = Required<CreateUserDraft>
+// {
+//   name: string     ← no longer optional
+//   email: string    ← no longer optional
+//   password: string ← no longer optional
+// }
+```
+
+---
+
+#### Readonly\<T\> — All Properties Immutable
+
+```ts
+// Mental model: "This object cannot be changed after creation"
+
+type ImmutableUser = Readonly<User>
+
+const user: ImmutableUser = {
+    id: '1',
+    name: 'Ahmed',
+    // ...
+}
+
+user.name = 'New Name' // ❌ error — cannot assign to readonly property
+
+// Real-life — config objects that should never change
+const config: Readonly<AppConfig> = {
+    apiUrl: 'https://api.example.com',
+    appName: 'MyApp',
+}
+```
+
+---
+
+#### Pick\<T, Keys\> — Select Specific Properties
+
+```ts
+// Mental model: "I only need THESE properties from the full type"
+// Like SELECT specific columns in SQL
+
+type UserPreview = Pick<User, 'id' | 'name' | 'avatar'>
+// {
+//   id: string
+//   name: string
+//   avatar: string | null
+// }
+
+// Real-life — API returns full user but component only shows preview
+function UserCard({ user }: { user: UserPreview }) {
+    return (
+        <div>
+            <img src={user.avatar ?? '/default.png'} />
+            <p>{user.name}</p>
+        </div>
+    )
+}
+
+// Can pass a full User — it has all the Pick properties
+const fullUser = await apiFetch<User>('/api/users/1')
+<UserCard user={fullUser} /> // ✅ works — fullUser has id, name, avatar
+
+
+// Reuse Pick for multiple variations
+type UserListItem = Pick<User, 'id' | 'name' | 'email' | 'role'>
+type UserProfile  = Pick<User, 'id' | 'name' | 'bio' | 'avatar'>
+type UserAuth     = Pick<User, 'id' | 'email' | 'role'>
+```
+
+---
+
+#### Omit\<T, Keys\> — Remove Specific Properties
+
+```ts
+// Mental model: "Everything EXCEPT these properties"
+// Opposite of Pick
+
+type PublicUser = Omit<User, 'password'>
+// User without password — safe to send to frontend
+
+type CreateUserData = Omit<User, 'id' | 'createdAt'>
+// User without auto-generated fields — for create requests
+
+type UpdateUserData = Omit<Partial<User>, 'id' | 'createdAt'>
+// Partial user without immutable fields — for update requests
+
+// Real-life — API layer
+async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<User> {
+    return apiFetch<User>('/api/users', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    })
+}
+
+// Response types — never expose password
+type UserResponse = Omit<User, 'password'>
+```
+
+---
+
+#### Record\<K, V\> — Key-Value Map
+
+```ts
+// Mental model: "An object where keys are K and values are V"
+
+// Simple examples
+type StringMap  = Record<string, string>   // { [key: string]: string }
+type NumberMap  = Record<string, number>   // { [key: string]: number }
+
+// With union key — only specific keys allowed
+type StatusCount = Record<'draft' | 'published' | 'archived', number>
+// { draft: number, published: number, archived: number }
+
+// Real-life examples
+type UserById   = Record<string, User>     // { '1': User, '2': User }
+type FieldErrors = Record<string, string[]> // Laravel validation errors
+
+// With keyof
+type UserFlags = Record<keyof User, boolean>
+// Every User property mapped to boolean
+
+// Real-life — field errors from Laravel
+const errors: Record<string, string[]> = {
+    email: ['The email has already been taken.'],
+    password: ['The password must be at least 8 characters.'],
+}
+```
+
+---
+
+#### Extract\<T, U\> and Exclude\<T, U\>
+
+```ts
+// Extract — keep only types that match U
+type PublishedOrArchived = Extract<'draft' | 'published' | 'archived', 'published' | 'archived'>
+// Result: 'published' | 'archived'
+
+// Exclude — remove types that match U
+type NonDraft = Exclude<'draft' | 'published' | 'archived', 'draft'>
+// Result: 'published' | 'archived'
+
+// Real-life
+type PostStatus = 'draft' | 'published' | 'archived'
+type VisibleStatus = Exclude<PostStatus, 'draft'>  // 'published' | 'archived'
+
+// Filter out null and undefined
+type NonNullUser = NonNullable<User | null | undefined> // just User
+```
+
+---
+
+#### ReturnType\<T\> and Parameters\<T\>
+
+```ts
+// ReturnType — extract what a function returns
+async function fetchUser(id: string): Promise<User> {
+    return apiFetch<User>(`/api/users/${id}`)
+}
+
+type FetchUserReturn = ReturnType<typeof fetchUser>
+// Promise<User>
+
+type AwaitedUser = Awaited<ReturnType<typeof fetchUser>>
+// User (unwraps the Promise)
+
+
+// Parameters — extract function parameter types
+type FetchUserParams = Parameters<typeof fetchUser>
+// [id: string]
+
+type FirstParam = Parameters<typeof fetchUser>[0]
+// string
+
+
+// Real-life — reuse types from existing functions
+const createPost = async (data: CreatePostData) => {
+    return apiFetch<Post>('/api/posts', { method: 'POST', body: JSON.stringify(data) })
+}
+
+type CreatePostParams = Parameters<typeof createPost>[0]
+// CreatePostData — same as writing it manually but stays in sync automatically
+```
+
+---
+
+### Combining Utility Types — Real Patterns
+
+```ts
+// These combinations cover 90% of real use cases
+
+interface Post {
+    id: string
+    title: string
+    slug: string
+    body: string
+    status: 'draft' | 'published' | 'archived'
+    user_id: string
+    category_id: string | null
+    published_at: string | null
+    created_at: string
+    updated_at: string
+}
+
+// Create — omit auto-generated fields
+type CreatePostData = Omit<Post, 'id' | 'slug' | 'created_at' | 'updated_at'>
+
+// Update — everything optional except can't change id
+type UpdatePostData = Partial<Omit<Post, 'id' | 'created_at' | 'updated_at'>>
+
+// List item — only what the list UI needs
+type PostListItem = Pick<Post, 'id' | 'title' | 'slug' | 'status' | 'published_at'>
+
+// Public response — safe to expose
+type PublicPost = Omit<Post, 'user_id'>
+
+// Admin view — everything
+type AdminPost = Post & {
+    user: User
+    comments_count: number
+    views: number
+}
+```
+
+---
+
+### keyof and typeof
+
+```ts
+// keyof — get the keys of a type as a union
+interface User {
+    id: string
+    name: string
+    email: string
+}
+
+type UserKeys = keyof User  // 'id' | 'name' | 'email'
+
+// Real-life — generic getter that only accepts valid keys
+function getProperty<T, K extends keyof T>(obj: T, key: K): T[K] {
+    return obj[key]
+}
+
+const user: User = { id: '1', name: 'Ahmed', email: 'ahmed@example.com' }
+getProperty(user, 'name')   // ✅ returns string
+getProperty(user, 'id')     // ✅ returns string
+getProperty(user, 'phone')  // ❌ error — 'phone' is not a key of User
+
+
+// typeof — get the type of a value
+const config = {
+    apiUrl: 'https://api.example.com',
+    timeout: 5000,
+    debug: true,
+}
+
+type Config = typeof config
+// { apiUrl: string, timeout: number, debug: boolean }
+
+// Combine keyof + typeof for objects
+type ConfigKey = keyof typeof config
+// 'apiUrl' | 'timeout' | 'debug'
+```
+
+---
+
+### Type Guards — Narrow Unknown Types
+
+```ts
+// Type guards let you check types at runtime
+// Useful when dealing with API responses or unknown data
+
+// typeof guard — for primitive types
+function isString(value: unknown): value is string {
+    return typeof value === 'string'
+}
+
+// instanceof guard — for class instances
+function isError(value: unknown): value is Error {
+    return value instanceof Error
+}
+
+// Custom type guard — for objects
+function isUser(value: unknown): value is User {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        'id' in value &&
+        'name' in value &&
+        'email' in value
+    )
+}
+
+// Real-life — handle API error safely
+async function safeApiFetch<T>(url: string): Promise<T | null> {
+    try {
+        const res = await fetch(url)
+        if (!res.ok) return null
+        return res.json()
+    } catch (error) {
+        if (isError(error)) {
+            console.error(error.message) // ✅ TypeScript knows it's Error
+        }
+        return null
+    }
+}
+
+
+// Discriminated union guard
+type ApiState<T> =
+    | { status: 'loading' }
+    | { status: 'success'; data: T }
+    | { status: 'error'; message: string }
+
+function isSuccess<T>(state: ApiState<T>): state is { status: 'success'; data: T } {
+    return state.status === 'success'
+}
+
+// Usage
+const state: ApiState<User[]> = { status: 'success', data: users }
+if (isSuccess(state)) {
+    state.data.forEach(user => console.log(user.name)) // ✅ TypeScript knows data exists
+}
+```
+
+---
+
+### Template Literal Types
+
+```ts
+// Build string types dynamically
+
+type EventName = 'click' | 'focus' | 'blur'
+type HandlerName = `on${Capitalize<EventName>}`
+// 'onClick' | 'onFocus' | 'onBlur'
+
+// Real-life — API endpoint builder
+type Resource = 'users' | 'posts' | 'comments'
+type ApiEndpoint = `/api/${Resource}` | `/api/${Resource}/${string}`
+// '/api/users' | '/api/posts' | '/api/users/1' | etc.
+
+// Cache key builder
+type CacheKey = `${Resource}.${string}`
+// 'users.page_1' | 'posts.slug_hello-world' | etc.
+
+function buildCacheKey(resource: Resource, identifier: string): CacheKey {
+    return `${resource}.${identifier}`
+}
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```ts
+// Using any instead of generics — loses type safety
+function getFirst(arr: any[]): any {   // ❌ returns any — no type info
+    return arr[0]
+}
+
+const first = getFirst(['hello', 'world'])
+first.toUpperCase()  // works — but TypeScript can't verify this
+first.nonExistent()  // no error — dangerous
+```
+</Wrong>
+<Right>
+```ts
+// Use generic — preserves type information
+function getFirst<T>(arr: T[]): T {   // ✅ returns T — full type info
+    return arr[0]
+}
+
+const first = getFirst(['hello', 'world'])
+first.toUpperCase()  // ✅ TypeScript knows it's a string
+first.nonExistent()  // ❌ error caught — good!
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Using Partial everywhere — hides missing required data
+type CreateUserData = Partial<User>  // ❌ all fields optional — nothing required
+// Can create a user with zero fields — wrong!
+```
+</Wrong>
+<Right>
+```ts
+// Be specific — omit only what shouldn't be there
+type CreateUserData = Omit<User, 'id' | 'createdAt' | 'updatedAt'>
+// ✅ all fields required except auto-generated ones
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Not constraining generics — accepts anything
+function getProperty<T, K>(obj: T, key: K) {
+    return obj[key] // ❌ error — K might not be a key of T
+}
+```
+</Wrong>
+<Right>
+```ts
+// Constrain K to be a key of T
+function getProperty<T, K extends keyof T>(obj: T, key: K): T[K] {
+    return obj[key] // ✅ TypeScript knows K is always a valid key
+}
+```
+</Right>
+</WrongRight>
+
+**Gotcha:** TypeScript utility types create new types — they never modify the original. `Partial<User>` creates a new type where all fields are optional. `User` itself is unchanged. You can safely use both in the same codebase.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Name generic type parameters meaningfully when context is complex: `TData`, `TError`, `TResponse` instead of just `T`
+- Use `Omit` over `Pick` when you want most properties — easier to maintain as the type grows
+- Combine utility types: `Partial<Omit<User, 'id'>>` is cleaner than redefining everything
+- Put complex combined types in `lib/types/` with a descriptive name
+
+**Performance tips**
+```ts
+// Use type imports — erased at compile time
+import type { User, Post } from '@/lib/types/api'
+
+// Avoid deeply nested generics — hard to read and slow to compile
+// Bad:
+type ComplexType = Partial<Omit<Pick<Record<string, Array<Partial<User>>>, 'data'>, 'id'>>
+
+// Good: break it into steps
+type UserMap = Record<string, User[]>
+type UserData = Pick<UserMap, 'data'>
+type PartialUserData = Partial<Omit<UserData, 'id'>>
+```
+
+**Security considerations**
+- Never assume TypeScript types match runtime data — always validate API responses with Zod
+- Use `unknown` instead of `any` for external data — forces you to validate before use
+- TypeScript `as` casting bypasses type checking — avoid `data as User` without validation
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What are generics and why are they useful?"
+  difficulty="easy"
+>
+  Generics are type parameters that let you write reusable code that works
+  with any type while remaining fully type-safe. Instead of writing separate
+  functions for strings, numbers, and users, you write one function with a
+  type parameter T that gets replaced with the actual type at usage. They are
+  useful because they eliminate code duplication while preserving all type
+  information — unlike any which also eliminates duplication but loses all
+  type safety.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between Partial and Omit?"
+  difficulty="easy"
+>
+  `Partial<T>` keeps all properties but makes every one of them optional.
+  Use it for update operations where any subset of fields can be changed.
+  `Omit<T, Keys>` removes specific properties entirely and keeps everything
+  else required. Use it when certain fields should not exist — like removing
+  `id` from a create request or removing `password` from a public response.
+  They solve different problems and are often combined: `Partial<Omit<User,
+  'id'>>` — all fields optional except id which is removed entirely.
+</InterviewQ>
+
+<InterviewQ
+  question="What is keyof and how would you use it with generics?"
+  difficulty="mid"
+>
+  `keyof T` produces a union type of all the keys of T. For
+  `interface User { id: string; name: string }`, `keyof User` is
+  `'id' | 'name'`. Combined with generics, `K extends keyof T` constrains
+  a type parameter to only be a valid key of T. The classic use case is a
+  generic getter: `function get<T, K extends keyof T>(obj: T, key: K): T[K]`
+  — this function accepts any object and any of its valid keys, and returns
+  the exact type of that property. TypeScript enforces that the key exists
+  at compile time.
+</InterviewQ>
+
+<InterviewQ
+  question="What is a discriminated union and when would you use it?"
+  difficulty="mid"
+>
+  A discriminated union is a union of types that all share one common
+  literal property — the discriminant — that TypeScript uses to narrow
+  the type. For example a state type with `status: 'loading'`,
+  `status: 'success'`, and `status: 'error'` variants. In a switch on
+  `state.status`, TypeScript knows exactly which variant you are in and
+  gives you access to only the properties that exist on that variant —
+  `data` is only available in the success case, `message` only in error.
+  Use it for loading states, API states, form steps, or any scenario with
+  mutually exclusive states.
+</InterviewQ>
+
+<InterviewQ
+  question="How would you type a function that transforms an array of objects by a given key?"
+  difficulty="hard"
+>
+  Use two type parameters with constraints. `T` is the object type and
+  `K extends keyof T` ensures the key exists on T. The return type uses
+  `Record` with the value type at that key:
+
+```ts
+function groupBy<T, K extends keyof T>(
+    items: T[],
+    key: K
+): Record<string, T[]> {
+    return items.reduce((acc, item) => {
+        const groupKey = String(item[key])
+        acc[groupKey] = [...(acc[groupKey] ?? []), item]
+        return acc
+    }, {} as Record<string, T[]>)
+}
+
+// TypeScript enforces that 'status' is a key of Post
+const grouped = groupBy(posts, 'status')
+// { draft: Post[], published: Post[], archived: Post[] }
+```
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  Generics clicked for me when I stopped thinking of T as something special
+  and started thinking of it as just a variable — but for types instead of
+  values. Just like a function parameter holds a value that you pass in,
+  a type parameter holds a type that you pass in. Once I thought of it
+  that way, writing generic functions felt natural.
+</MyNotes>
+
+<MyNotes>
+  The utility type I use most by far is `Omit`. Almost every form in my
+  apps needs `Omit<SomeModel, 'id' | 'created_at' | 'updated_at'>` for
+  the create data type. Second most used is `Partial<Omit<...>>` for
+  update data. These two cover 80% of my API typing needs.
+</MyNotes>
+
+<MyNotes>
+  `ReturnType<typeof myFunction>` saved me multiple times when I refactored
+  a function's return type and needed all the places that used it to update
+  automatically. Instead of manually updating 10 type definitions, they all
+  derived from the function so they updated automatically. Especially useful
+  for composables and hooks.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Complete API Types Setup
+
+```ts
+// lib/types/api.ts — copy this to every project
+
+// Generic response wrappers
+export interface ApiResponse<T> {
+    data: T
+    message?: string
+}
+
+export interface PaginatedResponse<T> {
+    data: T[]
+    current_page: number
+    last_page: number
+    per_page: number
+    total: number
+    next_page_url: string | null
+    prev_page_url: string | null
+}
+
+export interface ApiError {
+    message: string
+    errors?: Record<string, string[]>
+    status: number
+}
+
+// Generic fetch function
+export async function apiFetch<T>(
+    url: string,
+    options: RequestInit = {}
+): Promise<T> {
+    const res = await fetch(url, {
+        ...options,
+        headers: {
+            'Content-Type': 'application/json',
+            ...options.headers,
+        },
+    })
+
+    if (!res.ok) {
+        const error: ApiError = await res.json().catch(() => ({
+            message: 'Something went wrong',
+            status: res.status,
+        }))
+        throw error
+    }
+
+    if (res.status === 204) return {} as T
+    return res.json()
+}
+
+// Helper types for CRUD operations
+export type CreateData<T> = Omit<T, 'id' | 'created_at' | 'updated_at'>
+export type UpdateData<T> = Partial<Omit<T, 'id' | 'created_at' | 'updated_at'>>
+export type ListItem<T, K extends keyof T> = Pick<T, K>
+```
+
+---
+
+### Generic State Composable — Vue
+
+```ts
+// composables/useAsyncState.ts
+export function useAsyncState<T>(fetcher: () => Promise<T>) {
+    const data = ref<T | null>(null)
+    const loading = ref(false)
+    const error = ref<string | null>(null)
+
+    async function execute(): Promise<void> {
+        loading.value = true
+        error.value = null
+        try {
+            data.value = await fetcher()
+        } catch (err: any) {
+            error.value = err.message ?? 'Something went wrong'
+        } finally {
+            loading.value = false
+        }
+    }
+
+    return { data, loading, error, execute }
+}
+
+// Usage
+const { data: user, loading, error, execute: fetchUser } = useAsyncState(
+    () => $fetch<User>('/api/users/1')
+)
+
+const { data: posts, execute: fetchPosts } = useAsyncState(
+    () => $fetch<PaginatedResponse<Post>>('/api/posts')
+)
+```
+
+---
+
+### Generic State Hook — React
+
+```ts
+// hooks/useAsyncState.ts
+export function useAsyncState<T>(fetcher: () => Promise<T>) {
+    const [data, setData] = useState<T | null>(null)
+    const [loading, setLoading] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+
+    async function execute(): Promise<void> {
+        setLoading(true)
+        setError(null)
+        try {
+            const result = await fetcher()
+            setData(result)
+        } catch (err: any) {
+            setError(err.message ?? 'Something went wrong')
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    return { data, loading, error, execute }
+}
+
+// Usage
+const { data: user, loading, execute: fetchUser } = useAsyncState(
+    () => apiFetch<User>('/api/users/1')
+)
+```
+
+---
+
+*Tags: `typescript` `generics` `utility-types` `advanced` `react` `vue` `nextjs` `nuxt` `intermediate`*

@@ -1,0 +1,474 @@
+---
+title: "API Design (REST Best Practices)"
+description: "How to design clean, consistent, and developer-friendly REST APIs in Laravel — covering naming, versioning, responses, authentication, and error handling."
+category: system-design
+tools: [laravel, mysql]
+tags: [api, rest, laravel, http, design, system-design]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## Concept Explanation
+
+A REST API is a set of URLs (endpoints) that your frontend or mobile app calls to get or change data. Good API design makes your API predictable, consistent, and easy to use.
+
+```
+Bad API (inconsistent, unpredictable):
+  GET  /getUsers
+  POST /createNewPost
+  GET  /delete-comment?id=5
+  POST /user/updateProfile
+
+Good API (consistent, RESTful):
+  GET    /users              → list users
+  POST   /users              → create user
+  GET    /users/42           → get user 42
+  PUT    /users/42           → update user 42
+  DELETE /users/42           → delete user 42
+```
+
+**REST is built on HTTP methods:**
+
+```
+GET     → Read (never changes data)
+POST    → Create
+PUT     → Replace (full update)
+PATCH   → Partial update
+DELETE  → Delete
+```
+
+---
+
+## Why It's Used
+
+- **Frontend/mobile independence:** Vue, React, mobile apps all consume the same API.
+- **Consistency:** Developers can guess your endpoints without reading docs.
+- **Cacheability:** GET requests can be cached at every level (browser, CDN, proxy).
+- **Scalability:** API and frontend deploy independently.
+
+---
+
+## Real-World Use Cases
+
+- Your Next.js frontend fetches products from `GET /api/v1/products`.
+- Your Vue dashboard calls `POST /api/v1/orders` to place an order.
+- Mobile app calls `PATCH /api/v1/users/me` to update profile.
+- Third party integrates with your `GET /api/v1/webhooks`.
+
+---
+
+## Code Examples
+
+### URL Structure & Naming
+
+```
+Rules:
+  ✅ Use nouns, not verbs   → /products not /getProducts
+  ✅ Use plural nouns       → /products not /product
+  ✅ Use kebab-case         → /order-items not /orderItems or /order_items
+  ✅ Nest related resources → /users/42/orders not /getUserOrders?user_id=42
+  ✅ Version your API       → /api/v1/products
+
+Examples:
+  GET    /api/v1/products                    → list all products
+  POST   /api/v1/products                    → create product
+  GET    /api/v1/products/42                 → get product 42
+  PUT    /api/v1/products/42                 → replace product 42
+  PATCH  /api/v1/products/42                 → partial update product 42
+  DELETE /api/v1/products/42                 → delete product 42
+
+  GET    /api/v1/users/5/orders              → orders for user 5
+  GET    /api/v1/orders/10/items             → items in order 10
+  POST   /api/v1/orders/10/items             → add item to order 10
+```
+
+### Laravel Routes
+
+```php
+// routes/api.php
+
+use App\Http\Controllers\Api\V1\ProductController;
+use App\Http\Controllers\Api\V1\OrderController;
+
+Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
+
+    // Products
+    Route::apiResource('products', ProductController::class);
+    // Generates:
+    // GET    /v1/products           → index
+    // POST   /v1/products           → store
+    // GET    /v1/products/{product} → show
+    // PUT    /v1/products/{product} → update
+    // DELETE /v1/products/{product} → destroy
+
+    // Nested routes
+    Route::apiResource('users.orders', UserOrderController::class)->only(['index', 'store']);
+    // GET  /v1/users/{user}/orders  → index
+    // POST /v1/users/{user}/orders  → store
+
+    // Non-resource actions (verbs are okay here)
+    Route::post('/orders/{order}/cancel', [OrderController::class, 'cancel']);
+    Route::post('/auth/refresh-token', [AuthController::class, 'refresh']);
+});
+```
+
+### Consistent Response Structure
+
+```php
+// Always return the same structure — your frontend can rely on it
+
+// ✅ Success response
+{
+    "success": true,
+    "message": "Product created successfully",
+    "data": {
+        "id": 42,
+        "name": "iPhone 15",
+        "price": 999.00
+    }
+}
+
+// ✅ List response with pagination
+{
+    "success": true,
+    "data": [...],
+    "meta": {
+        "current_page": 1,
+        "last_page": 5,
+        "per_page": 15,
+        "total": 73
+    }
+}
+
+// ✅ Error response
+{
+    "success": false,
+    "message": "Validation failed",
+    "errors": {
+        "email": ["The email field is required."],
+        "password": ["Password must be at least 8 characters."]
+    }
+}
+```
+
+### API Response Helper / Base Controller
+
+```php
+// app/Http/Controllers/Api/ApiController.php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use Illuminate\Http\JsonResponse;
+
+class ApiController extends Controller
+{
+    protected function success(mixed $data = null, string $message = 'Success', int $status = 200): JsonResponse
+    {
+        return response()->json([
+            'success' => true,
+            'message' => $message,
+            'data'    => $data,
+        ], $status);
+    }
+
+    protected function error(string $message, int $status = 400, mixed $errors = null): JsonResponse
+    {
+        return response()->json(array_filter([
+            'success' => false,
+            'message' => $message,
+            'errors'  => $errors,
+        ]), $status);
+    }
+
+    protected function paginated($resource): JsonResponse
+    {
+        return response()->json([
+            'success' => true,
+            'data'    => $resource->items(),
+            'meta'    => [
+                'current_page' => $resource->currentPage(),
+                'last_page'    => $resource->lastPage(),
+                'per_page'     => $resource->perPage(),
+                'total'        => $resource->total(),
+            ],
+        ]);
+    }
+}
+```
+
+### A Clean Controller
+
+```php
+// app/Http/Controllers/Api/V1/ProductController.php
+<?php
+
+namespace App\Http\Controllers\Api\V1;
+
+use App\Http\Controllers\Api\ApiController;
+use App\Http\Requests\StoreProductRequest;
+use App\Http\Requests\UpdateProductRequest;
+use App\Http\Resources\ProductResource;
+use App\Models\Product;
+
+class ProductController extends ApiController
+{
+    public function index(Request $request)
+    {
+        $products = Product::with('category')
+            ->when($request->category_id, fn($q) => $q->where('category_id', $request->category_id))
+            ->when($request->search, fn($q) => $q->where('name', 'like', "%{$request->search}%"))
+            ->latest()
+            ->paginate($request->per_page ?? 15);
+
+        return $this->paginated(ProductResource::collection($products));
+    }
+
+    public function store(StoreProductRequest $request)
+    {
+        $product = Product::create($request->validated());
+        return $this->success(new ProductResource($product), 'Product created', 201);
+    }
+
+    public function show(Product $product)
+    {
+        return $this->success(new ProductResource($product->load('category')));
+    }
+
+    public function update(UpdateProductRequest $request, Product $product)
+    {
+        $product->update($request->validated());
+        return $this->success(new ProductResource($product), 'Product updated');
+    }
+
+    public function destroy(Product $product)
+    {
+        $product->delete();
+        return $this->success(message: 'Product deleted');
+    }
+}
+```
+
+### API Resources — Transform Data
+
+```php
+// app/Http/Resources/ProductResource.php
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class ProductResource extends JsonResource
+{
+    public function toArray($request): array
+    {
+        return [
+            'id'         => $this->id,
+            'name'       => $this->name,
+            'slug'       => $this->slug,
+            'price'      => $this->price,
+            'price_formatted' => 'EGP ' . number_format($this->price, 2),
+            'is_active'  => $this->is_active,
+            'stock'      => $this->stock,
+            'in_stock'   => $this->stock > 0,
+
+            // Only include if relationship is loaded (no N+1)
+            'category'   => new CategoryResource($this->whenLoaded('category')),
+            'tags'       => TagResource::collection($this->whenLoaded('tags')),
+
+            'created_at' => $this->created_at->toDateTimeString(),
+        ];
+    }
+}
+```
+
+### HTTP Status Codes — Use Them Correctly
+
+```php
+// The most important ones
+
+200 OK              → Successful GET, PUT, PATCH
+201 Created         → Successful POST (resource created)
+204 No Content      → Successful DELETE (nothing to return)
+400 Bad Request     → Client sent invalid data
+401 Unauthorized    → Not authenticated (no token)
+403 Forbidden       → Authenticated but not allowed
+404 Not Found       → Resource doesn't exist
+409 Conflict        → Conflict (duplicate email, etc.)
+422 Unprocessable   → Validation failed (Laravel's default for validation errors)
+429 Too Many Requests → Rate limit exceeded
+500 Server Error    → Something crashed on your end
+
+// In Laravel
+return response()->json([...], 201);
+return response()->json([...], 204);
+abort(404, 'Product not found');
+abort(403, 'You do not have permission');
+```
+
+### Filtering, Sorting, and Pagination
+
+```
+URL conventions:
+  Filtering:   GET /products?category_id=5&is_active=1&min_price=100
+  Searching:   GET /products?search=iphone
+  Sorting:     GET /products?sort=price&direction=asc
+  Pagination:  GET /products?page=2&per_page=20
+  Fields:      GET /products?fields=id,name,price   (sparse fieldsets)
+```
+
+```php
+// app/Http/Controllers/Api/V1/ProductController.php
+public function index(Request $request)
+{
+    $products = Product::query()
+        ->when($request->category_id,
+            fn($q) => $q->where('category_id', $request->category_id))
+        ->when($request->search,
+            fn($q) => $q->where('name', 'like', "%{$request->search}%"))
+        ->when($request->min_price,
+            fn($q) => $q->where('price', '>=', $request->min_price))
+        ->when($request->max_price,
+            fn($q) => $q->where('price', '<=', $request->max_price))
+        ->when($request->sort, function ($q) use ($request) {
+            $direction = $request->direction === 'asc' ? 'asc' : 'desc';
+            $allowedSorts = ['price', 'name', 'created_at']; // whitelist!
+            if (in_array($request->sort, $allowedSorts)) {
+                $q->orderBy($request->sort, $direction);
+            }
+        }, fn($q) => $q->latest())
+        ->paginate($request->per_page ?? 15);
+
+    return $this->paginated(ProductResource::collection($products));
+}
+```
+
+### API Versioning
+
+```php
+// routes/api.php
+Route::prefix('v1')->group(function () {
+    Route::apiResource('products', V1\ProductController::class);
+});
+
+Route::prefix('v2')->group(function () {
+    Route::apiResource('products', V2\ProductController::class); // breaking changes go here
+});
+
+// Folder structure:
+// app/Http/Controllers/Api/V1/ProductController.php
+// app/Http/Controllers/Api/V2/ProductController.php
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Returning raw Eloquent models
+public function show(Product $product)
+{
+    return response()->json($product); // ❌ Exposes all columns, including sensitive ones
+}
+```
+</Wrong>
+<Right>
+```php
+// Always use API Resources
+public function show(Product $product)
+{
+    return $this->success(new ProductResource($product)); // ✅ You control what's exposed
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Using wrong HTTP status codes
+public function store(Request $request)
+{
+    $product = Product::create($request->validated());
+    return response()->json($product, 200); // ❌ Should be 201 for creation
+}
+```
+</Wrong>
+<Right>
+```php
+public function store(Request $request)
+{
+    $product = Product::create($request->validated());
+    return response()->json($product, 201); // ✅ 201 Created
+}
+```
+</Right>
+</WrongRight>
+
+---
+
+## Best Practices
+
+- Always version your API (`/api/v1/`) from day one — adding it later breaks clients.
+- Use API Resources for all responses — never return raw Eloquent models.
+- Always validate with Form Requests, never `$request->all()`.
+- Use consistent response structure across all endpoints.
+- Return correct HTTP status codes — they communicate meaning.
+- Whitelist sortable/filterable fields — never allow arbitrary column sorting.
+- Paginate all list endpoints — never return unbounded collections.
+- Document your API (Laravel Scribe or Swagger).
+
+---
+
+## Interview Questions
+
+<InterviewQ question="What is the difference between PUT and PATCH?" difficulty="easy">
+  PUT replaces the entire resource — you must send all fields. If you omit a field,
+  it gets set to null or its default. PATCH does a partial update — you only send
+  the fields you want to change. In practice, most APIs accept PATCH for updates
+  because clients rarely want to replace the entire resource.
+</InterviewQ>
+
+<InterviewQ question="What HTTP status code should you return when validation fails?" difficulty="easy">
+  422 Unprocessable Entity. It means the server understood the request but couldn't
+  process it due to semantic errors (invalid data). Laravel returns 422 automatically
+  for Form Request validation failures. 400 Bad Request is for malformed requests
+  (invalid JSON, wrong content-type), not validation errors.
+</InterviewQ>
+
+<InterviewQ question="Why should you version your API?" difficulty="mid">
+  Because once clients (frontend apps, mobile apps, third parties) are using your API,
+  you can't make breaking changes without breaking them. Versioning gives you a path to
+  introduce breaking changes in v2 while v1 keeps working. Start versioning from day one —
+  retrofitting versioning onto an unversioned API is painful and requires all clients to update.
+</InterviewQ>
+
+<InterviewQ question="What is HATEOAS and do you need it?" difficulty="hard">
+  HATEOAS (Hypermedia as the Engine of Application State) is a REST constraint where
+  API responses include links to related actions. For example, an order response includes
+  links to cancel it, pay it, or view its items. In theory it makes APIs self-documenting.
+  In practice, very few APIs implement it fully and most teams skip it — the added complexity
+  rarely justifies the benefit for typical web apps. Know it for interviews but don't lose
+  sleep over it.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The single change that made my APIs most consistent was creating a base `ApiController`
+  with `success()`, `error()`, and `paginated()` helpers. Before that, every controller
+  returned slightly different JSON structures and the frontend had to handle each one differently.
+</MyNotes>
+
+<MyNotes>
+  I learned to whitelist sortable fields the hard way. A client sent `?sort=password` to a
+  user endpoint and it sorted by password hash — not dangerous but definitely wrong. Now
+  every sort parameter is validated against an allowed list before touching the query.
+</MyNotes>

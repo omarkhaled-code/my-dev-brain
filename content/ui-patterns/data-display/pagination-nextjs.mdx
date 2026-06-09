@@ -1,0 +1,453 @@
+---
+title: "Pagination with Next.js + Tailwind CSS"
+description: "How to build a reusable pagination component in Next.js App Router with page numbers, prev/next buttons, ellipsis for large page counts, URL-based state, and per-page selector using Tailwind CSS"
+category: ui-patterns
+tools: [nextjs, tailwind]
+tags: [pagination, table, data, navigation, app-router, url-state]
+difficulty: beginner
+status: complete
+lastUpdated: 2026-06-06
+---
+
+## Concept explanation
+
+Pagination in Next.js App Router has two approaches — **client-side** with `useState` for simple cases, and **URL-based** with `searchParams` for production apps. The URL approach is more powerful: the current page lives in the URL (`?page=3`), making it bookmarkable, shareable, and compatible with the browser back button — all for free. Server Components can read `searchParams` directly and fetch only the data for that page.
+
+<Callout type="note">
+  **Next.js vs React difference:** The `useState` approach works identically in plain React. The URL-based approach uses `useRouter` and `useSearchParams` from `next/navigation` — in plain React replace these with `useNavigate` and `useSearchParams` from `react-router-dom`. Logic stays the same.
+</Callout>
+
+## Why it's used
+
+- Prevents loading thousands of rows at once which kills performance
+- URL-based pagination makes pages bookmarkable and shareable
+- Server Components can fetch only the current page — no client JS needed
+- Standard UX pattern users already understand
+
+## Real-world use cases
+
+- Users list in an admin dashboard
+- Product catalog in an e-commerce site
+- Blog posts archive page
+- Search results page
+- Orders history table
+
+## Code example
+
+### Basic pagination component (client-side state)
+
+```tsx
+// components/Pagination.tsx
+"use client";
+
+import { useMemo } from "react";
+
+type Props = {
+  currentPage: number;
+  totalPages: number;
+  maxVisible?: number;
+  onPageChange: (page: number) => void;
+};
+
+export function Pagination({
+  currentPage,
+  totalPages,
+  maxVisible = 5,
+  onPageChange,
+}: Props) {
+
+  const pages = useMemo(() => {
+    const items: (number | "...")[] = [];
+
+    if (totalPages <= maxVisible) {
+      for (let i = 1; i <= totalPages; i++) items.push(i);
+      return items;
+    }
+
+    items.push(1);
+
+    const left = Math.max(2, currentPage - 1);
+    const right = Math.min(totalPages - 1, currentPage + 1);
+
+    if (left > 2) items.push("...");
+    for (let i = left; i <= right; i++) items.push(i);
+    if (right < totalPages - 1) items.push("...");
+
+    items.push(totalPages);
+    return items;
+  }, [currentPage, totalPages, maxVisible]);
+
+  const goTo = (page: number) => {
+    if (page < 1 || page > totalPages || page === currentPage) return;
+    onPageChange(page);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  if (totalPages <= 1) return null;
+
+  return (
+    <div className="flex items-center justify-center gap-1">
+
+      {/* Prev */}
+      <button
+        onClick={() => goTo(currentPage - 1)}
+        disabled={currentPage === 1}
+        className="px-3 py-2 text-sm rounded-lg border border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      >
+        ← Prev
+      </button>
+
+      {/* Page numbers */}
+      {pages.map((page, i) =>
+        page === "..." ? (
+          <span key={`ellipsis-${i}`} className="px-3 py-2 text-sm text-neutral-400">
+            ...
+          </span>
+        ) : (
+          <button
+            key={page}
+            onClick={() => goTo(page)}
+            className={`
+              px-3 py-2 text-sm rounded-lg border transition-colors
+              ${page === currentPage
+                ? "bg-blue-600 text-white border-blue-600"
+                : "border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+              }
+            `}
+          >
+            {page}
+          </button>
+        )
+      )}
+
+      {/* Next */}
+      <button
+        onClick={() => goTo(currentPage + 1)}
+        disabled={currentPage === totalPages}
+        className="px-3 py-2 text-sm rounded-lg border border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      >
+        Next →
+      </button>
+
+    </div>
+  );
+}
+```
+
+### URL-based pagination (production approach)
+
+```tsx
+// components/PaginationURL.tsx
+"use client";
+
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useMemo, useCallback } from "react";
+
+type Props = {
+  currentPage: number;
+  totalPages: number;
+  totalItems: number;
+  perPage: number;
+};
+
+export function PaginationURL({
+  currentPage,
+  totalPages,
+  totalItems,
+  perPage,
+}: Props) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const from = Math.min((currentPage - 1) * perPage + 1, totalItems);
+  const to = Math.min(currentPage * perPage, totalItems);
+
+  // Build URL with updated page param — preserves all other params
+  const createURL = useCallback(
+    (page: number) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("page", String(page));
+      return `${pathname}?${params.toString()}`;
+    },
+    [pathname, searchParams]
+  );
+
+  const goTo = (page: number) => {
+    if (page < 1 || page > totalPages || page === currentPage) return;
+    router.push(createURL(page));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handlePerPageChange = (val: number) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("perPage", String(val));
+    params.set("page", "1"); // reset to page 1
+    router.push(`${pathname}?${params.toString()}`);
+  };
+
+  const pages = useMemo(() => {
+    const items: (number | "...")[] = [];
+    if (totalPages <= 7) {
+      for (let i = 1; i <= totalPages; i++) items.push(i);
+      return items;
+    }
+    items.push(1);
+    const left = Math.max(2, currentPage - 1);
+    const right = Math.min(totalPages - 1, currentPage + 1);
+    if (left > 2) items.push("...");
+    for (let i = left; i <= right; i++) items.push(i);
+    if (right < totalPages - 1) items.push("...");
+    items.push(totalPages);
+    return items;
+  }, [currentPage, totalPages]);
+
+  if (totalPages <= 1) return null;
+
+  return (
+    <div className="flex items-center justify-between gap-4 flex-wrap">
+
+      {/* Result count */}
+      <p className="text-sm text-neutral-500 dark:text-neutral-400">
+        Showing{" "}
+        <span className="font-medium text-neutral-900 dark:text-neutral-100">
+          {from}–{to}
+        </span>{" "}
+        of{" "}
+        <span className="font-medium text-neutral-900 dark:text-neutral-100">
+          {totalItems}
+        </span>{" "}
+        results
+      </p>
+
+      <div className="flex items-center gap-3">
+
+        {/* Per-page selector */}
+        <select
+          value={perPage}
+          onChange={(e) => handlePerPageChange(Number(e.target.value))}
+          className="text-sm border border-neutral-200 dark:border-neutral-700 rounded-lg px-2 py-1.5 bg-transparent dark:text-neutral-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value={5}>5 / page</option>
+          <option value={10}>10 / page</option>
+          <option value={25}>25 / page</option>
+          <option value={50}>50 / page</option>
+        </select>
+
+        {/* Page buttons */}
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => goTo(currentPage - 1)}
+            disabled={currentPage === 1}
+            className="px-3 py-1.5 text-sm rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            ←
+          </button>
+
+          {pages.map((page, i) =>
+            page === "..." ? (
+              <span key={`ellipsis-${i}`} className="px-2 text-sm text-neutral-400">
+                ...
+              </span>
+            ) : (
+              <button
+                key={page}
+                onClick={() => goTo(page)}
+                className={`
+                  px-3 py-1.5 text-sm rounded-lg border transition-colors
+                  ${page === currentPage
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                  }
+                `}
+              >
+                {page}
+              </button>
+            )
+          )}
+
+          <button
+            onClick={() => goTo(currentPage + 1)}
+            disabled={currentPage === totalPages}
+            className="px-3 py-1.5 text-sm rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            →
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+```
+
+### How to use URL-based pagination with a Server Component
+
+```tsx
+// app/users/page.tsx — Server Component
+import { PaginationURL } from "@/components/PaginationURL";
+
+type Props = {
+  searchParams: Promise<{ page?: string; perPage?: string }>;
+};
+
+async function getUsers(page: number, perPage: number) {
+  // Replace with your real DB query
+  const allUsers = Array.from({ length: 143 }, (_, i) => ({
+    id: i + 1,
+    name: `User ${i + 1}`,
+    email: `user${i + 1}@example.com`,
+  }));
+
+  const total = allUsers.length;
+  const data = allUsers.slice((page - 1) * perPage, page * perPage);
+  return { data, total };
+}
+
+export default async function UsersPage({ searchParams }: Props) {
+  const { page, perPage } = await searchParams;
+
+  const currentPage = Math.max(1, Number(page) || 1);
+  const itemsPerPage = Number(perPage) || 10;
+
+  const { data: users, total } = await getUsers(currentPage, itemsPerPage);
+  const totalPages = Math.ceil(total / itemsPerPage);
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold">Users</h1>
+
+      {/* Users list */}
+      <div className="space-y-2">
+        {users.map((user) => (
+          <div
+            key={user.id}
+            className="flex items-center justify-between p-4 border border-neutral-200 dark:border-neutral-800 rounded-xl"
+          >
+            <div>
+              <p className="font-medium text-neutral-900 dark:text-neutral-100">
+                {user.name}
+              </p>
+              <p className="text-sm text-neutral-500">{user.email}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Pagination — reads and writes URL */}
+      <PaginationURL
+        currentPage={currentPage}
+        totalPages={totalPages}
+        totalItems={total}
+        perPage={itemsPerPage}
+      />
+    </div>
+  );
+}
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```tsx
+// Hardcoding page param name — breaks if you have multiple
+// paginated lists on the same page
+const goTo = (page: number) => {
+  router.push(`?page=${page}`) // ❌ overwrites ALL other params
+}
+```
+</Wrong>
+<Right>
+```tsx
+// Always use URLSearchParams to preserve existing params
+const goTo = (page: number) => {
+  const params = new URLSearchParams(searchParams.toString())
+  params.set("page", String(page)) // ✅ only updates page param
+  router.push(`${pathname}?${params.toString()}`)
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Reading searchParams directly in a client component
+// causes a hydration mismatch in Next.js
+export default function Page() {
+  const page = Number(new URLSearchParams(window.location.search).get("page"))
+  // ❌ window doesn't exist on server
+}
+```
+</Wrong>
+<Right>
+```tsx
+// Use useSearchParams() hook in client components
+// Use searchParams prop in server components
+"use client"
+import { useSearchParams } from "next/navigation"
+
+export default function Page() {
+  const searchParams = useSearchParams()
+  const page = Number(searchParams.get("page")) || 1 // ✅
+}
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Use URL-based pagination in production — it's bookmarkable, shareable, and SEO-friendly
+- Always use `URLSearchParams` to update params — never string concatenation
+- Keep the component stateless — receive `currentPage` and `totalPages` as props
+- Return `null` when `totalPages <= 1` — no need to show pagination for one page
+- Reset to page 1 when per-page selector changes
+- Scroll to top on page change with `window.scrollTo({ top: 0, behavior: "smooth" })`
+- In Server Components, always validate and clamp the page number from `searchParams`
+
+<Callout type="tip">
+  Wrap `PaginationURL` in a `Suspense` boundary when using `useSearchParams` — Next.js requires it to avoid blocking the page render:
+```tsx
+  import { Suspense } from "react"
+
+  <Suspense fallback={null}>
+    <PaginationURL ... />
+  </Suspense>
+```
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="Why is URL-based pagination better than useState pagination in Next.js?" difficulty="mid">
+  URL-based pagination stores the current page in the URL as a query param. This makes the state bookmarkable, shareable, and preserved on browser refresh. It also works with the browser back button for free. Server Components can read `searchParams` and fetch only the current page's data — no client JS needed for the data fetching. `useState` pagination loses its state on refresh and can't be shared via URL.
+</InterviewQ>
+
+<InterviewQ question="Why do you need to wrap useSearchParams in a Suspense boundary in Next.js?" difficulty="hard">
+  `useSearchParams` reads from the URL during rendering. In Next.js App Router, components that read dynamic data like search params opt out of static rendering — they need to be wrapped in `Suspense` so Next.js can stream the shell of the page immediately and fill in the dynamic parts later. Without `Suspense`, Next.js throws an error because the component blocks the entire page from being statically rendered.
+</InterviewQ>
+
+<InterviewQ question="How would you handle multiple paginated lists on the same page?" difficulty="hard">
+  Use different query param names for each list — `?usersPage=2&ordersPage=3`. When building the URL, use `URLSearchParams` to update only the relevant param while preserving the others. Pass the param name as a prop to the pagination component so it knows which param to read and write.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The `URLSearchParams` pattern is the most important thing here. I used to do `router.push(`?page=${page}`)` which wiped out all other query params like search filters. Always do:
+
+```ts
+  const params = new URLSearchParams(searchParams.toString())
+  params.set("page", String(page))
+  router.push(`${pathname}?${params.toString()}`)
+```
+
+  The `Suspense` wrapper for `useSearchParams` caught me off guard the first time — Next.js throws a cryptic build error without it. Just always wrap it.
+
+  **React vs Next.js:** Replace `useRouter` and `useSearchParams` from `next/navigation` with `useNavigate` and `useSearchParams` from `react-router-dom`. The URL update logic is slightly different:
+```ts
+  // React Router
+  const [searchParams, setSearchParams] = useSearchParams()
+  setSearchParams({ page: String(page) })
+```
+</MyNotes>

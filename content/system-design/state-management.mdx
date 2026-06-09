@@ -1,0 +1,483 @@
+---
+title: "State Management Design"
+description: "When to use global state, how to structure Pinia stores (Vue/Nuxt) and Zustand stores (React/Next.js), and how to avoid common state management mistakes."
+category: system-design
+tools: [vue, nuxt, react, next, pinia, zustand]
+tags: [state-management, pinia, zustand, vue, react, design, system-design]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## Concept Explanation
+
+State is data your app needs to display and update. The question is: **where does that data live?**
+
+```
+Local state     → inside one component (a modal open/close, a form input value)
+Shared state    → needed by multiple components (current user, cart, theme)
+Server state    → data that comes from an API (products, orders, posts)
+URL state       → filters, pagination, search query (lives in the URL)
+
+Rule of thumb:
+  Put state as close to where it's used as possible.
+  Only lift it up when two or more components need it.
+  Only put it in a global store when it's truly global.
+```
+
+---
+
+## Why It's Used
+
+- **Avoid prop drilling:** Passing data through 5 layers of components is painful. A store lets any component access shared data directly.
+- **Single source of truth:** One place to update cart items, all components stay in sync.
+- **Persistence:** Stores can sync to localStorage to survive page refreshes.
+- **Devtools:** Pinia and Zustand have browser devtools to inspect and time-travel state.
+
+---
+
+## Real-World Use Cases
+
+- **Auth store:** current user, token, isAuthenticated — needed everywhere.
+- **Cart store:** items, totals, add/remove — needed in header, cart page, checkout.
+- **UI store:** sidebar open, theme, notifications — global UI state.
+- **Filters store:** active filters for a product list — shared between filter panel and results.
+
+---
+
+## Code Examples
+
+### When NOT to Use a Store
+
+```vue
+<!-- ✅ Local state — only this component needs it -->
+<script setup>
+import { ref } from 'vue'
+
+const isOpen    = ref(false)   // modal open state — only here
+const inputVal  = ref('')      // form field — only here
+const isLoading = ref(false)   // loading for this specific button
+</script>
+```
+
+```vue
+<!-- ✅ Shared between parent and child — just use props + emits, no store needed -->
+<script setup>
+// Parent passes data down, child emits events up
+// Store is overkill for 2 levels of nesting
+defineProps<{ items: Product[] }>()
+defineEmits<{ select: [id: number] }>()
+</script>
+```
+
+### Pinia — Vue/Nuxt Store Structure
+
+```typescript
+// stores/auth.ts
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import type { User } from '@/types'
+
+export const useAuthStore = defineStore('auth', () => {
+  // ── STATE ────────────────────────────────────────
+  const user  = ref<User | null>(null)
+  const token = ref<string | null>(null)
+
+  // ── GETTERS (computed) ────────────────────────────
+  const isAuthenticated = computed(() => !!token.value)
+  const isAdmin         = computed(() => user.value?.role === 'admin')
+  const fullName        = computed(() =>
+    user.value ? `${user.value.first_name} ${user.value.last_name}` : ''
+  )
+
+  // ── ACTIONS ──────────────────────────────────────
+  async function login(email: string, password: string) {
+    const { data } = await useApi('/auth/login', {
+      method: 'POST',
+      body: { email, password },
+    })
+    token.value = data.token
+    user.value  = data.user
+    localStorage.setItem('token', data.token)
+  }
+
+  async function logout() {
+    await useApi('/auth/logout', { method: 'POST' })
+    user.value  = null
+    token.value = null
+    localStorage.removeItem('token')
+    navigateTo('/login')
+  }
+
+  async function fetchMe() {
+    if (!token.value) return
+    const { data } = await useApi('/auth/me')
+    user.value = data
+  }
+
+  return { user, token, isAuthenticated, isAdmin, fullName, login, logout, fetchMe }
+}, {
+  persist: true,   // auto-persist to localStorage (pinia-plugin-persistedstate)
+})
+```
+
+```typescript
+// stores/cart.ts
+export const useCartStore = defineStore('cart', () => {
+  const items = ref<CartItem[]>([])
+
+  const total     = computed(() => items.value.reduce((sum, i) => sum + i.subtotal, 0))
+  const itemCount = computed(() => items.value.reduce((sum, i) => sum + i.quantity, 0))
+
+  function addItem(product: Product, quantity = 1) {
+    const existing = items.value.find(i => i.product_id === product.id)
+    if (existing) {
+      existing.quantity += quantity
+      existing.subtotal  = existing.quantity * existing.unit_price
+    } else {
+      items.value.push({
+        product_id: product.id,
+        name:       product.name,
+        unit_price: product.price,
+        quantity,
+        subtotal:   product.price * quantity,
+      })
+    }
+  }
+
+  function removeItem(productId: number) {
+    items.value = items.value.filter(i => i.product_id !== productId)
+  }
+
+  function clearCart() {
+    items.value = []
+  }
+
+  return { items, total, itemCount, addItem, removeItem, clearCart }
+}, { persist: true })
+```
+
+### Pinia — Usage in Components
+
+```vue
+<script setup>
+import { useAuthStore } from '@/stores/auth'
+import { useCartStore  } from '@/stores/cart'
+
+const auth = useAuthStore()
+const cart = useCartStore()
+</script>
+
+<template>
+  <nav>
+    <span>{{ auth.fullName }}</span>
+    <span>Cart ({{ cart.itemCount }})</span>
+    <button v-if="auth.isAdmin" @click="navigateTo('/admin')">Admin</button>
+    <button @click="auth.logout">Logout</button>
+  </nav>
+</template>
+```
+
+### Pinia — Store Composition (Stores Using Other Stores)
+
+```typescript
+// stores/checkout.ts
+import { useCartStore  } from './cart'
+import { useAuthStore  } from './auth'
+
+export const useCheckoutStore = defineStore('checkout', () => {
+  const cart = useCartStore()
+  const auth = useAuthStore()
+
+  async function placeOrder(shippingAddress: Address) {
+    const { data } = await useApi('/orders', {
+      method: 'POST',
+      body: {
+        user_id:  auth.user?.id,
+        items:    cart.items,
+        total:    cart.total,
+        address:  shippingAddress,
+      },
+    })
+    cart.clearCart()   // clear cart after successful order
+    return data.order
+  }
+
+  return { placeOrder }
+})
+```
+
+### Zustand — React/Next.js Store Structure
+
+```typescript
+// stores/auth.ts (Zustand)
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import type { User } from '@/types'
+
+type AuthState = {
+  user:            User | null
+  token:           string | null
+  isAuthenticated: boolean
+  login:           (email: string, password: string) => Promise<void>
+  logout:          () => void
+  setUser:         (user: User) => void
+}
+
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      user:            null,
+      token:           null,
+      isAuthenticated: false,
+
+      login: async (email, password) => {
+        const res  = await fetch('/api/auth/login', {
+          method: 'POST',
+          body:   JSON.stringify({ email, password }),
+          headers: { 'Content-Type': 'application/json' },
+        })
+        const data = await res.json()
+        set({
+          user:            data.user,
+          token:           data.token,
+          isAuthenticated: true,
+        })
+      },
+
+      logout: () => {
+        set({ user: null, token: null, isAuthenticated: false })
+      },
+
+      setUser: (user) => set({ user }),
+    }),
+    { name: 'auth-storage' }   // key in localStorage
+  )
+)
+```
+
+```typescript
+// stores/cart.ts (Zustand)
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+
+type CartItem = { id: number; name: string; price: number; quantity: number }
+
+type CartState = {
+  items:     CartItem[]
+  total:     number
+  addItem:   (product: CartItem) => void
+  removeItem:(id: number) => void
+  clearCart: () => void
+}
+
+const calcTotal = (items: CartItem[]) =>
+  items.reduce((sum, i) => sum + i.price * i.quantity, 0)
+
+export const useCartStore = create<CartState>()(
+  persist(
+    (set) => ({
+      items: [],
+      total: 0,
+
+      addItem: (product) =>
+        set((state) => {
+          const existing = state.items.find(i => i.id === product.id)
+          const items = existing
+            ? state.items.map(i => i.id === product.id
+                ? { ...i, quantity: i.quantity + 1 }
+                : i)
+            : [...state.items, { ...product, quantity: 1 }]
+          return { items, total: calcTotal(items) }
+        }),
+
+      removeItem: (id) =>
+        set((state) => {
+          const items = state.items.filter(i => i.id !== id)
+          return { items, total: calcTotal(items) }
+        }),
+
+      clearCart: () => set({ items: [], total: 0 }),
+    }),
+    { name: 'cart-storage' }
+  )
+)
+```
+
+### Zustand — Usage in Components
+
+```tsx
+// Any component — no Provider needed (unlike Redux)
+import { useAuthStore } from '@/stores/auth'
+import { useCartStore  } from '@/stores/cart'
+
+export default function Navbar() {
+  const { user, logout }    = useAuthStore()
+  const { itemCount }       = useCartStore()
+
+  return (
+    <nav>
+      <span>{user?.name}</span>
+      <span>Cart ({itemCount})</span>
+      <button onClick={logout}>Logout</button>
+    </nav>
+  )
+}
+```
+
+### Folder Structure for Stores
+
+```
+src/
+└── stores/
+    ├── index.ts          ← export all stores from one place
+    ├── auth.ts           ← authentication (user, token, login, logout)
+    ├── cart.ts           ← shopping cart
+    ├── ui.ts             ← global UI state (sidebar, theme, notifications)
+    ├── checkout.ts       ← checkout flow state
+    └── filters.ts        ← product filter state (if complex enough for a store)
+```
+
+```typescript
+// stores/ui.ts — global UI state
+export const useUiStore = defineStore('ui', () => {
+  const sidebarOpen     = ref(false)
+  const theme           = ref<'light' | 'dark'>('light')
+  const notifications   = ref<Notification[]>([])
+
+  function toggleSidebar() { sidebarOpen.value = !sidebarOpen.value }
+
+  function addNotification(msg: string, type: 'success' | 'error' = 'success') {
+    const id = Date.now()
+    notifications.value.push({ id, msg, type })
+    setTimeout(() => removeNotification(id), 4000)   // auto-dismiss
+  }
+
+  function removeNotification(id: number) {
+    notifications.value = notifications.value.filter(n => n.id !== id)
+  }
+
+  return { sidebarOpen, theme, notifications, toggleSidebar, addNotification, removeNotification }
+})
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```typescript
+// Putting everything in one giant store
+export const useAppStore = defineStore('app', () => {
+  const user       = ref(null)    // ❌ auth concerns
+  const cartItems  = ref([])      // ❌ cart concerns
+  const products   = ref([])      // ❌ product concerns
+  const sidebarOpen = ref(false)  // ❌ UI concerns
+  // ...50 more things
+})
+```
+</Wrong>
+<Right>
+```typescript
+// One store per concern — small and focused
+export const useAuthStore    = defineStore('auth', ...)
+export const useCartStore    = defineStore('cart', ...)
+export const useProductStore = defineStore('products', ...)
+export const useUiStore      = defineStore('ui', ...)
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Using a global store for local state -->
+<script setup>
+const ui = useUiStore()
+// ❌ isOpen only matters for THIS dropdown — no other component cares
+</script>
+
+<template>
+  <div>
+    <button @click="ui.setDropdownOpen(true)">Open</button>
+  </div>
+</template>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Local ref is perfect — no store needed -->
+<script setup>
+const isOpen = ref(false)   // ✅ local, simple, self-contained
+</script>
+```
+</Right>
+</WrongRight>
+
+---
+
+## Best Practices
+
+- Keep stores small and single-purpose — one store per domain (auth, cart, UI).
+- Use local `ref` first — only move to a store when two+ unrelated components need it.
+- Use `persist` plugin for data that should survive page refresh (cart, auth token, theme).
+- Name stores clearly: `useAuthStore`, `useCartStore` — not `useStore`.
+- Don't store derived data — use `computed` (Pinia) or selectors (Zustand) instead.
+- Reset store state on logout — don't leak one user's data to the next.
+- Keep API calls inside store actions — not in components.
+
+```typescript
+// Reset all stores on logout
+function logout() {
+  useAuthStore().$reset()
+  useCartStore().$reset()
+  // redirect to login
+}
+```
+
+---
+
+## Interview Questions
+
+<InterviewQ question="What is the difference between local state and global state?" difficulty="easy">
+  Local state lives inside a single component and is only accessible there — a modal's
+  open/close flag, a form field value. Global state lives in a store accessible by any
+  component — the current user, shopping cart, theme. The rule: start with local state,
+  promote to global only when multiple unrelated components need the same data. Over-using
+  global state leads to hard-to-debug, tightly-coupled code.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Pinia and Vuex?" difficulty="easy">
+  Pinia is the official Vue state manager (replaced Vuex). It's simpler — no mutations,
+  no modules boilerplate, native TypeScript support, and works with the Composition API
+  naturally. Vuex required a strict pattern of state → getters → mutations → actions.
+  Pinia collapses this — state and actions live together, and you use `computed` for getters.
+  Use Pinia for all new Vue/Nuxt projects.
+</InterviewQ>
+
+<InterviewQ question="What is prop drilling and how do stores solve it?" difficulty="easy">
+  Prop drilling is passing data through multiple layers of components just to get it to a
+  deeply nested child — even intermediate components don't use the data, they just pass
+  it along. Stores solve it by making shared data directly accessible to any component
+  without passing it through intermediaries. An alternative for simpler cases is Vue's
+  `provide/inject` or React's Context API.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The most common mistake I see in codebases: putting everything in one store. The whole
+  point of Pinia and Zustand is composable, small stores. I organize by domain —
+  `useAuthStore`, `useCartStore`, `useUiStore` — and compose them in actions when needed.
+  Each store file is focused, easy to test, and easy to understand.
+</MyNotes>
+
+<MyNotes>
+  `persist` plugin is non-negotiable for cart and auth stores. Users expect their cart
+  to survive a page refresh. Setting it up takes one line in Pinia. Not having it
+  causes a terrible user experience and I've seen e-commerce carts lose items on refresh
+  because someone forgot to persist.
+</MyNotes>

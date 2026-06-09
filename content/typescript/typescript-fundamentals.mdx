@@ -1,0 +1,969 @@
+---
+title: "TypeScript Fundamentals"
+description: "A beginner-friendly complete guide to TypeScript fundamentals — basic types, interfaces, type aliases, unions, intersections, enums, and how to use them in Next.js and Nuxt projects."
+category: typescript
+tools: [nextjs, nuxt, react, vue]
+tags: [typescript, types, interfaces, unions, enums, nextjs, nuxt]
+difficulty: beginner
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+### What is TypeScript?
+
+TypeScript is JavaScript with types. It adds a type system on top of JavaScript that catches errors **before** your code runs — at the time you write it in your editor.
+
+**Mental model — TypeScript is like a strict assistant:**
+```tsx
+JavaScript (no types):
+You: "Hey, add these two things together"
+JS:  "Sure!" → adds "5" + 3 = "53" (string + number = string??)
+You: "That's wrong..." (finds out at runtime — maybe in production)TypeScript (with types):
+You: "Hey, add these two numbers together"
+TS:  "Wait — 'name' is a string, not a number. I won't compile this."
+You: "Oh right, let me fix that." (finds out immediately while coding)
+```
+**TypeScript does NOT run in the browser.** It compiles to plain JavaScript. Think of it as a layer on top of JavaScript that disappears at runtime — it only exists to help you during development.
+```tsx
+You write TypeScript → TypeScript compiler checks types → Compiles to JavaScript → Runs in browser
+↑
+Catches errors here
+before code runs
+```
+---
+
+## Why It's Used
+
+- **Catch bugs early:** Type errors are caught while you type, not when users click a button.
+- **Better autocomplete:** Your editor knows what properties exist on every object.
+- **Self-documenting code:** Types describe what a function expects and returns — no guessing.
+- **Safe refactoring:** Rename a property and TypeScript tells you everywhere it breaks.
+- **Laravel API safety:** Define the shape of your API responses — TypeScript warns if you access a property that doesn't exist.
+
+---
+
+## Code Examples
+
+### Basic Types
+
+```ts
+// ── PRIMITIVE TYPES ─────────────────────────────────────
+
+let name: string = 'Ahmed'
+let age: number = 25
+let isActive: boolean = true
+let nothing: null = null
+let notDefined: undefined = undefined
+
+// TypeScript infers types — you don't always need to annotate
+let name = 'Ahmed'      // TypeScript knows this is string
+let age = 25            // TypeScript knows this is number
+let isActive = true     // TypeScript knows this is boolean
+
+
+// ── ARRAYS ──────────────────────────────────────────────
+
+let names: string[] = ['Ahmed', 'Ali', 'Sara']
+let ages: number[] = [25, 30, 22]
+let flags: boolean[] = [true, false, true]
+
+// Generic array syntax (same thing, different style)
+let names: Array<string> = ['Ahmed', 'Ali', 'Sara']
+
+
+// ── TUPLES — fixed length array with specific types ─────
+
+let user: [string, number] = ['Ahmed', 25]   // exactly: [string, number]
+let point: [number, number] = [10, 20]       // x and y coordinates
+
+// Named tuple — more readable
+let user: [name: string, age: number] = ['Ahmed', 25]
+
+
+// ── ANY — avoid this! ───────────────────────────────────
+
+let value: any = 'hello'  // ❌ disables all type checking
+value = 42                // allowed — but defeats the purpose of TypeScript
+value.nonExistentMethod() // no error — dangerous
+
+
+// ── UNKNOWN — safe version of any ──────────────────────
+
+let value: unknown = 'hello'
+// value.toUpperCase() // ❌ error — must check type first
+
+if (typeof value === 'string') {
+    value.toUpperCase() // ✅ TypeScript knows it's a string here
+}
+
+
+// ── VOID — function returns nothing ────────────────────
+
+function logMessage(message: string): void {
+    console.log(message)
+    // no return value
+}
+
+
+// ── NEVER — function never returns ─────────────────────
+
+function throwError(message: string): never {
+    throw new Error(message)
+    // code never reaches past this point
+}
+```
+
+---
+
+### Type Aliases — Name Your Types
+
+```ts
+// type creates a named type alias
+// Think of it as: "give this shape a name I can reuse"
+
+type UserRole = 'admin' | 'editor' | 'user'
+
+type User = {
+    id: string
+    name: string
+    email: string
+    role: UserRole
+    createdAt: string
+}
+
+type Post = {
+    id: string
+    title: string
+    body: string
+    status: 'draft' | 'published' | 'archived'
+    userId: string
+    createdAt: string
+    updatedAt: string
+}
+
+// Use the type
+const user: User = {
+    id: '1',
+    name: 'Ahmed',
+    email: 'ahmed@example.com',
+    role: 'admin',
+    createdAt: '2026-06-07',
+}
+
+// Function using the type
+function getUser(id: string): User {
+    // ...
+}
+
+function updateUser(id: string, data: Partial<User>): User {
+    // ...
+}
+```
+
+---
+
+### Interfaces — Define Object Shapes
+
+```ts
+// interface defines the shape of an object
+// Very similar to type — main difference explained below
+
+interface User {
+    id: string
+    name: string
+    email: string
+    role: 'admin' | 'editor' | 'user'
+    createdAt: string
+}
+
+interface Post {
+    id: string
+    title: string
+    body: string
+    status: 'draft' | 'published' | 'archived'
+    user: User           // nested interface
+    createdAt: string
+    updatedAt: string
+}
+
+// Optional properties — add ? after the name
+interface CreatePostData {
+    title: string
+    body: string
+    status?: 'draft' | 'published'   // optional — can be undefined
+    categoryId?: string               // optional
+}
+
+// Readonly properties — cannot be changed after creation
+interface Config {
+    readonly apiUrl: string    // cannot be reassigned
+    readonly appName: string
+    timeout: number            // can be changed
+}
+
+const config: Config = {
+    apiUrl: 'https://api.example.com',
+    appName: 'MyApp',
+    timeout: 5000,
+}
+
+config.timeout = 10000    // ✅ allowed
+config.apiUrl = 'other'  // ❌ error — readonly
+```
+
+---
+
+### Type vs Interface — When to Use Which
+
+```ts
+// The honest answer: they are very similar — use either consistently
+// But here are the practical differences:
+
+// ── USE interface WHEN: ─────────────────────────────────
+
+// 1. Defining object shapes (most common use case)
+interface User {
+    id: string
+    name: string
+}
+
+// 2. You need to extend (inherit) from another interface
+interface Admin extends User {
+    permissions: string[]
+}
+
+// 3. You might need declaration merging (adding to an existing interface)
+interface User {
+    id: string
+    name: string
+}
+interface User {
+    email: string  // ✅ merged with above — User now has id, name, email
+}
+
+
+// ── USE type WHEN: ──────────────────────────────────────
+
+// 1. Union types — interface cannot do this
+type Status = 'draft' | 'published' | 'archived'
+type ID = string | number
+
+// 2. Intersection types — combine multiple types
+type AdminUser = User & { permissions: string[] }
+
+// 3. Tuple types
+type Coordinate = [number, number]
+
+// 4. Utility types — Partial, Pick, Omit (covered in advanced file)
+type UpdateUserData = Partial<User>
+
+// ── PRACTICAL RULE ──────────────────────────────────────
+// Use interface for objects and classes
+// Use type for everything else (unions, tuples, utility types)
+```
+
+---
+
+### Union Types — One OR Another
+
+```ts
+// Union = this OR that
+// Use the pipe | symbol
+
+type Status = 'draft' | 'published' | 'archived'
+type ID = string | number
+type StringOrNull = string | null
+
+// Real-life example
+interface ApiResponse {
+    data: User | null    // either a User or null
+    error: string | null // either an error message or null
+}
+
+// Function with union parameter
+function formatId(id: string | number): string {
+    if (typeof id === 'number') {
+        return id.toString()
+    }
+    return id
+}
+
+// Narrowing — TypeScript figures out the type inside conditions
+function processValue(value: string | number): void {
+    if (typeof value === 'string') {
+        // TypeScript knows value is string here
+        console.log(value.toUpperCase())
+    } else {
+        // TypeScript knows value is number here
+        console.log(value.toFixed(2))
+    }
+}
+
+// Discriminated union — very useful for state management
+type LoadingState =
+    | { status: 'idle' }
+    | { status: 'loading' }
+    | { status: 'success'; data: User[] }
+    | { status: 'error'; message: string }
+
+function renderState(state: LoadingState) {
+    switch (state.status) {
+        case 'idle':
+            return 'Click to load'
+        case 'loading':
+            return 'Loading...'
+        case 'success':
+            return `${state.data.length} users loaded` // TypeScript knows data exists here
+        case 'error':
+            return `Error: ${state.message}` // TypeScript knows message exists here
+    }
+}
+```
+
+---
+
+### Intersection Types — Combine Types
+
+```ts
+// Intersection = this AND that
+// Use the & symbol — must have ALL properties from both
+
+type User = {
+    id: string
+    name: string
+    email: string
+}
+
+type Timestamps = {
+    createdAt: string
+    updatedAt: string
+}
+
+// AdminUser has ALL properties from User AND Timestamps AND the extra ones
+type AdminUser = User & Timestamps & {
+    permissions: string[]
+    role: 'admin'
+}
+
+const admin: AdminUser = {
+    id: '1',
+    name: 'Ahmed',
+    email: 'ahmed@example.com',
+    createdAt: '2026-06-07',
+    updatedAt: '2026-06-07',
+    permissions: ['create', 'delete'],
+    role: 'admin',
+}
+
+// Real-life — Laravel API response with pagination
+type PaginatedResponse<T> = {
+    data: T[]
+    meta: {
+        current_page: number
+        last_page: number
+        per_page: number
+        total: number
+    }
+}
+```
+
+---
+
+### Enums — Named Constants
+
+```ts
+// Enums give names to a set of related constants
+
+// String enum — most common, most readable
+enum PostStatus {
+    Draft     = 'draft',
+    Published = 'published',
+    Archived  = 'archived',
+}
+
+// Usage
+const status: PostStatus = PostStatus.Published
+console.log(status) // 'published'
+
+// Numeric enum
+enum Direction {
+    Up,    // 0
+    Down,  // 1
+    Left,  // 2
+    Right, // 3
+}
+
+// Const enum — compiled away, better performance
+const enum HttpStatus {
+    OK        = 200,
+    Created   = 201,
+    NotFound  = 404,
+    ServerError = 500,
+}
+
+// Real-life usage
+function setPostStatus(postId: string, status: PostStatus): void {
+    // status can only be PostStatus.Draft, PostStatus.Published, or PostStatus.Archived
+}
+
+setPostStatus('1', PostStatus.Published)  // ✅
+setPostStatus('1', 'random')              // ❌ error — not a valid PostStatus
+
+
+// ── ALTERNATIVE: const object (preferred by many teams) ─
+
+// Many teams prefer this over enum — simpler, better JavaScript interop
+const POST_STATUS = {
+    Draft:     'draft',
+    Published: 'published',
+    Archived:  'archived',
+} as const
+
+type PostStatus = typeof POST_STATUS[keyof typeof POST_STATUS]
+// PostStatus = 'draft' | 'published' | 'archived'
+```
+
+---
+
+### Functions — Type Annotations
+
+```ts
+// ── BASIC FUNCTION TYPES ────────────────────────────────
+
+// Named function
+function add(a: number, b: number): number {
+    return a + b
+}
+
+// Arrow function
+const add = (a: number, b: number): number => a + b
+
+// Optional parameter
+function greet(name: string, greeting?: string): string {
+    return `${greeting ?? 'Hello'}, ${name}!`
+}
+
+// Default parameter
+function greet(name: string, greeting: string = 'Hello'): string {
+    return `${greeting}, ${name}!`
+}
+
+// Rest parameters
+function sum(...numbers: number[]): number {
+    return numbers.reduce((total, n) => total + n, 0)
+}
+
+// Function that returns void
+function logError(message: string): void {
+    console.error(message)
+}
+
+// Async function
+async function fetchUser(id: string): Promise<User> {
+    const res = await fetch(`/api/users/${id}`)
+    return res.json()
+}
+
+// Function type alias
+type FetchFn = (id: string) => Promise<User>
+
+const fetchUser: FetchFn = async (id) => {
+    const res = await fetch(`/api/users/${id}`)
+    return res.json()
+}
+
+
+// ── FUNCTION OVERLOADS ──────────────────────────────────
+
+// Same function name, different parameter types
+function formatId(id: string): string
+function formatId(id: number): string
+function formatId(id: string | number): string {
+    return String(id)
+}
+```
+
+---
+
+### Typing in React / Next.js
+
+```tsx
+// ── COMPONENT PROPS ─────────────────────────────────────
+
+// Define props with interface
+interface ButtonProps {
+    label: string
+    onClick: () => void
+    disabled?: boolean
+    variant?: 'primary' | 'secondary' | 'danger'
+    children?: React.ReactNode
+}
+
+// Functional component with typed props
+export function Button({
+    label,
+    onClick,
+    disabled = false,
+    variant = 'primary',
+}: ButtonProps) {
+    return (
+        <button
+            onClick={onClick}
+            disabled={disabled}
+            className={`btn btn-${variant}`}
+        >
+            {label}
+        </button>
+    )
+}
+
+// ── HOOKS ───────────────────────────────────────────────
+
+// useState with type
+const [user, setUser] = useState<User | null>(null)
+const [posts, setPosts] = useState<Post[]>([])
+const [loading, setLoading] = useState<boolean>(false)
+const [error, setError] = useState<string | null>(null)
+
+// useRef with type
+const inputRef = useRef<HTMLInputElement>(null)
+const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+// useReducer with type
+type Action =
+    | { type: 'SET_USER'; payload: User }
+    | { type: 'CLEAR_USER' }
+    | { type: 'SET_LOADING'; payload: boolean }
+
+function reducer(state: AuthState, action: Action): AuthState {
+    switch (action.type) {
+        case 'SET_USER':
+            return { ...state, user: action.payload }
+        case 'CLEAR_USER':
+            return { ...state, user: null }
+        case 'SET_LOADING':
+            return { ...state, loading: action.payload }
+    }
+}
+
+
+// ── EVENT HANDLERS ──────────────────────────────────────
+
+// Input change event
+function handleChange(e: React.ChangeEvent<HTMLInputElement>): void {
+    setValue(e.target.value)
+}
+
+// Form submit event
+function handleSubmit(e: React.FormEvent<HTMLFormElement>): void {
+    e.preventDefault()
+    // ...
+}
+
+// Button click event
+function handleClick(e: React.MouseEvent<HTMLButtonElement>): void {
+    // ...
+}
+
+// Select change event
+function handleSelect(e: React.ChangeEvent<HTMLSelectElement>): void {
+    setSelected(e.target.value)
+}
+
+
+// ── CHILDREN TYPES ──────────────────────────────────────
+
+interface LayoutProps {
+    children: React.ReactNode          // any valid React content
+}
+
+interface WrapperProps {
+    children: React.ReactElement       // single React element only
+}
+
+interface ButtonProps {
+    children: string                   // only text
+}
+```
+
+---
+
+### Typing in Vue / Nuxt
+
+```vue
+<!-- ── COMPONENT PROPS ──────────────────────────────── -->
+<script setup lang="ts">
+interface Props {
+    title: string
+    count?: number
+    items: string[]
+    variant?: 'primary' | 'secondary'
+    user: User
+}
+
+const props = defineProps<Props>()
+
+// With default values
+const props = withDefaults(defineProps<Props>(), {
+    count: 0,
+    variant: 'primary',
+    items: () => [],
+})
+
+
+// ── EMITS ────────────────────────────────────────────
+
+interface Emits {
+    submit: [data: FormData]      // emit name + payload type
+    cancel: []                    // emit with no payload
+    update: [id: string, value: string]
+}
+
+const emit = defineEmits<Emits>()
+
+emit('submit', formData)
+emit('cancel')
+emit('update', '1', 'new value')
+
+
+// ── REFS ─────────────────────────────────────────────
+
+const user = ref<User | null>(null)
+const posts = ref<Post[]>([])
+const loading = ref<boolean>(false)
+const count = ref<number>(0)
+
+// computed
+const publishedPosts = computed<Post[]>(() =>
+    posts.value.filter(p => p.status === 'published')
+)
+
+// ── COMPOSABLE RETURN TYPE ───────────────────────────
+
+interface UseAuthReturn {
+    user: Ref<User | null>
+    isAuthenticated: ComputedRef<boolean>
+    login: (data: LoginFormData) => Promise<void>
+    logout: () => Promise<void>
+}
+
+export function useAuth(): UseAuthReturn {
+    const user = ref<User | null>(null)
+    const isAuthenticated = computed(() => !!user.value)
+
+    async function login(data: LoginFormData): Promise<void> {
+        // ...
+    }
+
+    async function logout(): Promise<void> {
+        // ...
+    }
+
+    return { user, isAuthenticated, login, logout }
+}
+</script>
+```
+
+---
+
+### Typing Laravel API Responses
+
+```ts
+// lib/types/api.ts
+// Define all your Laravel response shapes here
+
+// ── BASE TYPES ───────────────────────────────────────────
+
+export interface User {
+    id: string
+    name: string
+    email: string
+    role: 'admin' | 'editor' | 'user'
+    avatar: string | null
+    bio: string | null
+    email_verified_at: string | null
+    created_at: string
+    updated_at: string
+}
+
+export interface Post {
+    id: string
+    title: string
+    slug: string
+    excerpt: string | null
+    body: string
+    status: 'draft' | 'published' | 'archived'
+    views: number
+    cover_image: string | null
+    published_at: string | null
+    created_at: string
+    updated_at: string
+    user: User           // eager loaded relationship
+    category: Category   // eager loaded relationship
+    tags: Tag[]          // eager loaded relationship
+    comments_count?: number // withCount
+}
+
+export interface Category {
+    id: string
+    name: string
+    slug: string
+}
+
+export interface Tag {
+    id: string
+    name: string
+    slug: string
+}
+
+// ── LARAVEL PAGINATION ───────────────────────────────────
+
+export interface PaginatedResponse<T> {
+    data: T[]
+    current_page: number
+    last_page: number
+    per_page: number
+    total: number
+    next_page_url: string | null
+    prev_page_url: string | null
+}
+
+// ── LARAVEL VALIDATION ERRORS ────────────────────────────
+
+export interface ValidationErrors {
+    message: string
+    errors: Record<string, string[]>
+}
+
+// ── API ERROR ────────────────────────────────────────────
+
+export interface ApiError {
+    message: string
+    errors?: Record<string, string[]>
+    status: number
+}
+
+// ── FORM DATA TYPES ──────────────────────────────────────
+
+export interface LoginFormData {
+    email: string
+    password: string
+}
+
+export interface RegisterFormData {
+    name: string
+    email: string
+    password: string
+    password_confirmation: string
+}
+
+export interface CreatePostData {
+    title: string
+    body: string
+    status?: 'draft' | 'published'
+    category_id?: string
+    tag_ids?: string[]
+}
+
+export interface UpdatePostData extends Partial<CreatePostData> {}
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```ts
+// Using any — disables all type checking
+function processUser(user: any) {
+    console.log(user.nmae) // ❌ typo — no error because any
+}
+```
+</Wrong>
+<Right>
+```ts
+// Use the proper type — catches typos
+function processUser(user: User) {
+    console.log(user.name) // ✅ TypeScript catches 'nmae' typo
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Not handling null — crashes at runtime
+const user = ref<User | null>(null)
+console.log(user.value.name) // ❌ user might be null — crashes!
+```
+</Wrong>
+<Right>
+```ts
+// Optional chaining — safe access
+console.log(user.value?.name) // ✅ returns undefined if null — no crash
+
+// Or check first
+if (user.value) {
+    console.log(user.value.name) // ✅ TypeScript knows it's not null here
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Typing useState/ref with wrong initial value
+const [user, setUser] = useState<User>({}) // ❌ empty object is not a valid User
+const user = ref<User>({})                 // ❌ missing required properties
+```
+</Wrong>
+<Right>
+```ts
+// Use null for "not loaded yet" state
+const [user, setUser] = useState<User | null>(null) // ✅
+const user = ref<User | null>(null)                 // ✅
+```
+</Right>
+</WrongRight>
+
+**Gotcha:** TypeScript errors only exist during development — they never reach the browser. If you ignore TypeScript errors and force compile, the JavaScript still runs. TypeScript is a development tool, not a runtime safety net.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Put all shared types in `lib/types/` — one file per domain (`api.ts`, `auth.ts`, `forms.ts`)
+- Export types with `export interface` or `export type` — never keep them local if reused
+- Use `interface` for objects, `type` for unions and utility types
+- Prefix type-only imports with `type`: `import type { User } from '@/lib/types/api'`
+
+**Performance tips**
+```ts
+// Use type-only imports — removed at compile time, smaller bundle
+import type { User, Post } from '@/lib/types/api'
+
+// Use satisfies operator — validates type without losing specificity
+const config = {
+    apiUrl: 'https://api.example.com',
+    timeout: 5000,
+} satisfies Config // validates shape but keeps literal types
+```
+
+**Security considerations**
+- Never trust TypeScript types for data coming from external sources — always validate with Zod at runtime
+- TypeScript types are compile-time only — a Laravel API can return anything regardless of your types
+- Use Zod schemas to validate API responses and infer TypeScript types from them
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between type and interface in TypeScript?"
+  difficulty="easy"
+>
+  Both define object shapes and are largely interchangeable. The key differences
+  are: interfaces support declaration merging — you can define the same interface
+  twice and TypeScript merges them. Types do not support this. Types support
+  union and intersection syntax directly — `type ID = string | number`. Interfaces
+  cannot express union types. In practice: use interface for object shapes and
+  class contracts, use type for unions, tuples, and utility type transformations.
+</InterviewQ>
+
+<InterviewQ
+  question="What is a union type and how does TypeScript narrow it?"
+  difficulty="easy"
+>
+  A union type means a value can be one of several types — `string | number`
+  means the value is either a string or a number. Narrowing is how TypeScript
+  figures out which specific type you are working with inside a condition. Using
+  `typeof value === 'string'` inside an if block tells TypeScript the value is
+  definitely a string in that block, enabling string methods without errors.
+  TypeScript tracks these conditions automatically — this is called control
+  flow analysis.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between unknown and any?"
+  difficulty="mid"
+>
+  Both accept any value but `any` completely disables type checking — you can
+  call any method on it and TypeScript stays silent. `unknown` is type-safe —
+  TypeScript forces you to check the type before using it. If you receive data
+  from an external source (API response, user input) and don't know its type,
+  use `unknown` and narrow it with type guards. Use `any` only as a last resort
+  when migrating JavaScript to TypeScript.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The `User | null` pattern is the one I use most and also forget most often.
+  Whenever data is not loaded yet — user not fetched, post not found — the
+  type should be `T | null`, not just `T`. If I type it as just `User` I
+  have to initialize it with an empty object that does not match the type,
+  which defeats the purpose entirely.
+</MyNotes>
+
+<MyNotes>
+  I keep all Laravel API response types in `lib/types/api.ts` and import them
+  everywhere. The first time I did not do this I ended up with 5 different
+  slightly-different `User` interface definitions across components and they
+  slowly drifted out of sync with each other. One file, one source of truth.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Common Type Patterns
+
+```ts
+// lib/types/common.ts
+
+// Make all properties optional
+type PartialUser = Partial<User>
+
+// Make all properties required
+type RequiredUser = Required<User>
+
+// Make all properties readonly
+type ReadonlyUser = Readonly<User>
+
+// Pick only specific properties
+type UserPreview = Pick<User, 'id' | 'name' | 'avatar'>
+
+// Omit specific properties
+type PublicUser = Omit<User, 'email' | 'role'>
+
+// Record — key value map
+type UserMap = Record<string, User>      // { [key: string]: User }
+type StatusMap = Record<PostStatus, number> // { draft: 5, published: 10, ... }
+
+// Extract — get specific types from union
+type PublishedStatus = Extract<PostStatus, 'published' | 'archived'>
+
+// Exclude — remove specific types from union
+type NonDraftStatus = Exclude<PostStatus, 'draft'>
+
+// NonNullable — remove null and undefined
+type DefiniteUser = NonNullable<User | null | undefined> // just User
+
+// ReturnType — get return type of a function
+type FetchUserReturn = ReturnType<typeof fetchUser> // Promise<User>
+
+// Parameters — get parameter types of a function
+type FetchUserParams = Parameters<typeof fetchUser> // [id: string]
+```
+
+---
+
+*Tags: `typescript` `types` `interfaces` `unions` `react` `vue` `nextjs` `nuxt` `beginner`*

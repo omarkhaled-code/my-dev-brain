@@ -1,0 +1,941 @@
+---
+title: "Backend Performance Optimization"
+description: "A complete guide to Laravel backend performance — query optimization, eager loading, indexes, caching with Redis, chunking large datasets, and pagination best practices."
+category: performance
+tools: [laravel, mysql, sqlite]
+tags: [performance, laravel, mysql, eloquent, caching, indexes, eager-loading, optimization]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+relatedTopics: [performance-frontend, redis-laravel, laravel-eloquent]
+---
+
+## Concept Explanation
+
+Backend performance is about how fast your Laravel app responds to requests. Every millisecond your API takes to respond is a millisecond the user waits.
+
+**The main culprits of slow Laravel APIs:**
+```tsx
+Slow Laravel API
+├── 1. Too many database queries
+│   └── Fix: eager loading, query reduction
+│
+├── 2. Slow database queries
+│   └── Fix: indexes, select specific columns
+│
+├── 3. Repeating the same expensive work
+│   └── Fix: caching with Redis
+│
+├── 4. Loading too much data at once
+│   └── Fix: pagination, chunking
+│
+└── 5. Doing slow work in the request
+└── Fix: queues (covered in redis-laravel.mdx)
+
+```
+
+**How to find performance problems:**
+
+```bash
+# Install Laravel Debugbar — shows every query on every request
+composer require barryvdh/laravel-debugbar --dev
+
+# Install Laravel Telescope — full request inspector
+composer require laravel/telescope --dev
+php artisan telescope:install
+php artisan migrate
+```
+
+<Callout type="note">
+  **Measure before optimizing.** Add Debugbar to your project, click through
+  your app, and look for: queries that run 50+ times on one page (N+1),
+  queries that take 100ms+ (missing index), or responses that return thousands
+  of records (missing pagination). Fix the real problems — not imaginary ones.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **Eager loading:** Replace 100 queries with 2 — the single biggest performance win in Laravel.
+- **Indexes:** Make MySQL find records in milliseconds instead of scanning the entire table.
+- **Select specific columns:** Don't load 20 columns when you need 3 — reduces memory and network.
+- **Caching:** Run an expensive query once and serve it to 1000 users instantly.
+- **Pagination:** Never return 10,000 rows — always paginate API responses.
+
+---
+
+## 1. Eager Loading — You Know This, Go Deeper
+
+```php
+// You already use with() — here are the patterns that matter
+
+// ── BASIC EAGER LOADING ──────────────────────────────────
+
+// ❌ N+1 — 1 query for posts + 1 per post for user = 101 queries
+$posts = Post::all();
+foreach ($posts as $post) {
+    echo $post->user->name;
+}
+
+// ✅ Eager loading — 2 queries total
+$posts = Post::with('user')->get();
+foreach ($posts as $post) {
+    echo $post->user->name;
+}
+
+
+// ── NESTED EAGER LOADING ─────────────────────────────────
+
+// You already use this syntax: with(['user.profile'])
+// Load user AND user's profile in one go
+$posts = Post::with([
+    'user',
+    'user.profile',     // nested — user's profile
+    'category',
+    'tags',
+    'comments.user',    // comments AND each comment's user
+])->get();
+
+
+// ── SELECT SPECIFIC COLUMNS ON RELATIONSHIPS ─────────────
+
+// Problem: loading full user model (20 columns) when you only need 3
+$posts = Post::with('user')->get() // loads ALL user columns
+
+// Fix: select only what you need
+// IMPORTANT: always include id — Eloquent needs it to match records
+$posts = Post::with([
+    'user:id,name,avatar',           // only id, name, avatar from users
+    'category:id,name,slug',         // only id, name, slug from categories
+    'tags:id,name,slug',             // only id, name, slug from tags
+    'comments' => fn ($q) => $q
+        ->with('user:id,name,avatar')
+        ->latest()
+        ->take(5),                   // only last 5 comments
+])->get()
+
+
+// ── CONDITIONAL EAGER LOADING ────────────────────────────
+
+$posts = Post::with([
+    'user:id,name',
+    // Only load comments if request asks for them
+    'comments' => fn ($q) => $q->when(
+        request()->boolean('with_comments'),
+        fn ($q) => $q->with('user:id,name')->latest()
+    ),
+])->paginate(15)
+
+
+// ── LAZY EAGER LOADING — after the fact ──────────────────
+
+$posts = Post::paginate(15)
+
+// Load relationship after initial query
+$posts->load('user:id,name')
+$posts->load(['user:id,name', 'category:id,name'])
+
+// Load with count after the fact
+$posts->loadCount('comments')
+$posts->loadCount(['comments', 'tags'])
+```
+
+---
+
+## 2. Select Specific Columns — Don't Load What You Don't Use
+
+```php
+// Every extra column wastes memory and network bandwidth
+// Especially bad: TEXT and JSON columns on list queries
+
+// ❌ Loads ALL columns including huge 'body' text
+$posts = Post::with('user')->paginate(15)
+
+// ✅ Only what the list view needs
+$posts = Post::select([
+    'id',
+    'title',
+    'slug',
+    'status',
+    'views',
+    'published_at',
+    'user_id',        // needed for the relationship
+    'category_id',    // needed for the relationship
+])
+->with([
+    'user:id,name,avatar',
+    'category:id,name,slug',
+])
+->paginate(15)
+
+
+// ── value() and pluck() — single column fetches ──────────
+
+// Get one value — faster than find()->column
+$email = User::where('id', 1)->value('email')
+// SELECT email FROM users WHERE id = 1 LIMIT 1
+
+// Get an array of values
+$slugs = Post::published()->pluck('slug')
+// SELECT slug FROM posts WHERE status = 'published'
+// Returns: ['hello-world', 'my-post', ...]
+
+// Get key-value pairs — great for dropdowns
+$categories = Category::pluck('name', 'id')
+// Returns: [1 => 'Technology', 2 => 'Design', ...]
+
+// ── exists() and count() — don't load records to check ───
+
+// ❌ Loads a full model just to check existence
+$exists = Post::where('slug', 'my-post')->first() !== null
+
+// ✅ Single EXISTS query — no model loaded
+$exists = Post::where('slug', 'my-post')->exists()
+
+// ❌ Loads ALL models to count them
+$count = Post::where('status', 'published')->get()->count()
+
+// ✅ Single COUNT query
+$count = Post::where('status', 'published')->count()
+```
+
+---
+
+## 3. Database Indexes — Make Queries Fast
+
+```php
+// An index is like a book's index — instead of reading every page
+// to find "Redis", you look it up and go directly to the right page
+
+// Without index: MySQL scans EVERY row — O(n) — slow on large tables
+// With index: MySQL jumps directly to matching rows — O(log n) — fast
+
+// ── WHEN TO ADD AN INDEX ─────────────────────────────────
+
+// Add index to columns you:
+// 1. Filter by:  WHERE status = 'published'
+// 2. Sort by:    ORDER BY created_at DESC
+// 3. Join on:    JOIN users ON posts.user_id = users.id
+// 4. Search in:  WHERE email = 'ahmed@example.com'
+
+
+// ── ADD INDEXES IN MIGRATIONS ────────────────────────────
+
+Schema::create('posts', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+    // ↑ foreignId + constrained() automatically creates an index on user_id
+
+    $table->string('slug')->unique();
+    // ↑ unique() automatically creates an index on slug
+
+    $table->enum('status', ['draft', 'published', 'archived'])->default('draft');
+    $table->timestamp('published_at')->nullable();
+    $table->unsignedInteger('views')->default(0);
+    $table->timestamps();
+
+    // Manual indexes for frequently queried columns
+    $table->index('status');                      // WHERE status = ?
+    $table->index('published_at');               // ORDER BY published_at
+    $table->index(['status', 'published_at']);   // WHERE status = ? ORDER BY published_at
+    $table->index(['user_id', 'status']);        // WHERE user_id = ? AND status = ?
+});
+
+// Add indexes to existing table
+Schema::table('posts', function (Blueprint $table) {
+    $table->index('status');
+    $table->index(['status', 'published_at']);
+});
+
+
+// ── COMPOSITE INDEX — order matters ──────────────────────
+
+// Composite index on (status, published_at) helps these queries:
+// WHERE status = 'published'                    ✅ uses index
+// WHERE status = 'published' AND published_at > '2026-01-01'  ✅ uses index
+// ORDER BY status, published_at                 ✅ uses index
+// WHERE published_at > '2026-01-01'             ❌ does NOT use index (wrong order)
+
+// Rule: most selective column first (fewest distinct values = last)
+// Rule: columns used in WHERE before columns used in ORDER BY
+
+
+// ── FULL TEXT INDEX — for search ─────────────────────────
+
+// MySQL full text search — faster than LIKE '%term%' on large tables
+Schema::create('posts', function (Blueprint $table) {
+    // ...
+    $table->fullText(['title', 'body']); // MySQL only
+});
+
+// Usage in Eloquent
+Post::whereFullText(['title', 'body'], 'laravel performance')->get()
+
+// LIKE is fine for small tables — use fullText for 10,000+ rows
+
+
+// ── EXPLAIN — see if your query uses an index ────────────
+// In MySQL:
+// EXPLAIN SELECT * FROM posts WHERE status = 'published' ORDER BY created_at DESC;
+// Look for: type = 'ref' or 'range' (uses index) vs type = 'ALL' (full scan — bad)
+
+// In Laravel with Debugbar — it shows query execution time
+// Slow query = probably missing index
+```
+
+---
+
+## 4. Query Optimization Patterns
+
+```php
+// ── when() — conditional queries without if statements ───
+
+public function index(Request $request)
+{
+    $posts = Post::query()
+        ->with(['user:id,name', 'category:id,name'])
+        ->select(['id', 'title', 'slug', 'status', 'views', 'published_at', 'user_id', 'category_id'])
+        ->when($request->status, fn ($q, $status) =>
+            $q->where('status', $status)
+        )
+        ->when($request->search, fn ($q, $search) =>
+            $q->where(function ($q) use ($search) {
+                $q->where('title', 'like', "%{$search}%")
+                  ->orWhere('excerpt', 'like', "%{$search}%");
+            })
+        )
+        ->when($request->category_id, fn ($q, $categoryId) =>
+            $q->where('category_id', $categoryId)
+        )
+        ->when($request->user_id, fn ($q, $userId) =>
+            $q->where('user_id', $userId)
+        )
+        ->when(
+            $request->sort === 'popular',
+            fn ($q) => $q->orderBy('views', 'desc'),
+            fn ($q) => $q->latest('published_at') // default sort
+        )
+        ->paginate($request->per_page ?? 15)
+
+    return PostResource::collection($posts)
+}
+
+
+// ── Avoid loading same data multiple times ────────────────
+
+// ❌ Queries user twice
+$post = Post::find(1)
+$author = User::find($post->user_id) // separate query!
+
+// ✅ Load it with the post
+$post = Post::with('user')->find(1)
+$author = $post->user // no extra query
+
+
+// ── whereHas vs join — know the difference ────────────────
+
+// whereHas — readable, uses a subquery
+// Good for: filtering, checking existence
+$posts = Post::whereHas('user', fn ($q) =>
+    $q->where('role', 'admin')
+)->get()
+
+// join — faster for large datasets, but more complex
+// Good for: when you need columns from both tables
+$posts = Post::select('posts.*', 'users.name as author_name')
+    ->join('users', 'posts.user_id', '=', 'users.id')
+    ->where('users.role', 'admin')
+    ->get()
+
+
+// ── increment/decrement — atomic updates ─────────────────
+
+// ❌ Two queries + race condition possible
+$post = Post::find(1)
+$post->views = $post->views + 1
+$post->save()
+
+// ✅ One atomic query — safe with concurrent requests
+Post::where('id', 1)->increment('views')
+Post::where('id', 1)->increment('views', 5) // increment by 5
+Post::where('id', 1)->decrement('stock')
+
+
+// ── upsert — insert or update in one query ───────────────
+
+// Update existing or create new — one query
+Post::upsert(
+    [
+        ['slug' => 'hello-world', 'title' => 'Hello World', 'user_id' => 1],
+        ['slug' => 'my-post',    'title' => 'My Post',    'user_id' => 1],
+    ],
+    uniqueBy: ['slug'],    // conflict on this column
+    update:   ['title'],   // update these columns if conflict
+)
+```
+
+---
+
+## 5. Pagination — Never Return Everything
+
+```php
+// ── ALWAYS PAGINATE API RESPONSES ────────────────────────
+
+// ❌ Returns ALL records — could be thousands
+public function index()
+{
+    return Post::with('user')->get() // 10,000 posts? instant timeout
+}
+
+// ✅ Paginate — always
+public function index(Request $request)
+{
+    $perPage = min($request->per_page ?? 15, 100) // cap at 100
+
+    return PostResource::collection(
+        Post::with(['user:id,name'])
+            ->published()
+            ->latest()
+            ->paginate($perPage)
+    )
+}
+
+// Laravel pagination response shape:
+// {
+//   "data": [...],
+//   "current_page": 1,
+//   "last_page": 5,
+//   "per_page": 15,
+//   "total": 73,
+//   "next_page_url": "...",
+//   "prev_page_url": null
+// }
+
+
+// ── CURSOR PAGINATION — best for infinite scroll ──────────
+
+// Cursor pagination is faster than offset pagination on large tables
+// Offset: LIMIT 15 OFFSET 10000 — MySQL still scans 10,000 rows
+// Cursor: WHERE id > 10000 LIMIT 15 — uses index, always fast
+
+$posts = Post::published()
+             ->latest('id') // must order by indexed column
+             ->cursorPaginate(15)
+
+// ── SIMPLE PAGINATION — when you don't need total count ───
+
+// Faster than paginate() — doesn't run COUNT query
+// Use when you only need next/prev, not total pages
+$posts = Post::published()->latest()->simplePaginate(15)
+
+
+// ── API RESOURCE WITH PAGINATION ─────────────────────────
+
+// app/Http/Resources/PostResource.php
+class PostResource extends JsonResource
+{
+    public function toArray($request): array
+    {
+        return [
+            'id'           => $this->id,
+            'title'        => $this->title,
+            'slug'         => $this->slug,
+            'status'       => $this->status,
+            'views'        => $this->views,
+            'published_at' => $this->published_at?->toDateTimeString(),
+            'author'       => [
+                'id'     => $this->user->id,
+                'name'   => $this->user->name,
+                'avatar' => $this->user->avatar,
+            ],
+        ]
+    }
+}
+
+// Collection resource adds pagination meta automatically
+return PostResource::collection($posts)
+// Response includes data[] + pagination meta
+```
+
+---
+
+## 6. Chunking — Process Large Datasets
+
+```php
+// Never load thousands of records into memory at once
+// chunk() processes records in batches — constant memory usage
+
+// ❌ Loads ALL users into memory — crashes on large tables
+$users = User::all()
+foreach ($users as $user) {
+    // process 50,000 users...
+}
+
+// ✅ Processes 200 at a time — memory stays constant
+User::chunk(200, function ($users) {
+    foreach ($users as $user) {
+        // process each user
+    }
+})
+
+// ✅ chunkById — safer, handles record changes during processing
+User::chunkById(200, function ($users) {
+    foreach ($users as $user) {
+        // process
+    }
+})
+
+
+// Real-life — send newsletter to all users
+class SendNewsletterToAll extends Command
+{
+    public function handle(): void
+    {
+        $total = User::where('subscribed', true)->count()
+        $this->info("Sending to {$total} users...")
+
+        User::where('subscribed', true)
+            ->select('id', 'name', 'email')
+            ->chunkById(500, function ($users) {
+                foreach ($users as $user) {
+                    // Dispatch individual job per user — don't send directly
+                    SendNewsletterEmail::dispatch($user)->onQueue('low')
+                }
+                $this->info("Queued {$users->count()} emails...")
+            })
+
+        $this->info('All emails queued!')
+    }
+}
+
+
+// ── lazy() — memory-efficient iteration ──────────────────
+
+// lazy() loads records one by one — uses a cursor internally
+// Better than chunk for simple iteration
+foreach (User::where('active', true)->lazy() as $user) {
+    // processes one at a time — constant memory
+    SendWelcomeBack::dispatch($user)
+}
+
+// lazyById — safer version
+foreach (Post::published()->lazyById() as $post) {
+    // process
+}
+```
+
+---
+
+## 7. Caching Query Results
+
+```php
+// You covered this in redis-laravel.mdx — here are the patterns
+// specific to database query caching
+
+use Illuminate\Support\Facades\Cache
+
+// ── Cache expensive aggregations ─────────────────────────
+
+public function dashboard()
+{
+    $userId = auth()->id()
+
+    return Cache::remember("dashboard.{$userId}", 1800, function () use ($userId) {
+        return [
+            'total_posts'      => Post::where('user_id', $userId)->count(),
+            'published_posts'  => Post::where('user_id', $userId)
+                                      ->where('status', 'published')
+                                      ->count(),
+            'total_views'      => Post::where('user_id', $userId)->sum('views'),
+            'top_posts'        => Post::where('user_id', $userId)
+                                      ->orderBy('views', 'desc')
+                                      ->take(5)
+                                      ->get(['id', 'title', 'views']),
+        ]
+    })
+}
+
+
+// ── Cache reference data ──────────────────────────────────
+
+// Categories, tags, settings — change rarely, accessed constantly
+public function getCategories()
+{
+    return Cache::rememberForever('categories.all', function () {
+        return Category::orderBy('name')
+                       ->get(['id', 'name', 'slug'])
+    })
+}
+
+// Clear cache when data changes
+public function store(Request $request)
+{
+    Category::create($request->validated())
+    Cache::forget('categories.all') // invalidate cache
+    return response()->json(['success' => true], 201)
+}
+
+
+// ── Cache with tags — clear related caches at once ────────
+
+public function index(Request $request)
+{
+    $page = $request->get('page', 1)
+
+    return Cache::tags(['posts'])->remember(
+        "posts.published.page_{$page}",
+        300,
+        fn () => Post::with(['user:id,name', 'category:id,name'])
+                     ->published()
+                     ->latest()
+                     ->paginate(15)
+    )
+}
+
+// When any post changes — clear ALL post caches at once
+public function clearPostCache(): void
+{
+    Cache::tags(['posts'])->flush()
+}
+```
+
+---
+
+## 8. N+1 Problem — Deep Dive
+
+```php
+// The most common and impactful Laravel performance problem
+// Debugbar shows it as: 101 queries on one page request
+
+// ── DETECTING N+1 ────────────────────────────────────────
+
+// Add to AppServiceProvider during development
+use Illuminate\Database\Eloquent\Model
+
+public function boot(): void
+{
+    // Throws an exception when N+1 is detected
+    // Only in local environment
+    if (app()->environment('local')) {
+        Model::preventLazyLoading()
+    }
+}
+
+// Now any unloaded relationship access throws:
+// "Attempted to lazy load [user] on model [Post] but lazy loading is disabled"
+
+
+// ── COMMON N+1 SCENARIOS ─────────────────────────────────
+
+// Scenario 1 — relationships in loops
+$posts = Post::paginate(15)              // 1 query
+foreach ($posts as $post) {
+    $post->user->name                     // 15 queries! ← N+1
+    $post->category->name                 // 15 more queries!
+}
+// Total: 31 queries — Fix: Post::with(['user', 'category'])->paginate(15)
+
+
+// Scenario 2 — nested relationships
+$users = User::paginate(20)              // 1 query
+foreach ($users as $user) {
+    foreach ($user->posts as $post) {   // 20 queries for posts
+        $post->tags                       // N queries per post!
+    }
+}
+// Fix: User::with('posts.tags')->paginate(20)
+
+
+// Scenario 3 — in API Resources
+class PostResource extends JsonResource
+{
+    public function toArray($request): array
+    {
+        return [
+            'title'    => $this->title,
+            'author'   => $this->user->name,    // N+1 if user not eager loaded!
+            'category' => $this->category->name, // N+1 if category not eager loaded!
+        ]
+    }
+}
+// Fix: always eager load in the controller before passing to Resource
+
+
+// ── WITHCOUNT — avoid loading to count ───────────────────
+
+// ❌ Loads all comments just to count them
+$posts = Post::with('comments')->paginate(15)
+// In resource: $this->comments->count() // loaded all comments for nothing
+
+// ✅ Count without loading
+$posts = Post::withCount('comments')->paginate(15)
+// In resource: $this->comments_count // from withCount — no extra query
+
+// Multiple counts
+$posts = Post::withCount([
+    'comments',
+    'comments as approved_count' => fn ($q) => $q->where('approved', true),
+    'tags',
+])->paginate(15)
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Forgetting user_id when selecting specific columns — relationship returns null
+$posts = Post::select('id', 'title')->with('user')->get()
+// ❌ user_id not selected — Eloquent can't match users to posts — user is null!
+```
+</Wrong>
+<Right>
+```php
+// Always include the foreign key
+$posts = Post::select('id', 'title', 'user_id')->with('user:id,name')->get()
+// ✅ user_id selected — relationship works correctly
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Loading all records to paginate in PHP — defeats the purpose
+$allPosts = Post::all()
+$paginated = $allPosts->forPage($page, 15) // ❌ loads ALL posts into memory first!
+```
+</Wrong>
+<Right>
+```php
+// Let the database paginate — only loads 15 records
+$posts = Post::paginate(15) // ✅ SELECT ... LIMIT 15 OFFSET ?
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Running queries inside a loop — classic N+1
+foreach ($orders as $order) {
+    $order->total = $order->items->sum('price') // ❌ loads items per order
+}
+```
+</Wrong>
+<Right>
+```php
+// Eager load and use withSum
+$orders = Order::withSum('items', 'price')->get()
+foreach ($orders as $order) {
+    $total = $order->items_sum_price // ✅ no extra queries
+}
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** Adding `Model::preventLazyLoading()` in local catches N+1 problems before they reach production. I make this the first thing I add to every new Laravel project — it has caught more performance bugs than any other technique.
+
+---
+
+## Best Practices
+
+**The performance checklist for every controller method:**
+```tsx
+□ Are all relationships eager loaded with with()?
+□ Am I selecting only needed columns (select + user:id,name)?
+□ Is the response paginated (never return all records)?
+□ Are frequently-filtered columns indexed?
+□ Is expensive data cached with Cache::remember()?
+□ Am I using exists() / count() instead of get() for checks?
+□ Am I using increment() for counters instead of load-modify-save?
+```
+
+**Query profiling:**
+```php
+// See the actual SQL being run
+$posts = Post::with('user')->where('status', 'published')->get()
+dd(DB::getQueryLog()) // shows all queries with execution time
+
+// Enable query logging
+DB::enableQueryLog()
+// ... run your code ...
+dd(DB::getQueryLog())
+
+// Using Debugbar (recommended) — shows queries automatically on every request
+// composer require barryvdh/laravel-debugbar --dev
+```
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the N+1 query problem and how do you fix it?"
+  difficulty="easy"
+>
+  The N+1 problem happens when you load a collection (1 query) then access
+  a relationship on each item in a loop (N queries — one per item). For 100
+  posts accessing their users, that is 101 queries. Fix it with eager loading
+  — `Post::with('user')->get()` runs 2 queries total regardless of how many
+  posts there are: one for posts and one `WHERE id IN (...)` for all their
+  users at once. Enable `Model::preventLazyLoading()` in local development
+  to catch N+1 problems automatically.
+</InterviewQ>
+
+<InterviewQ
+  question="What is a database index and when should you add one?"
+  difficulty="easy"
+>
+  An index is a data structure MySQL maintains alongside a table to make
+  lookups faster. Without an index, MySQL scans every row to find matches.
+  With an index, it jumps directly to matching rows. Add indexes to columns
+  you filter by in WHERE clauses, sort by in ORDER BY, or join on. Foreign
+  key columns created with `constrained()` are automatically indexed. Avoid
+  indexing every column — indexes slow down INSERT and UPDATE operations
+  because MySQL must update the index too.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between paginate(), simplePaginate(), and cursorPaginate()?"
+  difficulty="mid"
+>
+  `paginate()` runs two queries — one for the data and one COUNT query for
+  the total — enabling total pages and page numbers in the response.
+  `simplePaginate()` runs one query — no COUNT — so it is faster but only
+  provides next/prev links without total count. `cursorPaginate()` uses a
+  cursor (WHERE id > last_seen_id) instead of OFFSET, making it consistently
+  fast on large tables — OFFSET pagination slows down as the page number
+  increases because MySQL still scans skipped rows.
+</InterviewQ>
+
+<InterviewQ
+  question="How would you optimize a slow API endpoint that returns a paginated list of posts with authors and categories?"
+  difficulty="hard"
+>
+  Step by step: First add `Model::preventLazyLoading()` and check for N+1
+  — add `with(['user:id,name,avatar', 'category:id,name,slug'])`. Second,
+  use `select()` to load only needed columns — avoid loading the `body`
+  TEXT column on list views. Third, check indexes — add composite index on
+  `(status, published_at)` if filtering by status and sorting by date.
+  Fourth, add `withCount('comments')` instead of loading all comments just
+  to count. Fifth, cache the result with `Cache::tags(['posts'])->remember()`
+  for frequently accessed pages. This typically reduces a 500ms endpoint to
+  under 50ms.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The single biggest performance improvement I have made on every Laravel
+  project is adding `Model::preventLazyLoading()` in AppServiceProvider.
+  It immediately reveals every N+1 problem as an exception during development.
+  Without it, N+1 problems silently make it to production where they cause
+  real slowdowns under load.
+</MyNotes>
+
+<MyNotes>
+  Always use `select()` on list endpoints. The `body` or `content` column
+  on a Post or Article model is often kilobytes of text. Loading 15 posts
+  on a list page without select loads 15 × that text into memory for no
+  reason — the list view only shows the title. Adding `select(['id', 'title',
+  'slug', 'status', 'user_id'])` can cut response payload by 90%.
+</MyNotes>
+
+<MyNotes>
+  The composite index order rule: put the column used in equality checks
+  (WHERE status = ?) before the column used in range or sort
+  (ORDER BY published_at). So index `(status, published_at)` not
+  `(published_at, status)` for a query like
+  `WHERE status = 'published' ORDER BY published_at DESC`.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### AppServiceProvider — Performance Setup
+
+```php
+// app/Providers/AppServiceProvider.php
+<?php
+
+namespace App\Providers;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function boot(): void
+    {
+        if (app()->environment('local')) {
+            // Throw exception on N+1 — catches problems during development
+            Model::preventLazyLoading();
+
+            // Log slow queries (over 100ms) during development
+            DB::listen(function ($query) {
+                if ($query->time > 100) {
+                    logger()->warning('Slow query detected', [
+                        'sql'      => $query->sql,
+                        'bindings' => $query->bindings,
+                        'time'     => $query->time . 'ms',
+                    ]);
+                }
+            });
+        }
+
+        // Enable SQLite foreign keys
+        if (DB::getDriverName() === 'sqlite') {
+            DB::statement('PRAGMA foreign_keys = ON');
+        }
+    }
+}
+```
+
+---
+
+### Optimized Base Controller Pattern
+
+```php
+// app/Http/Controllers/Api/PostController.php
+public function index(Request $request)
+{
+    $perPage = min($request->integer('per_page', 15), 100)
+
+    $posts = Cache::tags(['posts'])->remember(
+        "posts.page_{$request->page}.per_{$perPage}.status_{$request->status}",
+        300,
+        function () use ($request, $perPage) {
+            return Post::select([
+                'id', 'title', 'slug', 'excerpt',
+                'status', 'views', 'published_at',
+                'user_id', 'category_id',
+            ])
+            ->with([
+                'user:id,name,avatar',
+                'category:id,name,slug',
+            ])
+            ->withCount('comments')
+            ->when($request->status, fn ($q, $s) => $q->where('status', $s))
+            ->when($request->search, fn ($q, $s) =>
+                $q->where('title', 'like', "%{$s}%")
+            )
+            ->latest('published_at')
+            ->paginate($perPage)
+        }
+    )
+
+    return PostResource::collection($posts)
+}
+```
+
+---
+
+*Tags: `laravel` `performance` `mysql` `eloquent` `n+1` `indexes` `caching` `pagination` `optimization` `intermediate`*

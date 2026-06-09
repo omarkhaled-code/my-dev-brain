@@ -1,0 +1,1128 @@
+---
+title: "Redis with Laravel — Caching & Queues"
+description: "A beginner-friendly complete guide to Redis in Laravel — what Redis is, how to install it, how to use it for caching API responses and database queries, and how to run background jobs for sending emails and notifications."
+category: database
+tools: [laravel, mysql, sqlite]
+tags: [redis, caching, queues, jobs, laravel, background-jobs, email, notifications]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+### What is Redis?
+
+Redis is an extremely fast **in-memory data store**. Think of it as a giant associative array (key → value) that lives in your server's RAM instead of on disk. Because RAM is thousands of times faster than a hard drive, Redis can store and retrieve data in microseconds.
+
+**Mental model — think of Redis as a whiteboard next to your desk:**
+```tsx
+Without Redis:
+Every request → open filing cabinet (MySQL) → find the file → read it → return
+Filing cabinet is slow — takes time to find and read files
+With Redis:
+First request  → open filing cabinet (MySQL) → find the file → copy it to whiteboard
+Next requests  → look at whiteboard → instant answer — no cabinet needed
+When data changes → erase whiteboard → next request refills it from cabinet
+```
+
+**Redis is NOT a replacement for MySQL.** MySQL stores your real data permanently. Redis stores temporary copies of frequently needed data for speed, and manages background task queues.
+
+### Two Main Uses in Laravel
+```tsx
+Redis in Laravel
+├── 1. CACHE ────────────────────────────────────────────
+│   Store results of slow operations temporarily
+│   Examples:
+│   • Database query results (user lists, post lists)
+│   • API responses from external services
+│   • Computed values (total revenue, dashboard stats)
+│   • Session data
+│
+└── 2. QUEUE ────────────────────────────────────────────
+Store background jobs to run later
+Examples:
+• Send welcome email after registration
+• Send push notification
+• Resize uploaded image
+• Generate PDF report
+• Sync data with external API
+```
+
+### How Queues Work
+```tsx
+Without Queue (bad):
+User registers → Laravel sends email → user waits 3 seconds → page loads
+❌ User is blocked waiting for the email to send
+With Queue (good):
+User registers → Laravel puts "send email" job in Redis queue → page loads instantly
+↓
+Queue Worker (running in background)
+↓
+Picks up job → sends email → done
+✅ User gets response in milliseconds — email sends in background
+```
+
+<Callout type="note">
+  **Why Redis for queues instead of database?** Laravel supports database
+  queues (stores jobs in MySQL) which works fine for small apps. Redis queues
+  are dramatically faster — Redis can handle thousands of jobs per second
+  while database queues slow down as your jobs table grows. Start with
+  database queues if you want zero setup, switch to Redis when you need speed.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **Speed:** RAM access is ~100,000x faster than disk — cached queries return in microseconds.
+- **Reduce database load:** Popular pages hit Redis instead of running the same MySQL query 1000 times per minute.
+- **Background jobs:** Users get instant responses while slow operations run behind the scenes.
+- **Simple API:** `Cache::put('key', $value, $seconds)` and `Cache::get('key')` — that's it for caching.
+- **Atomic operations:** Redis handles concurrent access safely — no race conditions when multiple requests hit the cache simultaneously.
+
+---
+
+## Real-World Use Cases
+
+- **Blog post list:** Cache paginated posts for 5 minutes — 1000 users get the same page → 1 database query instead of 1000.
+- **User dashboard stats:** Cache total orders, revenue, user count — expensive aggregation queries run once per hour.
+- **Welcome email:** User registers → job queued → response sent instantly → email delivered in background.
+- **Push notification:** Order status changes → notification job queued → sent to 10,000 users without blocking the request.
+- **External API cache:** Weather data, currency rates, third-party responses cached for 1 hour.
+
+---
+
+## When NOT to Use It
+
+- **Data that must be real-time:** Bank balances, stock prices, inventory that changes every second — caching means users might see stale data.
+- **Small apps with low traffic:** If you have 100 users, database queries are fast enough — Redis adds operational complexity for no gain.
+- **Unique per-user data:** Caching is most valuable for shared data. Caching each user's personalized feed individually wastes Redis memory.
+- **Simple apps without a server:** Redis requires a running server process. SQLite + file cache is fine for small personal projects.
+
+---
+
+## Code Examples
+
+### Install Redis
+
+```bash
+# macOS — with Homebrew
+brew install redis
+brew services start redis   # start Redis as a background service
+
+# Ubuntu / Debian (VPS)
+sudo apt update
+sudo apt install redis-server
+sudo systemctl start redis
+sudo systemctl enable redis  # start automatically on boot
+
+# Verify Redis is running
+redis-cli ping
+# Should respond: PONG
+
+# Windows — use WSL (Windows Subsystem for Linux) then follow Ubuntu steps
+# Or use Laravel Herd — it includes Redis
+```
+
+```bash
+# Install the PHP Redis extension for Laravel
+composer require predis/predis
+# OR install phpredis extension (faster but needs system install)
+# predis is pure PHP — easier to install, works everywhere
+```
+
+---
+
+### Configure Laravel for Redis
+
+```env
+# .env
+REDIS_HOST=127.0.0.1
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+
+# Tell Laravel to use Redis for cache
+CACHE_STORE=redis
+
+# Tell Laravel to use Redis for queues
+QUEUE_CONNECTION=redis
+```
+
+```php
+// config/database.php — Redis config (already there, just verify)
+'redis' => [
+    'client' => env('REDIS_CLIENT', 'predis'), // use predis
+
+    'default' => [
+        'host'     => env('REDIS_HOST', '127.0.0.1'),
+        'password' => env('REDIS_PASSWORD', null),
+        'port'     => env('REDIS_PORT', 6379),
+        'database' => env('REDIS_DB', 0),
+    ],
+
+    'cache' => [
+        'host'     => env('REDIS_HOST', '127.0.0.1'),
+        'password' => env('REDIS_PASSWORD', null),
+        'port'     => env('REDIS_PORT', 6379),
+        'database' => env('REDIS_CACHE_DB', 1), // separate DB for cache
+    ],
+],
+```
+
+---
+
+### Part 1 — Caching
+
+#### Basic Cache Operations
+
+```php
+use Illuminate\Support\Facades\Cache;
+
+// ── STORE ───────────────────────────────────────────────
+
+// Store for 60 seconds
+Cache::put('key', 'value', 60);
+
+// Store for 1 hour using Carbon
+Cache::put('key', 'value', now()->addHour());
+
+// Store forever (until manually deleted)
+Cache::forever('key', 'value');
+
+// Store only if it doesn't exist
+Cache::add('key', 'value', 60); // returns true if stored, false if key exists
+
+
+// ── RETRIEVE ────────────────────────────────────────────
+
+// Get value — returns null if not found
+$value = Cache::get('key');
+
+// Get with default fallback
+$value = Cache::get('key', 'default value');
+
+// Get and delete in one step
+$value = Cache::pull('key'); // removes from cache after retrieval
+
+
+// ── DELETE ──────────────────────────────────────────────
+
+Cache::forget('key');          // delete one key
+Cache::flush();                // delete everything — careful in production!
+
+
+// ── CHECK ───────────────────────────────────────────────
+
+Cache::has('key');             // true / false
+Cache::missing('key');         // true if NOT in cache
+```
+
+---
+
+#### The remember() Pattern — Most Used
+
+```php
+// remember() is the most important caching pattern:
+// "Get from cache if exists, otherwise run the callback and store the result"
+
+$posts = Cache::remember('published-posts', 300, function () {
+    // This only runs when cache is empty or expired
+    return Post::with(['user:id,name', 'category:id,name'])
+               ->published()
+               ->latest()
+               ->paginate(15);
+});
+
+// rememberForever — never expires, must be manually cleared
+$categories = Cache::rememberForever('all-categories', function () {
+    return Category::orderBy('name')->get();
+});
+```
+
+---
+
+#### Real-Life Example — Cache Blog Posts
+
+```php
+// app/Http/Controllers/Api/PostController.php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Models\Post;
+use App\Http\Resources\PostResource;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+
+class PostController extends Controller
+{
+    public function index(Request $request)
+    {
+        $page    = $request->get('page', 1);
+        $perPage = $request->get('per_page', 15);
+
+        // Cache key includes page number — each page is cached separately
+        $cacheKey = "posts.published.page_{$page}.per_{$perPage}";
+
+        $posts = Cache::remember($cacheKey, 300, function () use ($perPage) {
+            return Post::with(['user:id,name,avatar', 'category:id,name,slug', 'tags:id,name'])
+                       ->published()
+                       ->withCount('comments')
+                       ->latest('published_at')
+                       ->paginate($perPage);
+        });
+
+        return PostResource::collection($posts);
+    }
+
+    public function show(string $slug)
+    {
+        $post = Cache::remember("posts.{$slug}", 600, function () use ($slug) {
+            return Post::with([
+                'user:id,name,avatar',
+                'category:id,name,slug',
+                'tags:id,name,slug',
+                'comments.user:id,name,avatar',
+            ])
+            ->where('slug', $slug)
+            ->where('status', 'published')
+            ->firstOrFail();
+        });
+
+        return new PostResource($post);
+    }
+
+    public function store(Request $request)
+    {
+        $post = Post::create([...$request->validated(), 'user_id' => auth()->id()]);
+
+        // Clear cached post lists when new post is created
+        $this->clearPostCache();
+
+        return new PostResource($post);
+    }
+
+    public function update(Request $request, Post $post)
+    {
+        $this->authorize('update', $post);
+        $post->update($request->validated());
+
+        // Clear this post's cache and the list cache
+        Cache::forget("posts.{$post->slug}");
+        $this->clearPostCache();
+
+        return new PostResource($post);
+    }
+
+    public function destroy(Post $post)
+    {
+        $this->authorize('delete', $post);
+        $post->delete();
+
+        Cache::forget("posts.{$post->slug}");
+        $this->clearPostCache();
+
+        return response()->json(['success' => true]);
+    }
+
+    private function clearPostCache(): void
+    {
+        // Clear all paginated post caches
+        // Simple approach: use cache tags (if Redis supports it)
+        Cache::tags(['posts'])->flush();
+    }
+}
+```
+
+---
+
+#### Cache Tags — Group Related Cache Entries
+
+```php
+// Cache tags let you group cache entries and clear them together
+// Only works with Redis and Memcached — not file cache
+
+// Store with tags
+Cache::tags(['posts'])->put('posts.page_1', $posts, 300);
+Cache::tags(['posts', 'featured'])->put('featured-posts', $featured, 600);
+Cache::tags(['users'])->put('user.1', $user, 3600);
+
+// Clear all entries with 'posts' tag at once
+Cache::tags(['posts'])->flush(); // clears all post-related cache
+
+// remember() with tags
+$posts = Cache::tags(['posts'])->remember('posts.page_1', 300, function () {
+    return Post::published()->paginate(15);
+});
+
+// Real-life usage — clear all post caches when any post changes
+public function clearPostCache(): void
+{
+    Cache::tags(['posts'])->flush();
+}
+```
+
+---
+
+#### Real-Life Example — Cache Dashboard Stats
+
+```php
+// app/Http/Controllers/Api/DashboardController.php
+public function stats()
+{
+    $userId = auth()->id();
+
+    // Cache per user — each user has their own stats
+    $stats = Cache::remember("dashboard.stats.user_{$userId}", 1800, function () use ($userId) {
+        return [
+            'total_posts'     => Post::where('user_id', $userId)->count(),
+            'published_posts' => Post::where('user_id', $userId)
+                                     ->where('status', 'published')
+                                     ->count(),
+            'total_views'     => Post::where('user_id', $userId)->sum('views'),
+            'total_comments'  => Comment::whereHas('commentable', function ($q) use ($userId) {
+                                     $q->where('user_id', $userId);
+                                 })->count(),
+            'recent_posts'    => Post::where('user_id', $userId)
+                                     ->latest()
+                                     ->take(5)
+                                     ->get(['id', 'title', 'status', 'created_at']),
+        ];
+    });
+
+    return response()->json($stats);
+}
+```
+
+---
+
+### Part 2 — Queues & Background Jobs
+
+#### Create a Job
+
+```bash
+php artisan make:job SendWelcomeEmail
+php artisan make:job SendOrderNotification
+```
+
+---
+
+#### Real-Life Job — Send Welcome Email
+
+```php
+// app/Jobs/SendWelcomeEmail.php
+<?php
+
+namespace App\Jobs;
+
+use App\Models\User;
+use App\Mail\WelcomeMail;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Mail;
+
+class SendWelcomeEmail implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    // How many times to retry if job fails
+    public int $tries = 3;
+
+    // Wait 60 seconds between retries
+    public int $backoff = 60;
+
+    // Delete job if it fails all retries
+    public bool $deleteWhenMissingModels = true;
+
+    public function __construct(
+        public readonly User $user // injected automatically
+    ) {}
+
+    public function handle(): void
+    {
+        Mail::to($this->user->email)
+            ->send(new WelcomeMail($this->user));
+    }
+
+    // Called when all retries are exhausted
+    public function failed(\Throwable $exception): void
+    {
+        // Log the failure or notify admin
+        \Log::error("Failed to send welcome email to user {$this->user->id}: {$exception->getMessage()}");
+    }
+}
+```
+
+---
+
+#### Create the Mailable
+
+```bash
+php artisan make:mail WelcomeMail --markdown=emails.welcome
+```
+
+```php
+// app/Mail/WelcomeMail.php
+<?php
+
+namespace App\Mail;
+
+use App\Models\User;
+use Illuminate\Bus\Queueable;
+use Illuminate\Mail\Mailable;
+use Illuminate\Mail\Mailables\Content;
+use Illuminate\Mail\Mailables\Envelope;
+use Illuminate\Queue\SerializesModels;
+
+class WelcomeMail extends Mailable
+{
+    use Queueable, SerializesModels;
+
+    public function __construct(
+        public readonly User $user
+    ) {}
+
+    public function envelope(): Envelope
+    {
+        return new Envelope(
+            subject: 'Welcome to ' . config('app.name') . '!',
+        );
+    }
+
+    public function content(): Content
+    {
+        return new Content(
+            markdown: 'emails.welcome',
+        );
+    }
+}
+```
+
+```blade
+{{-- resources/views/emails/welcome.blade.php --}}
+<x-mail::message>
+# Welcome, {{ $user->name }}! 🎉
+
+Thank you for joining **{{ config('app.name') }}**.
+
+Your account is ready. Click the button below to get started:
+
+<x-mail::button :url="config('app.url') . '/dashboard'">
+Go to Dashboard
+</x-mail::button>
+
+If you have any questions, just reply to this email.
+
+Thanks,
+{{ config('app.name') }} Team
+</x-mail::message>
+```
+
+---
+
+#### Dispatch the Job — In AuthController
+
+```php
+// app/Http/Controllers/Api/AuthController.php
+use App\Jobs\SendWelcomeEmail;
+
+public function register(Request $request)
+{
+    $user = User::create([
+        'name'     => $request->name,
+        'email'    => $request->email,
+        'password' => Hash::make($request->password),
+    ]);
+
+    // Dispatch job to Redis queue — returns INSTANTLY
+    // Email sends in background without blocking the response
+    SendWelcomeEmail::dispatch($user);
+
+    // You can also delay the job
+    SendWelcomeEmail::dispatch($user)->delay(now()->addMinutes(5));
+
+    $token = $user->createToken('web')->plainTextToken;
+
+    return response()->json([
+        'user'  => new UserResource($user),
+        'token' => $token,
+    ], 201);
+}
+```
+
+---
+
+#### Real-Life Job — Send Order Notification
+
+```php
+// app/Jobs/SendOrderNotification.php
+<?php
+
+namespace App\Jobs;
+
+use App\Models\Order;
+use App\Models\User;
+use App\Mail\OrderStatusMail;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
+
+class SendOrderNotification implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public int $tries   = 3;
+    public int $backoff = 30;
+
+    public function __construct(
+        public readonly Order $order,
+        public readonly string $status // 'confirmed', 'shipped', 'delivered'
+    ) {}
+
+    public function handle(): void
+    {
+        $user = $this->order->user;
+
+        // Send email notification
+        Mail::to($user->email)->send(new OrderStatusMail($this->order, $this->status));
+
+        // You could also send a push notification here
+        // PushNotification::send($user->device_token, [
+        //     'title' => 'Order Update',
+        //     'body'  => "Your order #{$this->order->order_number} is {$this->status}",
+        // ]);
+
+        Log::info("Order notification sent: Order #{$this->order->id} status={$this->status}");
+    }
+
+    public function failed(\Throwable $exception): void
+    {
+        Log::error("Failed to send order notification: Order #{$this->order->id} - {$exception->getMessage()}");
+    }
+}
+```
+
+```php
+// Dispatch when order status changes
+// app/Http/Controllers/Api/OrderController.php
+
+public function updateStatus(Request $request, Order $order)
+{
+    $request->validate([
+        'status' => 'required|in:confirmed,processing,shipped,delivered,cancelled',
+    ]);
+
+    $order->update(['status' => $request->status]);
+
+    // Send notification in background — user doesn't wait
+    SendOrderNotification::dispatch($order, $request->status);
+
+    return response()->json(['message' => 'Order status updated']);
+}
+```
+
+---
+
+#### Queue Configuration
+
+```php
+// config/queue.php — verify Redis connection
+'connections' => [
+    'redis' => [
+        'driver'     => 'redis',
+        'connection' => 'default',
+        'queue'      => env('REDIS_QUEUE', 'default'),
+        'retry_after' => 90,  // seconds before job is considered stuck
+        'block_for'  => null,
+    ],
+],
+```
+
+```env
+# .env
+QUEUE_CONNECTION=redis
+REDIS_QUEUE=default
+
+# Mail settings — use Mailtrap for local development
+MAIL_MAILER=smtp
+MAIL_HOST=sandbox.smtp.mailtrap.io
+MAIL_PORT=2525
+MAIL_USERNAME=your_mailtrap_username
+MAIL_PASSWORD=your_mailtrap_password
+MAIL_FROM_ADDRESS=noreply@yourapp.com
+MAIL_FROM_NAME="${APP_NAME}"
+```
+
+---
+
+#### Run the Queue Worker
+
+```bash
+# Start the queue worker — processes jobs from Redis
+php artisan queue:work
+
+# With specific connection and queue
+php artisan queue:work redis --queue=default
+
+# Process only one job then stop (good for testing)
+php artisan queue:work --once
+
+# Keep running, restart when code changes (for development)
+php artisan queue:work --tries=3
+
+# Show failed jobs
+php artisan queue:failed
+
+# Retry all failed jobs
+php artisan queue:retry all
+
+# Retry specific failed job by ID
+php artisan queue:retry 5
+
+# Clear all failed jobs
+php artisan queue:flush
+
+# Clear all pending jobs from queue
+php artisan queue:clear redis
+```
+
+<Callout type="note">
+  **Development tip:** Keep two terminal tabs open. One for `php artisan serve`
+  (your Laravel server) and one for `php artisan queue:work` (your queue
+  worker). The worker must be running to process queued jobs. In production,
+  use Supervisor to keep the worker running automatically.
+</Callout>
+
+---
+
+#### Multiple Queues — Prioritize Jobs
+
+```php
+// Use different queues for different priority levels
+// High priority: notifications that users expect immediately
+// Low priority: bulk emails, reports, cleanup tasks
+
+// Dispatch to specific queue
+SendWelcomeEmail::dispatch($user)->onQueue('high');
+SendOrderNotification::dispatch($order, 'shipped')->onQueue('high');
+GenerateMonthlyReport::dispatch()->onQueue('low');
+
+// Or set queue in the job class
+class SendWelcomeEmail implements ShouldQueue
+{
+    public string $queue = 'high'; // always goes to high queue
+}
+
+// Run worker that processes high queue first, then default
+php artisan queue:work redis --queue=high,default,low
+```
+
+---
+
+#### Failed Jobs Table — Track Failures
+
+```bash
+# Create the failed_jobs table
+php artisan queue:failed-table
+php artisan migrate
+```
+
+```php
+// config/queue.php
+'failed' => [
+    'driver'   => env('QUEUE_FAILED_DRIVER', 'database-uuids'),
+    'database' => env('DB_CONNECTION', 'mysql'),
+    'table'    => 'failed_jobs',
+],
+```
+
+---
+
+#### Fallback — Database Queue (No Redis)
+
+```php
+// If Redis is not available, use database queue
+// Zero extra setup — just use MySQL
+
+// .env
+QUEUE_CONNECTION=database
+
+// Create jobs table
+php artisan queue:table
+php artisan migrate
+
+// Everything else stays the same — dispatch, handle, fail
+// Database queue is slower than Redis but works without Redis installed
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Caching paginated results without including page in key
+$posts = Cache::remember('posts', 300, function () {
+    return Post::published()->paginate(15); // ❌ page 1 and page 2 return same cache!
+});
+```
+</Wrong>
+<Right>
+```php
+$page = request('page', 1);
+$posts = Cache::remember("posts.page_{$page}", 300, function () {
+    return Post::published()->paginate(15); // ✅ each page has its own cache key
+});
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Not clearing cache when data changes — users see stale data
+public function update(Request $request, Post $post)
+{
+    $post->update($request->validated()); // ❌ cache still has old data!
+    return new PostResource($post);
+}
+```
+</Wrong>
+<Right>
+```php
+public function update(Request $request, Post $post)
+{
+    $post->update($request->validated());
+    Cache::forget("posts.{$post->slug}"); // ✅ clear stale cache
+    Cache::tags(['posts'])->flush();       // ✅ clear list caches too
+    return new PostResource($post);
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Injecting Request into a Job — Request does not exist in queue worker context
+class SendWelcomeEmail implements ShouldQueue
+{
+    public function __construct(
+        public readonly Request $request // ❌ Request is HTTP-only — null in queue
+    ) {}
+}
+```
+</Wrong>
+<Right>
+```php
+// Only inject Eloquent models or plain data into jobs
+class SendWelcomeEmail implements ShouldQueue
+{
+    public function __construct(
+        public readonly User $user, // ✅ Eloquent model — serialized safely
+        public readonly string $welcomeMessage // ✅ plain data
+    ) {}
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Forgetting to run queue:work — jobs pile up but never execute
+SendWelcomeEmail::dispatch($user);
+// Jobs sit in Redis forever with no worker to process them ❌
+```
+</Wrong>
+<Right>
+```bash
+# Always have queue:work running in a separate terminal during development
+php artisan queue:work
+
+# In production use Supervisor to keep it running automatically
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** Never call `Cache::flush()` in production — it deletes EVERYTHING in Redis including sessions if you store them there. Always use `Cache::forget('specific-key')` or `Cache::tags(['tag'])->flush()` to clear only what you need.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Always include dynamic parts in cache keys: `"posts.page_{$page}.status_{$status}"`
+- Set reasonable TTL (time to live) — not too short (pointless) not too long (stale data)
+- Use cache tags to group related entries for easy mass-clearing
+- Always implement `failed()` method in jobs to handle failures gracefully
+- Set `$tries` and `$backoff` on every job — never leave defaults
+
+**Performance tips**
+```php
+// Cache expensive operations aggressively
+// Rule of thumb for TTL:
+// Data that changes rarely  → 1 hour to 24 hours
+// Data that changes sometimes → 5 to 30 minutes
+// Data that changes often   → 1 to 5 minutes
+// Real-time data            → don't cache
+
+// Use withoutOverlapping() for jobs that should not run concurrently
+class GenerateReport implements ShouldQueue
+{
+    use WithoutOverlapping; // prevents duplicate jobs from running simultaneously
+
+    public int $uniqueFor = 3600; // lock for 1 hour
+}
+
+// Chunk large jobs — never process thousands of records in one job
+class SendNewsletterToAllUsers implements ShouldQueue
+{
+    public function handle(): void
+    {
+        // Bad: User::all() → loads 50,000 users into memory
+        // Good: chunk into smaller jobs
+        User::chunk(100, function ($users) {
+            foreach ($users as $user) {
+                SendNewsletterEmail::dispatch($user)->onQueue('low');
+            }
+        });
+    }
+}
+```
+
+**Security considerations**
+- Never cache sensitive data like passwords, tokens, or payment information
+- Use separate Redis databases for cache and sessions — prevents accidental flush of sessions
+- Set a Redis password in production: `REDIS_PASSWORD=strong_random_password`
+- Limit Redis memory in production with `maxmemory` config to prevent it from consuming all RAM
+- Use `$deleteWhenMissingModels = true` on jobs — prevents processing jobs for deleted models
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is Redis and what makes it faster than a regular database?"
+  difficulty="easy"
+>
+  Redis is an in-memory data store — it keeps all data in RAM instead of on
+  disk. RAM access is roughly 100,000 times faster than disk access. A MySQL
+  query that takes 50ms can return from Redis in under 1ms. The trade-off is
+  that RAM is limited and expensive, so Redis is used for temporary frequently-
+  accessed data while MySQL stores the permanent source of truth. Redis also
+  loses data on restart unless configured for persistence, which is fine for
+  cache but important to know for queues.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between Cache::put() and Cache::remember()?"
+  difficulty="easy"
+>
+  `Cache::put()` stores a value — you compute the value yourself before calling
+  it. `Cache::remember()` is smarter — it checks if the key exists in cache
+  first, returns it if found, and only runs the callback to compute and store
+  the value if the key is missing or expired. `remember()` is the pattern you
+  use 90% of the time because it handles the check-then-store logic in one line.
+</InterviewQ>
+
+<InterviewQ
+  question="What is a queue worker and why must it be running for jobs to execute?"
+  difficulty="easy"
+>
+  When you dispatch a job, Laravel serializes it and puts it in Redis as a
+  string. Nothing happens automatically — someone must pick it up and run it.
+  The queue worker (`php artisan queue:work`) is a long-running PHP process
+  that continuously polls Redis for new jobs, deserializes them, and executes
+  the `handle()` method. Without a running worker, jobs pile up in Redis
+  forever. In production, Supervisor keeps the worker process running
+  automatically and restarts it if it crashes.
+</InterviewQ>
+
+<InterviewQ
+  question="Why should you never inject the Request object into a queued job?"
+  difficulty="mid"
+>
+  When a job is dispatched, Laravel serializes the constructor arguments into
+  a JSON string and stores it in Redis. The job executes later in a completely
+  separate PHP process — the original HTTP request is long gone. Injecting
+  Request means Laravel tries to serialize an HTTP request object, which either
+  fails or stores an empty/wrong state. Only inject Eloquent models (serialized
+  by ID and rehydrated on execution), plain data types (strings, integers,
+  arrays), or value objects.
+</InterviewQ>
+
+<InterviewQ
+  question="What happens when a queued job fails and how do you handle it?"
+  difficulty="hard"
+>
+  When a job throws an uncaught exception, the queue worker catches it and
+  either retries the job (if `$tries` allows more attempts) or marks it as
+  failed in the `failed_jobs` table. Between retries, the job waits for
+  `$backoff` seconds. After all retries are exhausted, the `failed()` method
+  on the job is called — this is where you log the error, alert an admin,
+  or compensate (like marking an order as needing manual intervention). You
+  can then use `php artisan queue:retry {id}` to retry failed jobs after
+  fixing the underlying issue.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The most important thing I learned about caching: always include every
+  dynamic variable in the cache key. Forgot the page number once and every
+  user got page 1 regardless of what page they requested. Sounds obvious
+  in hindsight but easy to miss when you are just thinking about the query.
+</MyNotes>
+
+<MyNotes>
+  The queue worker must be running — this tripped me up badly the first time.
+  I dispatched 50 welcome emails, checked my inbox, nothing arrived. Spent
+  an hour debugging the Mailable before realizing I never started
+  `queue:work`. Now I always open a second terminal and run the worker
+  whenever I am working on anything queue-related.
+</MyNotes>
+
+<MyNotes>
+  For local email testing use Mailtrap — it catches all outgoing emails in
+  a fake inbox so you never accidentally send test emails to real users.
+  Sign up at mailtrap.io, get SMTP credentials, put them in `.env`. Every
+  email your app sends goes to your Mailtrap inbox instead of real recipients.
+</MyNotes>
+
+<MyNotes>
+  Start with `QUEUE_CONNECTION=database` if you are not ready to set up
+  Redis yet. It works exactly the same way — just slower. Once Redis is
+  set up, change one line in `.env` and everything works identically.
+  No code changes needed.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Cache Service — Centralize All Cache Logic
+
+```php
+// app/Services/CacheService.php
+<?php
+
+namespace App\Services;
+
+use Illuminate\Support\Facades\Cache;
+
+class CacheService
+{
+    // Posts
+    public static function getPosts(int $page, int $perPage): mixed
+    {
+        return Cache::tags(['posts'])
+                    ->remember("posts.page_{$page}.per_{$perPage}", 300, fn () => null);
+    }
+
+    public static function getPost(string $slug): mixed
+    {
+        return Cache::tags(['posts'])->remember("posts.{$slug}", 600, fn () => null);
+    }
+
+    public static function clearPosts(): void
+    {
+        Cache::tags(['posts'])->flush();
+    }
+
+    public static function clearPost(string $slug): void
+    {
+        Cache::tags(['posts'])->forget("posts.{$slug}");
+    }
+
+    // User stats
+    public static function getUserStats(int $userId): mixed
+    {
+        return Cache::remember("stats.user_{$userId}", 1800, fn () => null);
+    }
+
+    public static function clearUserStats(int $userId): void
+    {
+        Cache::forget("stats.user_{$userId}");
+    }
+
+    // Categories (rarely change — cache for 24 hours)
+    public static function getCategories(): mixed
+    {
+        return Cache::rememberForever('categories.all', fn () => null);
+    }
+
+    public static function clearCategories(): void
+    {
+        Cache::forget('categories.all');
+    }
+}
+```
+
+---
+
+### Supervisor Config — Keep Worker Running in Production
+
+```ini
+; /etc/supervisor/conf.d/laravel-worker.conf
+; Keeps queue:work running automatically on the server
+
+[program:laravel-worker]
+process_name=%(program_name)s_%(process_num)02d
+command=php /var/www/your-app/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=www-data
+numprocs=2
+redirect_stderr=true
+stdout_logfile=/var/www/your-app/storage/logs/worker.log
+stopwaitsecs=3600
+```
+
+```bash
+# Apply supervisor config
+sudo supervisorctl reread
+sudo supervisorctl update
+sudo supervisorctl start laravel-worker:*
+
+# Check worker status
+sudo supervisorctl status
+```
+
+---
+
+### Test Redis Connection
+
+```bash
+# From Laravel tinker — test cache and queue
+php artisan tinker
+
+# Test cache
+Cache::put('test', 'hello redis', 60);
+Cache::get('test'); // should return 'hello redis'
+
+# Test queue — dispatch a job and check Redis
+\App\Jobs\SendWelcomeEmail::dispatch(\App\Models\User::first());
+
+# Check jobs in Redis
+redis-cli
+KEYS *          # see all Redis keys
+LLEN queues:default  # count jobs in default queue
+```
+
+---
+
+*Tags: `laravel` `redis` `caching` `queues` `jobs` `background-jobs` `email` `notifications` `intermediate`*

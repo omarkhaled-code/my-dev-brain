@@ -1,0 +1,982 @@
+---
+title: "API Integration with Fetch in Next.js"
+description: "How to integrate with your Laravel API in Next.js App Router using plain fetch — covering Route Handlers, direct Laravel calls, CRUD patterns, error handling, loading states, and TypeScript response types."
+category: api-integration
+tools: [nextjs, react]
+tags: [fetch, api, crud, nextjs, laravel, route-handler, typescript, error-handling]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+In Next.js App Router you have two places where you call your Laravel API:
+
+**1. From Route Handlers (server-side)** — for protected requests where you need the Bearer token from the httpOnly cookie. The client calls your Next.js Route Handler, the Route Handler calls Laravel.
+
+**2. From Server Components (server-side)** — for data fetching that happens during page render. Reads the cookie directly and calls Laravel.
+
+**3. From Client Components (client-side)** — calls your own Next.js Route Handlers only. Never calls Laravel directly from the browser (token would be exposed).
+```tsx
+Pattern A — Client Component → Route Handler → Laravel
+Browser → /api/posts (Next.js Route Handler) → Laravel /api/posts
+Pattern B — Server Component → Laravel directly
+Next.js Server → Laravel /api/posts (reads httpOnly cookie server-side)
+Pattern C — Public data (no auth needed)
+Browser → Laravel /api/public-posts directly (no token needed)
+```
+<Callout type="note">
+  **When to call Laravel directly from a Client Component?** Only for truly
+  public endpoints that require no authentication — like a public blog post
+  list, a country list, or a search endpoint with no user data. For anything
+  requiring auth, always go through your Route Handler.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **Built-in:** No extra dependency — fetch is native in Node.js 18+ and all browsers.
+- **Next.js extends fetch:** Next.js adds caching, revalidation, and deduplication on top of native fetch in Server Components.
+- **Simple mental model:** One function, consistent API, works everywhere.
+- **Full control:** No abstraction layer — you see exactly what is sent and received.
+
+---
+
+## Real-World Use Cases
+
+- **CRUD for posts:** GET list, GET single, POST create, PUT update, DELETE — all through Route Handlers.
+- **User profile:** Server Component fetches profile on page load, Client Component updates it via Route Handler.
+- **Public search:** Client Component calls Laravel search endpoint directly — no auth needed.
+- **File upload:** POST with FormData through Route Handler to Laravel.
+- **Paginated lists:** GET with query params, handle Laravel pagination response shape.
+
+---
+
+## Code Examples
+
+### Base Types — Laravel Response Shapes
+
+```ts
+// lib/types/api.ts
+
+// Laravel pagination response shape
+export interface PaginatedResponse<T> {
+  data: T[]
+  current_page: number
+  last_page: number
+  per_page: number
+  total: number
+  next_page_url: string | null
+  prev_page_url: string | null
+}
+
+// Laravel validation error shape
+export interface LaravelValidationError {
+  message: string
+  errors: Record<string, string[]>
+}
+
+// Generic API error
+export interface ApiError {
+  message: string
+  errors?: Record<string, string[]>
+  status: number
+}
+
+// Post example type
+export interface Post {
+  id: string
+  title: string
+  body: string
+  user_id: string
+  created_at: string
+  updated_at: string
+}
+
+// User type
+export interface User {
+  id: string
+  name: string
+  email: string
+  role: string
+  created_at: string
+}
+```
+
+---
+
+### Laravel Fetch Helpers
+
+```ts
+// lib/api/laravel.ts
+import { cookies } from 'next/headers'
+import type { ApiError } from '@/lib/types/api'
+
+const LARAVEL_API = process.env.LARAVEL_API_URL
+
+// Parse error from Laravel response
+export async function parseLaravelError(res: Response): Promise<ApiError> {
+  try {
+    const data = await res.json()
+    return {
+      message: data.message ?? 'Something went wrong',
+      errors: data.errors,
+      status: res.status,
+    }
+  } catch {
+    return {
+      message: 'Something went wrong',
+      status: res.status,
+    }
+  }
+}
+
+// Authenticated fetch — reads token from httpOnly cookie
+export async function laravelFetch(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const cookieStore = await cookies()
+  const token = cookieStore.get('auth_token')?.value
+
+  if (!token) {
+    throw new Error('Unauthorized')
+  }
+
+  return fetch(`${LARAVEL_API}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(options.headers as Record<string, string>),
+    },
+  })
+}
+
+// Public fetch — no token required
+export async function laravelPublicFetch(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  return fetch(`${LARAVEL_API}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers as Record<string, string>),
+    },
+  })
+}
+```
+
+---
+
+### Route Handlers — Full CRUD for Posts
+
+```ts
+// app/api/posts/route.ts — GET list + POST create
+
+import { NextRequest, NextResponse } from 'next/server'
+import { laravelFetch } from '@/lib/api/laravel'
+import { parseLaravelError } from '@/lib/api/laravel'
+
+// GET /api/posts?page=1
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url)
+    const page = searchParams.get('page') ?? '1'
+    const perPage = searchParams.get('per_page') ?? '15'
+
+    const laravelRes = await laravelFetch(
+      `/posts?page=${page}&per_page=${perPage}`
+    )
+
+    if (!laravelRes.ok) {
+      const error = await parseLaravelError(laravelRes)
+      return NextResponse.json(error, { status: laravelRes.status })
+    }
+
+    const data = await laravelRes.json()
+    return NextResponse.json(data)
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
+    }
+    return NextResponse.json({ message: 'Internal server error' }, { status: 500 })
+  }
+}
+
+// POST /api/posts
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+
+    const laravelRes = await laravelFetch('/posts', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+
+    if (!laravelRes.ok) {
+      const error = await parseLaravelError(laravelRes)
+      return NextResponse.json(error, { status: laravelRes.status })
+    }
+
+    const data = await laravelRes.json()
+    return NextResponse.json(data, { status: 201 })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
+    }
+    return NextResponse.json({ message: 'Internal server error' }, { status: 500 })
+  }
+}
+```
+
+```ts
+// app/api/posts/[id]/route.ts — GET single + PATCH update + DELETE
+
+import { NextRequest, NextResponse } from 'next/server'
+import { laravelFetch, parseLaravelError } from '@/lib/api/laravel'
+
+// GET /api/posts/:id
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const laravelRes = await laravelFetch(`/posts/${params.id}`)
+
+    if (!laravelRes.ok) {
+      const error = await parseLaravelError(laravelRes)
+      return NextResponse.json(error, { status: laravelRes.status })
+    }
+
+    const data = await laravelRes.json()
+    return NextResponse.json(data)
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
+    }
+    return NextResponse.json({ message: 'Internal server error' }, { status: 500 })
+  }
+}
+
+// PATCH /api/posts/:id
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const body = await req.json()
+
+    const laravelRes = await laravelFetch(`/posts/${params.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    })
+
+    if (!laravelRes.ok) {
+      const error = await parseLaravelError(laravelRes)
+      return NextResponse.json(error, { status: laravelRes.status })
+    }
+
+    const data = await laravelRes.json()
+    return NextResponse.json(data)
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
+    }
+    return NextResponse.json({ message: 'Internal server error' }, { status: 500 })
+  }
+}
+
+// DELETE /api/posts/:id
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const laravelRes = await laravelFetch(`/posts/${params.id}`, {
+      method: 'DELETE',
+    })
+
+    if (!laravelRes.ok) {
+      const error = await parseLaravelError(laravelRes)
+      return NextResponse.json(error, { status: laravelRes.status })
+    }
+
+    return NextResponse.json({ success: true })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
+    }
+    return NextResponse.json({ message: 'Internal server error' }, { status: 500 })
+  }
+}
+```
+
+---
+
+### Client Component — Fetch from Route Handler
+
+```tsx
+// components/posts/PostList.tsx
+'use client'
+
+import { useEffect, useState } from 'react'
+import type { Post, PaginatedResponse } from '@/lib/types/api'
+
+export function PostList() {
+  const [posts, setPosts] = useState<Post[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const [lastPage, setLastPage] = useState(1)
+
+  useEffect(() => {
+    fetchPosts()
+  }, [page])
+
+  async function fetchPosts() {
+    setLoading(true)
+    setError(null)
+
+    try {
+      const res = await fetch(`/api/posts?page=${page}`)
+      const data: PaginatedResponse<Post> = await res.json()
+
+      if (!res.ok) {
+        setError(data.message ?? 'Failed to fetch posts')
+        return
+      }
+
+      setPosts(data.data)
+      setLastPage(data.last_page)
+    } catch {
+      setError('Network error. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleDelete(id: string) {
+    try {
+      const res = await fetch(`/api/posts/${id}`, { method: 'DELETE' })
+
+      if (!res.ok) {
+        const data = await res.json()
+        alert(data.message ?? 'Failed to delete')
+        return
+      }
+
+      // Remove from local state
+      setPosts((prev) => prev.filter((p) => p.id !== id))
+    } catch {
+      alert('Network error. Please try again.')
+    }
+  }
+
+  if (loading) return <div>Loading...</div>
+  if (error) return <div>Error: {error}</div>
+
+  return (
+    <div>
+      <ul>
+        {posts.map((post) => (
+          <li key={post.id}>
+            <h3>{post.title}</h3>
+            <button onClick={() => handleDelete(post.id)}>Delete</button>
+          </li>
+        ))}
+      </ul>
+
+      <div>
+        <button
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page === 1}
+        >
+          Previous
+        </button>
+        <span>Page {page} of {lastPage}</span>
+        <button
+          onClick={() => setPage((p) => p + 1)}
+          disabled={page === lastPage}
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+### Server Component — Fetch Laravel Directly
+
+```tsx
+// app/(protected)/posts/page.tsx — Server Component
+import { cookies } from 'next/headers'
+import { redirect } from 'next/navigation'
+import type { PaginatedResponse, Post } from '@/lib/types/api'
+
+async function getPosts(page = 1): Promise<PaginatedResponse<Post>> {
+  const cookieStore = await cookies()
+  const token = cookieStore.get('auth_token')?.value
+
+  if (!token) redirect('/login')
+
+  const res = await fetch(
+    `${process.env.LARAVEL_API_URL}/posts?page=${page}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      cache: 'no-store', // always fresh for authenticated data
+    }
+  )
+
+  if (!res.ok) {
+    if (res.status === 401) redirect('/login')
+    throw new Error('Failed to fetch posts')
+  }
+
+  return res.json()
+}
+
+export default async function PostsPage() {
+  const { data: posts, total } = await getPosts()
+
+  return (
+    <div>
+      <h1>Posts ({total})</h1>
+      <ul>
+        {posts.map((post) => (
+          <li key={post.id}>{post.title}</li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+```
+
+---
+
+### Client Component — Direct Public Laravel Call
+
+```tsx
+// components/PublicPostList.tsx
+// For public endpoints that need no auth — call Laravel directly
+'use client'
+
+import { useEffect, useState } from 'react'
+import type { Post, PaginatedResponse } from '@/lib/types/api'
+
+const LARAVEL_PUBLIC = process.env.NEXT_PUBLIC_LARAVEL_URL
+
+export function PublicPostList() {
+  const [posts, setPosts] = useState<Post[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    async function fetchPublicPosts() {
+      try {
+        const res = await fetch(`${LARAVEL_PUBLIC}/api/public/posts`)
+
+        if (!res.ok) {
+          setError('Failed to fetch posts')
+          return
+        }
+
+        const data: PaginatedResponse<Post> = await res.json()
+        setPosts(data.data)
+      } catch {
+        setError('Network error')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchPublicPosts()
+  }, [])
+
+  if (loading) return <div>Loading...</div>
+  if (error) return <div>{error}</div>
+
+  return (
+    <ul>
+      {posts.map((post) => (
+        <li key={post.id}>{post.title}</li>
+      ))}
+    </ul>
+  )
+}
+```
+
+---
+
+### Client Fetch Wrapper — Reusable with Error Handling
+
+```ts
+// lib/api/clientFetch.ts
+// Reusable fetch wrapper for Client Components calling Route Handlers
+import type { ApiError } from '@/lib/types/api'
+
+interface FetchOptions extends RequestInit {
+  params?: Record<string, string | number>
+}
+
+export async function clientFetch<T>(
+  url: string,
+  options: FetchOptions = {}
+): Promise<T> {
+  const { params, ...fetchOptions } = options
+
+  // Build query string from params
+  const queryString = params
+    ? '?' + new URLSearchParams(
+        Object.entries(params).map(([k, v]) => [k, String(v)])
+      ).toString()
+    : ''
+
+  const res = await fetch(`${url}${queryString}`, {
+    ...fetchOptions,
+    headers: {
+      'Content-Type': 'application/json',
+      ...fetchOptions.headers,
+    },
+  })
+
+  if (!res.ok) {
+    const error: ApiError = await res.json().catch(() => ({
+      message: 'Something went wrong',
+      status: res.status,
+    }))
+    throw error
+  }
+
+  // Handle 204 No Content (DELETE responses)
+  if (res.status === 204) return {} as T
+
+  return res.json()
+}
+
+// Usage:
+// const posts = await clientFetch<PaginatedResponse<Post>>('/api/posts', {
+//   params: { page: 1, per_page: 15 },
+// })
+```
+
+---
+
+### Using clientFetch in a Component
+
+```tsx
+// components/posts/CreatePost.tsx
+'use client'
+
+import { useState } from 'react'
+import { clientFetch } from '@/lib/api/clientFetch'
+import type { Post, ApiError } from '@/lib/types/api'
+
+export function CreatePost() {
+  const [title, setTitle] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+
+  async function handleCreate() {
+    setLoading(true)
+    setError(null)
+    setFieldErrors({})
+
+    try {
+      const post = await clientFetch<Post>('/api/posts', {
+        method: 'POST',
+        body: JSON.stringify({ title, body: '' }),
+      })
+
+      setTitle('')
+      console.log('Created:', post)
+    } catch (err) {
+      const apiError = err as ApiError
+
+      if (apiError.errors) {
+        // Map field errors
+        const mapped: Record<string, string> = {}
+        Object.entries(apiError.errors).forEach(([field, messages]) => {
+          mapped[field] = messages[0]
+        })
+        setFieldErrors(mapped)
+      } else {
+        setError(apiError.message)
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div>
+      <input
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder="Post title"
+      />
+      {fieldErrors.title && <p>{fieldErrors.title}</p>}
+      {error && <p>{error}</p>}
+
+      <button onClick={handleCreate} disabled={loading}>
+        {loading ? 'Creating...' : 'Create Post'}
+      </button>
+    </div>
+  )
+}
+```
+
+---
+
+### File Upload Through Route Handler
+
+```ts
+// app/api/upload/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+import { laravelFetch } from '@/lib/api/laravel'
+
+export async function POST(req: NextRequest) {
+  try {
+    const formData = await req.formData()
+    const file = formData.get('file') as File
+
+    if (!file) {
+      return NextResponse.json({ message: 'No file provided' }, { status: 422 })
+    }
+
+    // Forward FormData to Laravel
+    const laravelFormData = new FormData()
+    laravelFormData.append('file', file)
+
+    const cookieStore = await cookies()
+    const token = cookieStore.get('auth_token')?.value
+
+    const laravelRes = await fetch(
+      `${process.env.LARAVEL_API_URL}/upload`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          // No Content-Type header — browser sets it with boundary for FormData
+        },
+        body: laravelFormData,
+      }
+    )
+
+    if (!laravelRes.ok) {
+      const error = await laravelRes.json()
+      return NextResponse.json(error, { status: laravelRes.status })
+    }
+
+    const data = await laravelRes.json()
+    return NextResponse.json(data)
+  } catch {
+    return NextResponse.json({ message: 'Upload failed' }, { status: 500 })
+  }
+}
+```
+
+```tsx
+// Client Component — File Upload
+'use client'
+
+export function FileUpload() {
+  const [uploading, setUploading] = useState(false)
+  const [url, setUrl] = useState<string | null>(null)
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setUploading(true)
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+        // No Content-Type header — browser sets it automatically
+      })
+
+      const data = await res.json()
+      if (res.ok) setUrl(data.url)
+    } catch {
+      console.error('Upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <div>
+      <input type="file" onChange={handleUpload} disabled={uploading} />
+      {uploading && <p>Uploading...</p>}
+      {url && <img src={url} alt="Uploaded" />}
+    </div>
+  )
+}
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```tsx
+// Calling Laravel directly from a Client Component with auth
+const res = await fetch('http://localhost:8000/api/posts', {
+  headers: { Authorization: `Bearer ${token}` } // ❌ token exposed in browser
+})
+```
+</Wrong>
+<Right>
+```tsx
+// Call your own Route Handler — it reads the httpOnly cookie
+const res = await fetch('/api/posts') // ✅ token never touches the browser
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Not checking res.ok — silently swallows errors
+const res = await fetch('/api/posts')
+const data = await res.json() // could be an error object!
+setPosts(data.data) // 💥 data.data is undefined if error
+```
+</Wrong>
+<Right>
+```tsx
+const res = await fetch('/api/posts')
+
+if (!res.ok) {
+  const error = await res.json()
+  setError(error.message ?? 'Failed to fetch')
+  return
+}
+
+const data = await res.json()
+setPosts(data.data)
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Setting Content-Type for FormData — breaks multipart boundary
+await fetch('/api/upload', {
+  method: 'POST',
+  headers: { 'Content-Type': 'multipart/form-data' }, // ❌ browser can't add boundary
+  body: formData,
+})
+```
+</Wrong>
+<Right>
+```ts
+// No Content-Type for FormData — browser sets it automatically with boundary
+await fetch('/api/upload', {
+  method: 'POST',
+  body: formData, // ✅ browser handles Content-Type header
+})
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** Always add `cache: 'no-store'` to fetch calls in Server Components for authenticated or user-specific data. Next.js caches fetch by default — without this, one user's data can be served to another user.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Keep all Route Handler logic in `app/api/` — one folder per resource
+- Keep all types in `lib/types/api.ts` — single source of truth
+- Keep fetch helpers in `lib/api/` — never write raw fetch URLs in components
+- Use `clientFetch` wrapper for all Client Component calls — consistent error handling
+
+**Performance tips**
+```ts
+// Use Next.js fetch caching for public, non-user-specific data
+const res = await fetch(`${LARAVEL_API}/categories`, {
+  next: { revalidate: 3600 }, // revalidate every hour
+})
+
+// No cache for user-specific or frequently changing data
+const res = await fetch(`${LARAVEL_API}/posts`, {
+  cache: 'no-store',
+})
+
+// Tag cached data for on-demand revalidation
+const res = await fetch(`${LARAVEL_API}/posts`, {
+  next: { tags: ['posts'] },
+})
+
+// Then revalidate from a Route Handler when data changes
+import { revalidateTag } from 'next/cache'
+revalidateTag('posts')
+```
+
+**Security considerations**
+- Never expose `LARAVEL_API_URL` to the client — use `NEXT_PUBLIC_` prefix only for public Laravel URLs
+- Always validate request body in Route Handlers before forwarding to Laravel
+- Return consistent error shapes from all Route Handlers — never leak Laravel internals
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between fetch in a Server Component and fetch in a Client Component in Next.js?"
+  difficulty="easy"
+>
+  In a Server Component, fetch runs on the Node.js server during rendering —
+  it can read environment variables, access the filesystem, and use httpOnly
+  cookies. Next.js also extends it with caching and revalidation options.
+  In a Client Component, fetch runs in the browser — it cannot access server
+  resources, environment variables without NEXT_PUBLIC prefix, or httpOnly
+  cookies. Client Components should call their own Route Handlers, not
+  external APIs that require secret tokens.
+</InterviewQ>
+
+<InterviewQ
+  question="Why should you always check res.ok before calling res.json()?"
+  difficulty="easy"
+>
+  `res.json()` succeeds even when the response is an error — it just parses
+  whatever JSON the server returned. A 422 validation error from Laravel is
+  valid JSON but has a completely different shape than a success response.
+  If you call `data.data` on an error response you get undefined and your
+  app breaks silently. Always check `res.ok` first — it is true only for
+  2xx status codes.
+</InterviewQ>
+
+<InterviewQ
+  question="Why does Next.js cache fetch requests in Server Components by default and how do you opt out?"
+  difficulty="mid"
+>
+  Next.js extends the native fetch API to cache responses and deduplicate
+  identical requests during a render. This is useful for public static data
+  but dangerous for authenticated or user-specific data — cached data from
+  one user could be served to another. Opt out with `cache: 'no-store'` for
+  dynamic data, or use `next: { revalidate: seconds }` for time-based
+  revalidation of semi-static data.
+</InterviewQ>
+
+<InterviewQ
+  question="How would you handle a global 401 response across all client-side fetch calls?"
+  difficulty="mid"
+>
+  Create a `clientFetch` wrapper that checks the response status after every
+  call. If the status is 401, clear the auth store and redirect to login.
+  Centralizing this in one wrapper means you never handle 401 individually
+  in each component — every call through the wrapper gets the behavior
+  automatically. For a more advanced solution, use an Axios interceptor
+  instead of a manual wrapper.
+</InterviewQ>
+
+<InterviewQ
+  question="Why should you never set Content-Type to multipart/form-data manually when uploading files?"
+  difficulty="hard"
+>
+  Multipart form data requires a boundary string in the Content-Type header —
+  for example `multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxk`.
+  The browser generates this boundary automatically and embeds it in both the
+  header and the body to separate form fields. If you set Content-Type manually
+  you either omit the boundary (server cannot parse the body) or set the wrong
+  one. Always let the browser set Content-Type when sending FormData.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The `cache: 'no-store'` mistake cost me a confusing bug in production —
+  a user could see another user's data because Next.js cached the fetch
+  response. Now I always add `cache: 'no-store'` to any fetch that returns
+  user-specific data and only use caching for truly public, shared content.
+</MyNotes>
+
+<MyNotes>
+  The FormData Content-Type bug is surprisingly common. The error you get
+  from Laravel is a 422 with no field errors — just "The file field is
+  required" even though you sent the file. Took me a while to realize the
+  boundary was missing. Never set Content-Type for FormData manually.
+</MyNotes>
+
+<MyNotes>
+  I keep `lib/types/api.ts` with all Laravel response types. Every time
+  Laravel adds a new field or changes a response shape I update it in one
+  place. Without this file I was redefining the same Post interface in 5
+  different components.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Route Handler Factory — Reduce Boilerplate
+
+```ts
+// lib/api/routeHandler.ts
+// Wraps common Route Handler pattern — error handling, auth check, JSON response
+import { NextRequest, NextResponse } from 'next/server'
+import { laravelFetch, parseLaravelError } from '@/lib/api/laravel'
+
+type HandlerFn = (
+  req: NextRequest,
+  params: Record<string, string>
+) => Promise<NextResponse>
+
+export function createRouteHandler(
+  handler: HandlerFn
+): (req: NextRequest, context: { params: Record<string, string> }) => Promise<NextResponse> {
+  return async (req, { params }) => {
+    try {
+      return await handler(req, params)
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Unauthorized') {
+        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
+      }
+      console.error('Route Handler error:', error)
+      return NextResponse.json({ message: 'Internal server error' }, { status: 500 })
+    }
+  }
+}
+
+// Usage:
+// export const GET = createRouteHandler(async (req, params) => {
+//   const laravelRes = await laravelFetch(`/posts/${params.id}`)
+//   const data = await laravelRes.json()
+//   return NextResponse.json(data)
+// })
+```
+
+---
+
+### Environment Variables
+
+```env
+# .env.local
+LARAVEL_API_URL=http://localhost:8000/api        # server-side only
+NEXT_PUBLIC_LARAVEL_URL=http://localhost:8000    # client-safe — for public endpoints only
+```
+
+---
+
+*Tags: `nextjs` `react` `fetch` `api` `crud` `laravel` `route-handler` `typescript` `intermediate`*

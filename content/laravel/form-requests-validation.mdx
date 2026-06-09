@@ -1,0 +1,568 @@
+---
+title: "Form Requests & Validation in Laravel"
+description: "How to validate incoming requests in Laravel using Form Request classes, validation rules, custom messages, conditional validation, and returning consistent error responses for APIs"
+category: laravel
+tools: [laravel]
+tags: [validation, form-request, rules, api, laravel]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+---
+
+## Concept explanation
+
+Laravel validation runs before your controller logic executes. You define rules, Laravel checks the incoming request against them, and if anything fails it automatically returns errors — a redirect with flashed errors for web routes, or a `422 Unprocessable Entity` JSON response for API routes. Form Request classes extract validation logic out of controllers into dedicated, reusable classes.
+
+```
+Request comes in
+      ↓
+Form Request validates it
+      ↓
+Fails? → 422 JSON response with errors (API) or redirect (web)
+Passes? → Controller method runs with clean validated data
+```
+
+## Why it's used
+
+- Keeps controllers thin — no validation logic cluttering controller methods
+- Reusable — one Form Request class used in multiple controllers
+- Automatic error responses — no manual `if ($validator->fails())` needed
+- `authorize()` method combines auth check + validation in one class
+
+## Real-world use cases
+
+- Validating user registration and login forms
+- Validating API request bodies (create post, update profile)
+- Validating file uploads (size, type, dimensions)
+- Conditional validation based on other field values
+- Validating nested arrays (order items, form builder fields)
+
+## Code example
+
+### Basic validation in controller (quick approach)
+
+```php
+<?php
+// app/Http/Controllers/Api/UserController.php
+
+public function store(Request $request): JsonResponse
+{
+    // Validate directly in controller — fine for simple cases
+    $validated = $request->validate([
+        'name'     => 'required|string|max:255',
+        'email'    => 'required|email|unique:users,email',
+        'password' => 'required|string|min:8|confirmed',
+        'role'     => 'required|in:admin,editor,viewer',
+    ]);
+
+    // $validated only contains the fields that passed rules
+    $user = User::create($validated);
+
+    return response()->json($user, 201);
+}
+```
+
+### Generate a Form Request class
+
+```bash
+php artisan make:request StoreUserRequest
+php artisan make:request UpdateUserRequest
+```
+
+### Form Request — store
+
+```php
+<?php
+// app/Http/Requests/StoreUserRequest.php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class StoreUserRequest extends FormRequest
+{
+    // Who is allowed to make this request?
+    public function authorize(): bool
+    {
+        // Return true to allow everyone
+        // Or check permissions:
+        // return $this->user()->can('create', User::class);
+        return true;
+    }
+
+    // Validation rules
+    public function rules(): array
+    {
+        return [
+            'name'                  => ['required', 'string', 'max:255'],
+            'email'                 => ['required', 'email', 'unique:users,email'],
+            'password'              => ['required', 'string', 'min:8', 'confirmed'],
+            'role'                  => ['required', 'in:admin,editor,viewer'],
+            'phone'                 => ['nullable', 'string', 'max:20'],
+            'avatar'                => ['nullable', 'image', 'max:2048'], // 2MB max
+            'settings'              => ['nullable', 'array'],
+            'settings.newsletter'   => ['boolean'],
+            'settings.notifications'=> ['boolean'],
+        ];
+    }
+
+    // Custom error messages
+    public function messages(): array
+    {
+        return [
+            'name.required'    => 'Please enter your full name.',
+            'email.required'   => 'We need your email address.',
+            'email.unique'     => 'This email is already registered.',
+            'password.min'     => 'Password must be at least 8 characters.',
+            'password.confirmed'=> 'Passwords do not match.',
+            'role.in'          => 'Role must be admin, editor, or viewer.',
+        ];
+    }
+
+    // Custom attribute names (used in default messages)
+    public function attributes(): array
+    {
+        return [
+            'name'  => 'full name',
+            'email' => 'email address',
+        ];
+    }
+
+    // Transform data before validation runs
+    protected function prepareForValidation(): void
+    {
+        $this->merge([
+            'name'  => trim($this->name),
+            'email' => strtolower(trim($this->email)),
+        ]);
+    }
+}
+```
+
+### Form Request — update
+
+```php
+<?php
+// app/Http/Requests/UpdateUserRequest.php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
+
+class UpdateUserRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        // Only allow the user to update their own profile
+        // or an admin to update anyone
+        $user = $this->route('user'); // get {user} from route
+        return $this->user()->id === $user->id
+            || $this->user()->role === 'admin';
+    }
+
+    public function rules(): array
+    {
+        $userId = $this->route('user')->id;
+
+        return [
+            'name'  => ['sometimes', 'string', 'max:255'],
+            // Ignore the current user's own email when checking uniqueness
+            'email' => ['sometimes', 'email', Rule::unique('users')->ignore($userId)],
+            'role'  => ['sometimes', 'in:admin,editor,viewer'],
+            'phone' => ['nullable', 'string', 'max:20'],
+        ];
+    }
+}
+```
+
+### Use Form Request in controller
+
+```php
+<?php
+// app/Http/Controllers/Api/UserController.php
+
+use App\Http\Requests\StoreUserRequest;
+use App\Http\Requests\UpdateUserRequest;
+
+class UserController extends Controller
+{
+    // Form Request is injected automatically — validated before this runs
+    public function store(StoreUserRequest $request): JsonResponse
+    {
+        // $request->validated() returns only the fields that passed rules
+        $user = User::create($request->validated());
+        return response()->json($user, 201);
+    }
+
+    public function update(UpdateUserRequest $request, User $user): JsonResponse
+    {
+        $user->update($request->validated());
+        return response()->json($user);
+    }
+}
+```
+
+### Common validation rules
+
+```php
+public function rules(): array
+{
+    return [
+        // String rules
+        'title'       => ['required', 'string', 'min:3', 'max:255'],
+        'slug'        => ['required', 'string', 'alpha_dash'],
+        'email'       => ['required', 'email:rfc,dns'],
+        'url'         => ['nullable', 'url'],
+        'color'       => ['required', 'hex_color'],
+
+        // Number rules
+        'age'         => ['required', 'integer', 'min:18', 'max:120'],
+        'price'       => ['required', 'numeric', 'min:0', 'decimal:0,2'],
+        'quantity'    => ['required', 'integer', 'between:1,100'],
+
+        // Date rules
+        'birthday'    => ['required', 'date', 'before:today'],
+        'start_date'  => ['required', 'date'],
+        'end_date'    => ['required', 'date', 'after:start_date'],
+
+        // File rules
+        'avatar'      => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+        'document'    => ['required', 'file', 'mimes:pdf,doc,docx', 'max:10240'],
+        'thumbnail'   => ['nullable', 'image', 'dimensions:min_width=100,min_height=100'],
+
+        // Array rules
+        'tags'        => ['nullable', 'array', 'max:10'],
+        'tags.*'      => ['string', 'max:50'],  // each tag in array
+        'permissions' => ['required', 'array'],
+        'permissions.*'=> ['exists:permissions,id'],
+
+        // Database rules
+        'user_id'     => ['required', 'exists:users,id'],
+        'email'       => ['required', 'unique:users,email'],
+        'category'    => ['required', 'in:tech,design,business'],
+
+        // Conditional
+        'phone'       => ['nullable', 'string'],
+        'company'     => ['nullable', 'required_if:role,business', 'string'],
+    ];
+}
+```
+
+### Conditional validation
+
+```php
+use Illuminate\Validation\Rule;
+
+public function rules(): array
+{
+    return [
+        'type' => ['required', 'in:individual,company'],
+
+        // Required only if type is company
+        'company_name' => ['required_if:type,company', 'nullable', 'string'],
+        'vat_number'   => ['required_if:type,company', 'nullable', 'string'],
+
+        // Required unless field has value
+        'phone' => ['required_unless:email,null', 'nullable', 'string'],
+
+        // Required with other fields
+        'address' => ['required_with:city,country', 'nullable', 'string'],
+
+        // Conditional using Rule::when()
+        'discount' => [
+            'nullable',
+            Rule::when(
+                $this->input('role') === 'admin',
+                ['numeric', 'min:0', 'max:100'],
+                ['prohibited'] // non-admins cannot set discount
+            ),
+        ],
+    ];
+}
+```
+
+### Custom validation rule — class
+
+```bash
+php artisan make:rule StrongPassword
+```
+
+```php
+<?php
+// app/Rules/StrongPassword.php
+
+namespace App\Rules;
+
+use Closure;
+use Illuminate\Contracts\Validation\ValidationRule;
+
+class StrongPassword implements ValidationRule
+{
+    public function validate(string $attribute, mixed $value, Closure $fail): void
+    {
+        if (strlen($value) < 8) {
+            $fail('Password must be at least 8 characters.');
+            return;
+        }
+
+        if (!preg_match('/[A-Z]/', $value)) {
+            $fail('Password must contain at least one uppercase letter.');
+            return;
+        }
+
+        if (!preg_match('/[0-9]/', $value)) {
+            $fail('Password must contain at least one number.');
+            return;
+        }
+
+        if (!preg_match('/[^A-Za-z0-9]/', $value)) {
+            $fail('Password must contain at least one special character.');
+        }
+    }
+}
+```
+
+```php
+// Use in Form Request
+use App\Rules\StrongPassword;
+
+public function rules(): array
+{
+    return [
+        'password' => ['required', 'string', new StrongPassword, 'confirmed'],
+    ];
+}
+```
+
+### Custom validation rule — closure (quick)
+
+```php
+use Illuminate\Validation\Rule;
+
+public function rules(): array
+{
+    return [
+        'username' => [
+            'required',
+            'string',
+            function (string $attribute, mixed $value, Closure $fail) {
+                if (str_contains($value, ' ')) {
+                    $fail('Username cannot contain spaces.');
+                }
+                if (in_array($value, ['admin', 'root', 'system'])) {
+                    $fail('This username is reserved.');
+                }
+            },
+        ],
+    ];
+}
+```
+
+### Validating nested arrays
+
+```php
+// Request body:
+// {
+//   "order": {
+//     "items": [
+//       { "product_id": 1, "quantity": 2 },
+//       { "product_id": 3, "quantity": 1 }
+//     ],
+//     "shipping_address": {
+//       "street": "123 Main St",
+//       "city": "Cairo"
+//     }
+//   }
+// }
+
+public function rules(): array
+{
+    return [
+        'order'                          => ['required', 'array'],
+        'order.items'                    => ['required', 'array', 'min:1'],
+        'order.items.*.product_id'       => ['required', 'integer', 'exists:products,id'],
+        'order.items.*.quantity'         => ['required', 'integer', 'min:1', 'max:100'],
+        'order.shipping_address'         => ['required', 'array'],
+        'order.shipping_address.street'  => ['required', 'string'],
+        'order.shipping_address.city'    => ['required', 'string'],
+    ];
+}
+```
+
+### API error response format
+
+```php
+// Laravel automatically returns this JSON for API requests when validation fails:
+// HTTP 422 Unprocessable Entity
+{
+    "message": "The name field is required. (and 2 more errors)",
+    "errors": {
+        "name": [
+            "The name field is required."
+        ],
+        "email": [
+            "The email field is required.",
+            "The email field must be a valid email address."
+        ]
+    }
+}
+```
+
+### Customize the 422 response format
+
+```php
+// app/Http/Requests/StoreUserRequest.php
+
+use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Contracts\Validation\Validator;
+
+class StoreUserRequest extends FormRequest
+{
+    // Override this method to customize the failed validation response
+    protected function failedValidation(Validator $validator): void
+    {
+        throw new HttpResponseException(
+            response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors'  => $validator->errors(),
+            ], 422)
+        );
+    }
+}
+```
+
+### After validation hook
+
+```php
+public function rules(): array
+{
+    return [
+        'start_date' => ['required', 'date'],
+        'end_date'   => ['required', 'date', 'after:start_date'],
+    ];
+}
+
+// Runs after all rules pass — for complex cross-field validation
+public function withValidator(Validator $validator): void
+{
+    $validator->after(function (Validator $validator) {
+        $start = Carbon::parse($this->start_date);
+        $end   = Carbon::parse($this->end_date);
+
+        if ($end->diffInDays($start) > 365) {
+            $validator->errors()->add('end_date', 'Date range cannot exceed 1 year.');
+        }
+    });
+}
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Using $request->all() instead of $request->validated()
+// Includes ALL input — including fields not in your rules
+// Opens mass assignment vulnerabilities
+public function store(StoreUserRequest $request): JsonResponse
+{
+    $user = User::create($request->all()); // ❌ unsafe
+    return response()->json($user, 201);
+}
+```
+</Wrong>
+<Right>
+```php
+// Always use $request->validated()
+// Returns ONLY fields that passed validation rules
+public function store(StoreUserRequest $request): JsonResponse
+{
+    $user = User::create($request->validated()); // ✅ safe
+    return response()->json($user, 201);
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Forgetting Rule::unique()->ignore() on update
+// Your own email fails unique validation when you update your profile
+public function rules(): array
+{
+    return [
+        'email' => ['required', 'email', 'unique:users,email'], // ❌ fails on update
+    ];
+}
+```
+</Wrong>
+<Right>
+```php
+// Always ignore the current record when validating unique on update
+use Illuminate\Validation\Rule;
+
+public function rules(): array
+{
+    $userId = $this->route('user')->id;
+    return [
+        'email' => ['required', 'email', Rule::unique('users')->ignore($userId)], // ✅
+    ];
+}
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always use `$request->validated()` not `$request->all()` — only includes validated fields
+- Use `sometimes` rule for optional fields on update — only validates if field is present
+- Use `Rule::unique()->ignore($id)` on update requests to avoid false unique failures
+- Use `prepareForValidation()` to normalize data before rules run (trim, lowercase)
+- Create dedicated Form Request per action — `StoreUserRequest`, `UpdateUserRequest`
+- Use `authorize()` to combine permission check + validation in one class
+- Use custom Rule classes for complex reusable validation logic
+
+<Callout type="tip">
+  Use `$request->safe()->only(['name', 'email'])` or `$request->safe()->except(['password'])` to get a subset of validated data:
+```php
+  $data = $request->safe()->only(['name', 'email']);
+  $user->update($data);
+```
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between $request->all() and $request->validated()?" difficulty="easy">
+  `$request->all()` returns everything the client sent — including fields not in your validation rules. Passing this to `Model::create()` can lead to mass assignment vulnerabilities where attackers inject fields like `is_admin=true`. `$request->validated()` returns only the fields explicitly listed in your validation rules — everything else is stripped out. Always use `$request->validated()`.
+</InterviewQ>
+
+<InterviewQ question="What does the authorize() method do in a Form Request?" difficulty="mid">
+  `authorize()` runs before the validation rules and determines if the current user is allowed to make this request at all. Return `true` to allow everyone, or check permissions — `$this->user()->can('create', Post::class)`. If it returns `false`, Laravel returns a 403 Forbidden response automatically without running validation. It's a clean way to combine authorization and validation in one class.
+</InterviewQ>
+
+<InterviewQ question="How do you validate an array of items in a Laravel request?" difficulty="mid">
+  Use the `*` wildcard in dot notation. For `items[0][product_id]`, `items[1][product_id]` etc — use `'items.*.product_id' => ['required', 'integer', 'exists:products,id']`. The `*` matches every index in the array. You can nest as deep as needed — `'order.items.*.variants.*.sku'` validates the sku of every variant of every item in the order.
+</InterviewQ>
+
+<InterviewQ question="How does Laravel know to return JSON errors for API requests vs redirect for web requests?" difficulty="mid">
+  Laravel checks if the request `expectsJson()` — which is true when the request has `Accept: application/json` header or comes through the `api` middleware group. For these requests, failed validation throws an `HttpResponseException` with a 422 JSON response. For web requests without that header, it redirects back with flashed error messages. You can override this by implementing `failedValidation()` in your Form Request.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The `Rule::unique()->ignore()` mistake on update is the one I hit most often. Every time I forget it, my own email fails validation when I try to update my profile. Always add it to update requests.
+
+  The `prepareForValidation()` method is underused. I use it to normalize emails to lowercase and trim whitespace before rules run — catches a lot of subtle bugs where `User@Example.COM` and `user@example.com` are treated as different emails.
+
+  For APIs always make sure the frontend sends `Accept: application/json` header — otherwise failed validation returns an HTML redirect instead of JSON errors, which breaks the frontend completely.
+
+  My go-to rule combination for passwords:
+```php
+  'password' => ['required', 'string', 'min:8', 'confirmed', new StrongPassword]
+```
+  The `confirmed` rule checks for a matching `password_confirmation` field automatically.
+</MyNotes>

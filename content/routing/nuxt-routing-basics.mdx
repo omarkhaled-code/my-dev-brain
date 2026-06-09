@@ -1,0 +1,543 @@
+---
+title: "Nuxt Routing — Basics & Dynamic Routes"
+description: "Complete guide to Nuxt 3 file-based routing — pages/ folder structure, dynamic routes, nested routes, layouts, and reading params and query strings"
+category: routing
+tools: [nuxt, vue]
+tags: [routing, nuxt, dynamic-routes, layouts, vue-router, pages]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+---
+
+## Concept explanation
+
+Nuxt 3 uses file-based routing powered by Vue Router under the hood. Every `.vue` file inside the `pages/` directory automatically becomes a route — no manual router configuration needed. Special conventions like `[id].vue` create dynamic routes, `[...slug].vue` creates catch-all routes, and folders with `index.vue` create nested routes. Layouts wrap pages with shared UI like sidebars and headers.
+
+```
+pages/
+├── index.vue              → /
+├── about.vue              → /about
+├── blog/
+│   ├── index.vue          → /blog
+│   └── [slug].vue         → /blog/my-post
+└── dashboard/
+    ├── index.vue          → /dashboard
+    ├── users/
+    │   ├── index.vue      → /dashboard/users
+    │   └── [id].vue       → /dashboard/users/123
+    └── settings.vue       → /dashboard/settings
+```
+
+<Callout type="note">
+  **Vue vs Nuxt difference:** Plain Vue with Vue Router requires manual route configuration in a `router/index.ts` file. Nuxt auto-generates routes from the `pages/` folder — no config needed. `useRoute`, `useRouter`, and `navigateTo` are also auto-imported in Nuxt.
+</Callout>
+
+## Why it's used
+
+- No manual router config — file structure is the router
+- Auto-imports make routing helpers available everywhere without imports
+- Layouts system eliminates repeated UI across related pages
+- Works seamlessly with SSR, SSG, and hybrid rendering modes
+
+## Real-world use cases
+
+- Marketing site with blog and landing pages
+- SaaS dashboard with shared sidebar layout
+- E-commerce with product pages (`/products/[id]`)
+- Documentation site with category/slug structure
+- Multi-step forms with separate pages per step
+
+## Code example
+
+### Basic file structure
+
+```
+pages/
+├── index.vue              → /
+├── about.vue              → /about
+├── contact.vue            → /contact
+│
+├── blog/
+│   ├── index.vue          → /blog
+│   └── [slug].vue         → /blog/my-post
+│
+├── products/
+│   ├── index.vue          → /products
+│   └── [id].vue           → /products/123
+│
+└── dashboard/
+    ├── index.vue          → /dashboard
+    ├── users/
+    │   ├── index.vue      → /dashboard/users
+    │   └── [id].vue       → /dashboard/users/456
+    └── settings.vue       → /dashboard/settings
+
+layouts/
+├── default.vue            → wraps all pages by default
+└── dashboard.vue          → used by dashboard pages
+
+app.vue                    → root component with <NuxtPage />
+```
+
+### app.vue — root entry point
+
+```vue
+<!-- app.vue -->
+<template>
+  <div>
+    <NuxtLayout>
+      <NuxtPage />
+    </NuxtLayout>
+  </div>
+</template>
+```
+
+### Default layout
+
+```vue
+<!-- layouts/default.vue -->
+<template>
+  <div>
+    <header class="flex items-center justify-between px-6 h-14 border-b border-neutral-200">
+      <NuxtLink to="/" class="font-bold text-lg">🧠 MyApp</NuxtLink>
+      <nav class="flex items-center gap-4">
+        <NuxtLink to="/about" class="text-sm text-neutral-600 hover:text-neutral-900">About</NuxtLink>
+        <NuxtLink to="/blog"  class="text-sm text-neutral-600 hover:text-neutral-900">Blog</NuxtLink>
+      </nav>
+    </header>
+    <main class="max-w-5xl mx-auto px-6 py-8">
+      <slot />
+    </main>
+  </div>
+</template>
+```
+
+### Dashboard layout
+
+```vue
+<!-- layouts/dashboard.vue -->
+<template>
+  <div class="flex min-h-screen">
+    <aside class="w-64 border-r border-neutral-200 px-4 py-6">
+      <NuxtLink to="/" class="font-bold text-lg block mb-8">🧠 MyApp</NuxtLink>
+      <nav class="space-y-1">
+        <NuxtLink
+          v-for="link in links"
+          :key="link.to"
+          :to="link.to"
+          class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm"
+          active-class="bg-blue-50 text-blue-700 font-medium"
+          inactive-class="text-neutral-600 hover:bg-neutral-100"
+        >
+          {{ link.label }}
+        </NuxtLink>
+      </nav>
+    </aside>
+    <main class="flex-1 p-8">
+      <slot />
+    </main>
+  </div>
+</template>
+
+<script setup lang="ts">
+const links = [
+  { label: 'Dashboard', to: '/dashboard' },
+  { label: 'Users',     to: '/dashboard/users' },
+  { label: 'Settings',  to: '/dashboard/settings' },
+]
+</script>
+```
+
+### Static page with layout
+
+```vue
+<!-- pages/dashboard/index.vue -->
+<script setup lang="ts">
+// Tell this page to use the dashboard layout
+definePageMeta({
+  layout: 'dashboard',
+})
+
+useHead({
+  title: 'Dashboard',
+})
+</script>
+
+<template>
+  <div>
+    <h1 class="text-2xl font-bold mb-6">Dashboard</h1>
+    <p class="text-neutral-500">Welcome back!</p>
+  </div>
+</template>
+```
+
+### Dynamic route — single param
+
+```vue
+<!-- pages/blog/[slug].vue -->
+<script setup lang="ts">
+const route  = useRoute()
+const slug   = route.params.slug as string
+
+// Fetch data using the slug
+const { data: post } = await useFetch(`/api/posts/${slug}`)
+
+// Set page metadata dynamically
+useHead({
+  title:       post.value?.title ?? 'Post',
+  description: post.value?.excerpt,
+})
+
+// Show 404 if post not found
+if (!post.value) {
+  throw createError({ statusCode: 404, message: 'Post not found' })
+}
+</script>
+
+<template>
+  <article v-if="post">
+    <h1 class="text-3xl font-bold mb-4">{{ post.title }}</h1>
+    <p class="text-neutral-500 mb-8">{{ post.excerpt }}</p>
+    <div v-html="post.content" />
+  </article>
+</template>
+```
+
+### Dynamic route — reading params reactively
+
+```vue
+<!-- pages/dashboard/users/[id].vue -->
+<script setup lang="ts">
+definePageMeta({ layout: 'dashboard' })
+
+const route = useRoute()
+
+// Reactive — updates automatically when route changes
+const userId = computed(() => route.params.id as string)
+
+const { data: user, refresh } = await useFetch(
+  () => `/api/users/${userId.value}`,
+  { watch: [userId] } // re-fetch when id changes
+)
+
+useHead({ title: () => user.value?.name ?? 'User' })
+
+if (!user.value) {
+  throw createError({ statusCode: 404, message: 'User not found' })
+}
+</script>
+
+<template>
+  <div v-if="user">
+    <h1 class="text-2xl font-bold mb-2">{{ user.name }}</h1>
+    <p class="text-neutral-500">{{ user.email }}</p>
+  </div>
+</template>
+```
+
+### Catch-all routes
+
+```
+pages/
+└── docs/
+    └── [...slug].vue    → matches /docs/a, /docs/a/b, /docs/a/b/c
+```
+
+```vue
+<!-- pages/docs/[...slug].vue -->
+<script setup lang="ts">
+const route = useRoute()
+const slug  = route.params.slug as string[]
+// slug = ["getting-started", "installation"]
+// for URL: /docs/getting-started/installation
+
+const path = slug.join("/")
+const { data: doc } = await useFetch(`/api/docs/${path}`)
+
+useHead({ title: doc.value?.title ?? 'Docs' })
+</script>
+
+<template>
+  <div v-if="doc">
+    <h1>{{ doc.title }}</h1>
+    <div v-html="doc.content" />
+  </div>
+</template>
+```
+
+### Optional catch-all routes
+
+```
+pages/
+└── shop/
+    └── [[...filters]].vue   → matches /shop AND /shop/electronics/phones
+```
+
+```vue
+<!-- pages/shop/[[...filters]].vue -->
+<script setup lang="ts">
+const route   = useRoute()
+const filters = route.params.filters as string[] | undefined
+// filters = undefined            → /shop
+// filters = ["electronics"]     → /shop/electronics
+// filters = ["electronics","phones"] → /shop/electronics/phones
+
+const { data: products } = await useFetch('/api/products', {
+  query: { filters: filters?.join(',') }
+})
+</script>
+
+<template>
+  <div>
+    <p>Active filters: {{ filters?.join(', ') ?? 'none' }}</p>
+    <!-- products grid -->
+  </div>
+</template>
+```
+
+### Nested routes (parent + child)
+
+```
+pages/
+└── dashboard/
+    ├── index.vue           → /dashboard (parent content)
+    └── users/
+        ├── index.vue       → /dashboard/users
+        └── [id].vue        → /dashboard/users/123
+```
+
+```vue
+<!-- pages/dashboard/index.vue — parent with NuxtPage for child routes -->
+<script setup lang="ts">
+definePageMeta({ layout: 'dashboard' })
+</script>
+
+<template>
+  <div>
+    <h1 class="text-2xl font-bold mb-6">Dashboard</h1>
+    <!-- Child routes render here -->
+    <NuxtPage />
+  </div>
+</template>
+```
+
+### Route query params (search params)
+
+```vue
+<!-- pages/products/index.vue -->
+<!-- URL: /products?category=electronics&sort=price&page=2 -->
+<script setup lang="ts">
+const route = useRoute()
+
+// Read query params
+const category = computed(() => route.query.category as string | undefined)
+const sort      = computed(() => route.query.sort     as string | undefined)
+const page      = computed(() => Number(route.query.page) || 1)
+
+const { data: products } = await useFetch('/api/products', {
+  query: { category, sort, page },
+  watch: [category, sort, page],
+})
+</script>
+
+<template>
+  <div>
+    <p>Category: {{ category ?? 'all' }}</p>
+    <p>Sort: {{ sort ?? 'default' }}</p>
+    <p>Page: {{ page }}</p>
+  </div>
+</template>
+```
+
+### Programmatic navigation
+
+```vue
+<script setup lang="ts">
+const router = useRouter()
+const route  = useRoute()
+
+// Push — adds to history
+const goToDashboard = () => router.push('/dashboard')
+
+// Replace — no history entry
+const goToLogin = () => router.replace('/login')
+
+// With params
+const goToUser = (id: number) => router.push(`/dashboard/users/${id}`)
+
+// With query params
+const goToProducts = (category: string) => {
+  router.push({ path: '/products', query: { category } })
+}
+
+// Nuxt-specific — preferred in Nuxt
+const goHome = () => navigateTo('/')
+const goBack = () => router.back()
+</script>
+```
+
+### NuxtLink — declarative navigation
+
+```vue
+<template>
+  <nav>
+    <!-- Basic link -->
+    <NuxtLink to="/about">About</NuxtLink>
+
+    <!-- With active class -->
+    <NuxtLink
+      to="/dashboard"
+      active-class="text-blue-600 font-medium"
+      exact-active-class="text-blue-700"
+    >
+      Dashboard
+    </NuxtLink>
+
+    <!-- External link -->
+    <NuxtLink to="https://github.com" external>
+      GitHub
+    </NuxtLink>
+
+    <!-- With query params -->
+    <NuxtLink :to="{ path: '/products', query: { category: 'electronics' } }">
+      Electronics
+    </NuxtLink>
+
+    <!-- Prefetch control -->
+    <NuxtLink to="/heavy-page" :prefetch="false">
+      Heavy page (no prefetch)
+    </NuxtLink>
+  </nav>
+</template>
+```
+
+### definePageMeta — page-level config
+
+```vue
+<script setup lang="ts">
+definePageMeta({
+  // Which layout to use
+  layout: 'dashboard',
+
+  // Page title (for middleware and plugins)
+  title: 'User Settings',
+
+  // Custom meta for auth middleware
+  middleware: ['auth'],
+
+  // Disable layout entirely
+  // layout: false,
+
+  // Keep component alive when navigating away
+  keepalive: true,
+
+  // Page transition
+  pageTransition: {
+    name: 'page',
+    mode: 'out-in',
+  },
+})
+</script>
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Using <a> tag or <router-link> for internal navigation
+     causes full page reload — loses Nuxt SSR benefits -->
+<template>
+  <a href="/dashboard">Dashboard</a>          <!-- ❌ full reload -->
+  <router-link to="/dashboard">Dashboard</router-link> <!-- ❌ use NuxtLink -->
+</template>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Always use NuxtLink for internal navigation in Nuxt
+     enables client-side navigation and prefetching -->
+<template>
+  <NuxtLink to="/dashboard">Dashboard</NuxtLink> <!-- ✅ -->
+</template>
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Not making params reactive — data doesn't update
+     when navigating between /users/1 and /users/2 -->
+<script setup lang="ts">
+const route  = useRoute()
+const userId = route.params.id // ❌ not reactive — string snapshot
+
+const { data } = await useFetch(`/api/users/${userId}`)
+// Won't re-fetch when userId changes
+</script>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Use computed() for reactive params + watch in useFetch -->
+<script setup lang="ts">
+const route  = useRoute()
+const userId = computed(() => route.params.id as string) // ✅ reactive
+
+const { data } = await useFetch(
+  () => `/api/users/${userId.value}`, // ✅ function form
+  { watch: [userId] }                 // ✅ re-fetches on change
+)
+</script>
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always use `NuxtLink` for internal navigation — never `<a href>` or `<router-link>`
+- Use `computed()` for route params that drive data fetching — keeps them reactive
+- Use `definePageMeta` to set layout, middleware, and page transitions per page
+- Use `useHead()` to set dynamic page titles and meta tags per page
+- Use `throw createError({ statusCode: 404 })` instead of returning null for missing data
+- Use `navigateTo()` for programmatic navigation in Nuxt — it works in both server and client context
+- Pass `watch` option to `useFetch` when the URL depends on reactive params
+
+<Callout type="tip">
+  Use `active-class` and `exact-active-class` on `NuxtLink` to style active navigation links instead of manually comparing `route.path`:
+```vue
+  <NuxtLink
+    to="/dashboard"
+    active-class="bg-blue-50 text-blue-700"
+    exact-active-class="font-bold"
+  >
+    Dashboard
+  </NuxtLink>
+```
+  Vue Router applies `active-class` when the route starts with the link path, and `exact-active-class` only when it matches exactly.
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between useRoute and useRouter in Nuxt?" difficulty="easy">
+  `useRoute()` gives you the current route object — read-only access to `params`, `query`, `path`, `name`, and `meta`. `useRouter()` gives you the router instance — methods to navigate programmatically like `push`, `replace`, `back`, and `forward`. Use `useRoute` to read where you are. Use `useRouter` to go somewhere new.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between navigateTo and router.push in Nuxt?" difficulty="mid">
+  `router.push()` is a Vue Router method that only works on the client side. `navigateTo()` is a Nuxt helper that works in both server and client context — you can use it in middleware, server routes, and plugins. In Nuxt, always prefer `navigateTo()` for programmatic navigation because it handles SSR correctly. `router.push()` is fine inside component event handlers that only run on the client.
+</InterviewQ>
+
+<InterviewQ question="How do you share state between a parent route and its child routes in Nuxt?" difficulty="mid">
+  Three options: use a Pinia store (best for complex state), use `provide`/`inject` from the parent layout or parent page component, or pass data via route params and query strings. For dashboard-style apps where a parent fetches user data needed by all child pages, a Pinia store is cleanest — fetch once in the layout, access anywhere in child pages without prop drilling or repeated API calls.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The reactive params mistake is the one I hit most often. You navigate from `/users/1` to `/users/2` and the page doesn't update because `route.params.id` was read once as a plain string. Always use `computed(() => route.params.id)` and pass `watch: [userId]` to `useFetch`.
+
+  `navigateTo()` vs `router.push()` — I use `navigateTo()` everywhere now. It's the safe choice because it works in middleware too. If I ever move navigation logic from a component into middleware, I don't have to change anything.
+
+  The `active-class` prop on `NuxtLink` is underrated. I used to write `v-bind:class="{ active: route.path === link.to }"` on every nav link. Now I just set `active-class` once and Vue Router handles it automatically.
+</MyNotes>

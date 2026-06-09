@@ -1,0 +1,906 @@
+---
+title: "Forms & Validation with React Hook Form + Zod"
+description: "How to build type-safe, validated forms in Next.js App Router using React Hook Form and Zod, submitting through Next.js Route Handlers to a Laravel API with httpOnly cookie Bearer token authentication."
+category: forms-validation
+tools: [nextjs, react]
+tags: [react-hook-form, zod, forms, validation, nextjs, laravel, route-handler, typescript]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+React Hook Form is a performant form library for React that minimizes re-renders by using uncontrolled inputs with refs instead of controlled state. Zod is a TypeScript-first schema validation library that lets you define the shape and rules of your data as a schema and infer TypeScript types from it automatically.
+
+Together they give you:
+- Type-safe form values inferred directly from your Zod schema
+- Validation that runs on the client before any network request
+- The same Zod schema reusable on your Next.js Route Handler for server-side validation
+
+**Your architecture in this file:**
+```text
+[React Form]
+│  React Hook Form handles input state + errors
+│  Zod validates on submit (client-side)
+▼
+[Next.js Route Handler] /app/api/...
+│  Reads httpOnly cookie → extracts Bearer token
+│  Validates request body again with Zod (server-side)
+│  Calls Laravel API with Authorization header
+▼
+[Laravel API]
+│  Returns response
+▼
+[Back to Client]
+│  React Hook Form handles success / server errors
+```
+<Callout type="note">
+  **Why validate twice?** Client-side validation with Zod gives instant feedback
+  to the user without a network request. Server-side validation in the Route
+  Handler protects your Laravel API even if someone bypasses the form and calls
+  your route directly. Same schema — zero duplication.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **React Hook Form:** Minimal re-renders — only the changed field re-renders, not the whole form. No controlled `useState` for every input.
+- **Zod:** TypeScript types are inferred from the schema automatically — define once, get types for free.
+- **Together:** `zodResolver` connects both libraries — one schema drives both validation and TypeScript types.
+- **Route Handler pattern:** Bearer token stays in httpOnly cookie, never exposed to client JavaScript.
+
+---
+
+## Real-World Use Cases
+
+- **Login / Register forms:** Validate credentials client-side, submit to Route Handler, call Laravel Sanctum.
+- **Profile update form:** Pre-fill form with existing data, validate changes, PATCH to Laravel.
+- **Multi-step wizard:** Each step has its own Zod schema, final step submits everything.
+- **File upload form:** Image with metadata, validate file type and size with Zod.
+- **Contact / support form:** Simple form with rate limiting in the Route Handler.
+
+---
+
+## When NOT to Use It
+
+- **Single field inputs** with no validation — plain `useState` is simpler.
+- **Search inputs** — use `useSearchParams` and URL state instead.
+- **Server Components forms** — if you use Server Actions (not your pattern), React Hook Form does not work in Server Components. Since you use Route Handlers this is not an issue.
+
+---
+
+## Code Examples
+
+### Install
+
+```bash
+npm install react-hook-form zod @hookform/resolvers
+```
+
+---
+
+### Zod Schema — Define Once, Use Everywhere
+
+```ts
+// lib/schemas/auth.ts
+import { z } from 'zod'
+
+export const loginSchema = z.object({
+  email: z
+    .string()
+    .min(1, 'Email is required')
+    .email('Invalid email address'),
+  password: z
+    .string()
+    .min(1, 'Password is required')
+    .min(8, 'Password must be at least 8 characters'),
+})
+
+// Infer TypeScript type from schema — no duplication
+export type LoginFormData = z.infer<typeof loginSchema>
+```
+
+---
+
+### Basic Login Form
+
+```tsx
+// components/forms/LoginForm.tsx
+'use client'
+
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { loginSchema, type LoginFormData } from '@/lib/schemas/auth'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+
+export function LoginForm() {
+  const router = useRouter()
+  const [serverError, setServerError] = useState<string | null>(null)
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginFormData>({
+    resolver: zodResolver(loginSchema),
+  })
+
+  async function onSubmit(data: LoginFormData) {
+    setServerError(null)
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+
+      const result = await res.json()
+
+      if (!res.ok) {
+        setServerError(result.message ?? 'Something went wrong')
+        return
+      }
+
+      router.push('/dashboard')
+    } catch {
+      setServerError('Network error. Please try again.')
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)} noValidate>
+      <div>
+        <label htmlFor="email">Email</label>
+        <input
+          id="email"
+          type="email"
+          {...register('email')}
+        />
+        {errors.email && <p>{errors.email.message}</p>}
+      </div>
+
+      <div>
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          {...register('password')}
+        />
+        {errors.password && <p>{errors.password.message}</p>}
+      </div>
+
+      {serverError && <p>{serverError}</p>}
+
+      <button type="submit" disabled={isSubmitting}>
+        {isSubmitting ? 'Signing in...' : 'Sign in'}
+      </button>
+    </form>
+  )
+}
+```
+
+---
+
+### Next.js Route Handler — Login
+
+```ts
+// app/api/auth/login/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+import { loginSchema } from '@/lib/schemas/auth'
+import { cookies } from 'next/headers'
+
+const LARAVEL_API = process.env.LARAVEL_API_URL // never exposed to client
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+
+    // Server-side validation with same Zod schema
+    const parsed = loginSchema.safeParse(body)
+    if (!parsed.success) {
+      return NextResponse.json(
+        { message: 'Invalid input', errors: parsed.error.flatten().fieldErrors },
+        { status: 422 }
+      )
+    }
+
+    // Call Laravel API
+    const laravelRes = await fetch(`${LARAVEL_API}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(parsed.data),
+    })
+
+    const data = await laravelRes.json()
+
+    if (!laravelRes.ok) {
+      return NextResponse.json(
+        { message: data.message ?? 'Invalid credentials' },
+        { status: laravelRes.status }
+      )
+    }
+
+    // Store Bearer token in httpOnly cookie — never readable by client JS
+    const cookieStore = await cookies()
+    cookieStore.set('auth_token', data.token, {
+      httpOnly: true,       // JS cannot read this
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+    })
+
+    return NextResponse.json({ success: true })
+  } catch {
+    return NextResponse.json(
+      { message: 'Internal server error' },
+      { status: 500 }
+    )
+  }
+}
+```
+
+---
+
+### Route Handler Helper — Read Token from Cookie
+
+```ts
+// lib/api/laravel.ts
+// Reusable helper for all Route Handlers that call Laravel
+import { cookies } from 'next/headers'
+
+export async function laravelFetch(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const cookieStore = await cookies()
+  const token = cookieStore.get('auth_token')?.value
+
+  if (!token) {
+    throw new Error('Unauthorized')
+  }
+
+  return fetch(`${process.env.LARAVEL_API_URL}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...options.headers,
+    },
+  })
+}
+```
+
+---
+
+### Profile Update Form — Pre-filled + PATCH
+
+```ts
+// lib/schemas/profile.ts
+import { z } from 'zod'
+
+export const updateProfileSchema = z.object({
+  name: z.string().min(1, 'Name is required').max(100),
+  email: z.string().email('Invalid email address'),
+  bio: z.string().max(500, 'Bio must be under 500 characters').optional(),
+  phone: z
+    .string()
+    .regex(/^\+?[0-9]{7,15}$/, 'Invalid phone number')
+    .optional()
+    .or(z.literal('')),
+})
+
+export type UpdateProfileFormData = z.infer<typeof updateProfileSchema>
+```
+
+```tsx
+// components/forms/UpdateProfileForm.tsx
+'use client'
+
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { updateProfileSchema, type UpdateProfileFormData } from '@/lib/schemas/profile'
+import { useState } from 'react'
+
+interface Props {
+  defaultValues: UpdateProfileFormData
+}
+
+export function UpdateProfileForm({ defaultValues }: Props) {
+  const [success, setSuccess] = useState(false)
+  const [serverError, setServerError] = useState<string | null>(null)
+
+  const {
+    register,
+    handleSubmit,
+    setError,
+    formState: { errors, isSubmitting, isDirty },
+  } = useForm<UpdateProfileFormData>({
+    resolver: zodResolver(updateProfileSchema),
+    defaultValues,
+  })
+
+  async function onSubmit(data: UpdateProfileFormData) {
+    setServerError(null)
+    setSuccess(false)
+
+    const res = await fetch('/api/profile', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+
+    const result = await res.json()
+
+    if (!res.ok) {
+      // Handle Laravel 422 validation errors — map to individual fields
+      if (res.status === 422 && result.errors) {
+        Object.entries(result.errors).forEach(([field, messages]) => {
+          setError(field as keyof UpdateProfileFormData, {
+            message: (messages as string[])[0],
+          })
+        })
+        return
+      }
+
+      setServerError(result.message ?? 'Update failed')
+      return
+    }
+
+    setSuccess(true)
+  }
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <div>
+        <label>Name</label>
+        <input {...register('name')} />
+        {errors.name && <p>{errors.name.message}</p>}
+      </div>
+
+      <div>
+        <label>Email</label>
+        <input type="email" {...register('email')} />
+        {errors.email && <p>{errors.email.message}</p>}
+      </div>
+
+      <div>
+        <label>Bio</label>
+        <textarea {...register('bio')} />
+        {errors.bio && <p>{errors.bio.message}</p>}
+      </div>
+
+      <div>
+        <label>Phone</label>
+        <input {...register('phone')} />
+        {errors.phone && <p>{errors.phone.message}</p>}
+      </div>
+
+      {serverError && <p>{serverError}</p>}
+      {success && <p>Profile updated successfully!</p>}
+
+      <button type="submit" disabled={isSubmitting || !isDirty}>
+        {isSubmitting ? 'Saving...' : 'Save Changes'}
+      </button>
+    </form>
+  )
+}
+```
+
+---
+
+### Route Handler — Profile PATCH
+
+```ts
+// app/api/profile/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+import { updateProfileSchema } from '@/lib/schemas/profile'
+import { laravelFetch } from '@/lib/api/laravel'
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json()
+
+    const parsed = updateProfileSchema.safeParse(body)
+    if (!parsed.success) {
+      return NextResponse.json(
+        { message: 'Invalid input', errors: parsed.error.flatten().fieldErrors },
+        { status: 422 }
+      )
+    }
+
+    const laravelRes = await laravelFetch('/profile', {
+      method: 'PATCH',
+      body: JSON.stringify(parsed.data),
+    })
+
+    const data = await laravelRes.json()
+
+    if (!laravelRes.ok) {
+      return NextResponse.json(
+        { message: data.message, errors: data.errors },
+        { status: laravelRes.status }
+      )
+    }
+
+    return NextResponse.json(data)
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
+    }
+    return NextResponse.json({ message: 'Internal server error' }, { status: 500 })
+  }
+}
+```
+
+---
+
+### Multi-Step Form
+
+```ts
+// lib/schemas/register.ts
+import { z } from 'zod'
+
+export const stepOneSchema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  email: z.string().email('Invalid email'),
+})
+
+export const stepTwoSchema = z.object({
+  password: z.string().min(8, 'Minimum 8 characters'),
+  confirmPassword: z.string(),
+}).refine((data) => data.password === data.confirmPassword, {
+  message: 'Passwords do not match',
+  path: ['confirmPassword'],
+})
+
+export const stepThreeSchema = z.object({
+  role: z.enum(['developer', 'designer', 'manager'], {
+    required_error: 'Please select a role',
+  }),
+  company: z.string().optional(),
+})
+
+// Full schema for final submission
+export const registerSchema = stepOneSchema
+  .merge(stepTwoSchema)
+  .merge(stepThreeSchema)
+
+export type RegisterFormData = z.infer<typeof registerSchema>
+```
+
+```tsx
+// components/forms/RegisterWizard.tsx
+'use client'
+
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import {
+  stepOneSchema,
+  stepTwoSchema,
+  stepThreeSchema,
+  registerSchema,
+  type RegisterFormData,
+} from '@/lib/schemas/register'
+import { useState } from 'react'
+
+const stepSchemas = [stepOneSchema, stepTwoSchema, stepThreeSchema]
+
+export function RegisterWizard() {
+  const [step, setStep] = useState(0)
+  const [serverError, setServerError] = useState<string | null>(null)
+
+  const {
+    register,
+    handleSubmit,
+    trigger,
+    formState: { errors, isSubmitting },
+  } = useForm<RegisterFormData>({
+    resolver: zodResolver(registerSchema),
+    mode: 'onTouched',
+  })
+
+  async function nextStep() {
+    // Validate only current step fields before moving forward
+    const fields = Object.keys(stepSchemas[step].shape) as (keyof RegisterFormData)[]
+    const valid = await trigger(fields)
+    if (valid) setStep((s) => s + 1)
+  }
+
+  async function onSubmit(data: RegisterFormData) {
+    setServerError(null)
+
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+
+    const result = await res.json()
+    if (!res.ok) {
+      setServerError(result.message ?? 'Registration failed')
+      return
+    }
+
+    window.location.href = '/dashboard'
+  }
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      {/* Step indicator */}
+      <p>Step {step + 1} of 3</p>
+
+      {step === 0 && (
+        <>
+          <input placeholder="Name" {...register('name')} />
+          {errors.name && <p>{errors.name.message}</p>}
+          <input placeholder="Email" type="email" {...register('email')} />
+          {errors.email && <p>{errors.email.message}</p>}
+        </>
+      )}
+
+      {step === 1 && (
+        <>
+          <input placeholder="Password" type="password" {...register('password')} />
+          {errors.password && <p>{errors.password.message}</p>}
+          <input placeholder="Confirm password" type="password" {...register('confirmPassword')} />
+          {errors.confirmPassword && <p>{errors.confirmPassword.message}</p>}
+        </>
+      )}
+
+      {step === 2 && (
+        <>
+          <select {...register('role')}>
+            <option value="">Select role</option>
+            <option value="developer">Developer</option>
+            <option value="designer">Designer</option>
+            <option value="manager">Manager</option>
+          </select>
+          {errors.role && <p>{errors.role.message}</p>}
+          <input placeholder="Company (optional)" {...register('company')} />
+        </>
+      )}
+
+      {serverError && <p>{serverError}</p>}
+
+      <div>
+        {step > 0 && (
+          <button type="button" onClick={() => setStep((s) => s - 1)}>
+            Back
+          </button>
+        )}
+        {step < 2 && (
+          <button type="button" onClick={nextStep}>
+            Next
+          </button>
+        )}
+        {step === 2 && (
+          <button type="submit" disabled={isSubmitting}>
+            {isSubmitting ? 'Registering...' : 'Create Account'}
+          </button>
+        )}
+      </div>
+    </form>
+  )
+}
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```tsx
+// Using useState for every input — unnecessary re-renders on every keystroke
+const [email, setEmail] = useState('')
+const [password, setPassword] = useState('')
+
+<input value={email} onChange={(e) => setEmail(e.target.value)} />
+```
+</Wrong>
+<Right>
+```tsx
+// React Hook Form uses refs — zero re-renders while typing
+const { register } = useForm<LoginFormData>({
+  resolver: zodResolver(loginSchema),
+})
+
+<input {...register('email')} />
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Defining Zod schema inside the component — recreated on every render
+export function MyForm() {
+  const schema = z.object({ email: z.string().email() }) // ❌ inside component
+  const { register } = useForm({ resolver: zodResolver(schema) })
+}
+```
+</Wrong>
+<Right>
+```ts
+// Define schema outside component or in a separate file
+// lib/schemas/auth.ts
+export const loginSchema = z.object({ email: z.string().email() })
+
+// component just imports it
+import { loginSchema } from '@/lib/schemas/auth'
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Not handling Laravel 422 validation errors — they silently disappear
+if (!res.ok) {
+  setServerError('Something went wrong') // loses field-specific errors from Laravel
+}
+```
+</Wrong>
+<Right>
+```tsx
+// Map Laravel field errors back to React Hook Form fields
+if (res.status === 422 && result.errors) {
+  Object.entries(result.errors).forEach(([field, messages]) => {
+    setError(field as keyof FormData, {
+      message: (messages as string[])[0],
+    })
+  })
+  return
+}
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** Always add `noValidate` to your `<form>` tag. Without it, the browser's native HTML5 validation runs before React Hook Form validation, showing inconsistent browser-styled error bubbles that conflict with your custom error UI.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Keep all Zod schemas in `lib/schemas/` — one file per domain (`auth.ts`, `profile.ts`, `posts.ts`)
+- Export both the schema and its inferred type from the same file
+- Reuse the same schema in both the form component and the Route Handler — single source of truth
+
+**Performance tips**
+```tsx
+// Use mode: 'onTouched' for best UX — validate after first blur, then live on change
+const { register } = useForm({
+  resolver: zodResolver(schema),
+  mode: 'onTouched', // not 'onChange' (too aggressive) or 'onSubmit' (too late)
+})
+
+// Use shouldUnregister: false (default) for multi-step forms
+// so previous step values are not lost when step unmounts
+const { register } = useForm({
+  resolver: zodResolver(fullSchema),
+  shouldUnregister: false,
+})
+```
+
+**Security considerations**
+- Always validate in the Route Handler with Zod — never trust client input
+- Never log `parsed.data` in production if it contains passwords
+- Set `httpOnly: true`, `secure: true`, `sameSite: 'lax'` on the auth cookie — all three matter
+- Add rate limiting to your login Route Handler to prevent brute force attacks
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between controlled and uncontrolled inputs, and which does React Hook Form use?"
+  difficulty="easy"
+>
+  Controlled inputs store their value in React state — every keystroke calls
+  setState and triggers a re-render. Uncontrolled inputs store their value in
+  the DOM via a ref — React does not manage the value directly. React Hook Form
+  uses uncontrolled inputs with refs by default, which is why it causes far
+  fewer re-renders than form libraries built on controlled inputs.
+</InterviewQ>
+
+<InterviewQ
+  question="Why would you validate the form data again in the Route Handler if you already validated it on the client?"
+  difficulty="easy"
+>
+  Client-side validation is only for user experience — instant feedback without
+  a network request. Anyone can bypass the form and send a raw HTTP request
+  directly to your Route Handler. Server-side validation in the Route Handler
+  is what actually protects your Laravel API. Always validate on both sides —
+  use the same Zod schema to avoid duplication.
+</InterviewQ>
+
+<InterviewQ
+  question="How does zodResolver connect React Hook Form with Zod?"
+  difficulty="mid"
+>
+  `zodResolver` is an adapter from `@hookform/resolvers` that plugs into React
+  Hook Form's resolver system. When the form submits or a field is validated,
+  React Hook Form calls the resolver with the current form values. The resolver
+  runs `schema.safeParse(values)` and maps Zod's error structure back into
+  React Hook Form's error format so errors appear on the correct fields
+  automatically. It also infers the TypeScript type so `useForm<T>` gets the
+  correct types without you writing them manually.
+</InterviewQ>
+
+<InterviewQ
+  question="How do you validate only the current step's fields in a multi-step form?"
+  difficulty="mid"
+>
+  Use `trigger(fieldNames)` from React Hook Form — it manually runs validation
+  on specific fields and returns a boolean. Define each step's schema separately
+  and use `Object.keys(stepSchema.shape)` to get the field names for that step.
+  Use a single `useForm` with the full merged schema so all values are preserved
+  across steps — do not unmount and remount the form between steps.
+</InterviewQ>
+
+<InterviewQ
+  question="Why is storing the Bearer token in an httpOnly cookie safer than localStorage?"
+  difficulty="hard"
+>
+  localStorage is accessible by any JavaScript on the page — if your app has
+  an XSS vulnerability, an attacker can read the token with one line of JS and
+  exfiltrate it. An httpOnly cookie cannot be read by JavaScript at all — only
+  the browser sends it automatically with requests to the same origin. Combined
+  with `secure: true` (HTTPS only) and `sameSite: lax` (CSRF protection), it
+  is significantly harder to steal. The token also never appears in your
+  client-side code or React state, so it cannot be accidentally logged or
+  exposed in error reports.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The `setError` trick for mapping Laravel 422 errors to individual fields
+  took me a while to figure out. Laravel returns errors as
+  `{ errors: { field: ['message'] } }` — you just iterate over them and call
+  `setError` for each one. The field name from Laravel must match the form
+  field name exactly, so keep your Zod schema field names aligned with your
+  Laravel validation keys.
+</MyNotes>
+
+<MyNotes>
+  Always add `noValidate` to the form tag. I spent 20 minutes debugging why
+  a weird browser tooltip was showing up before my custom error messages —
+  it was the native HTML5 validation running first.
+</MyNotes>
+
+<MyNotes>
+  For the httpOnly cookie flow: in development with Laravel on a different
+  port (localhost:8000) and Next.js on localhost:3000, make sure your
+  LARAVEL_API_URL in .env.local points to the server-side URL, not the
+  client-side one. The Route Handler calls Laravel from the server, so it
+  never has CORS issues regardless of the port.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Form Field Component — Reusable with Error
+
+```tsx
+// components/ui/FormField.tsx
+import { forwardRef, InputHTMLAttributes } from 'react'
+import { clsx } from 'clsx'
+
+interface FormFieldProps extends InputHTMLAttributes<HTMLInputElement> {
+  label: string
+  error?: string
+}
+
+export const FormField = forwardRef<HTMLInputElement, FormFieldProps>(
+  ({ label, error, id, ...props }, ref) => {
+    return (
+      <div>
+        <label htmlFor={id}>{label}</label>
+        <input
+          id={id}
+          ref={ref}
+          className={clsx(error && 'border-red-500')}
+          {...props}
+        />
+        {error && <p className="text-red-500 text-sm">{error}</p>}
+      </div>
+    )
+  }
+)
+
+FormField.displayName = 'FormField'
+
+// Usage in any form:
+// <FormField
+//   id="email"
+//   label="Email"
+//   type="email"
+//   error={errors.email?.message}
+//   {...register('email')}
+// />
+```
+
+---
+
+### Logout Route Handler — Clear httpOnly Cookie
+
+```ts
+// app/api/auth/logout/route.ts
+import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
+import { laravelFetch } from '@/lib/api/laravel'
+
+export async function POST() {
+  try {
+    // Tell Laravel to invalidate the token
+    await laravelFetch('/auth/logout', { method: 'POST' })
+  } catch {
+    // Continue even if Laravel call fails — still clear the cookie
+  }
+
+  const cookieStore = await cookies()
+  cookieStore.delete('auth_token')
+
+  return NextResponse.json({ success: true })
+}
+```
+
+---
+
+### Zod Common Patterns
+
+```ts
+// lib/schemas/common.ts — reusable Zod pieces
+
+// Password with strength rules
+export const passwordSchema = z
+  .string()
+  .min(8, 'Minimum 8 characters')
+  .regex(/[A-Z]/, 'Must contain an uppercase letter')
+  .regex(/[0-9]/, 'Must contain a number')
+
+// Password confirmation
+export const passwordConfirmSchema = z
+  .object({
+    password: passwordSchema,
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: 'Passwords do not match',
+    path: ['confirmPassword'],
+  })
+
+// Optional URL
+export const optionalUrlSchema = z
+  .string()
+  .url('Invalid URL')
+  .optional()
+  .or(z.literal(''))
+
+// Phone number
+export const phoneSchema = z
+  .string()
+  .regex(/^\+?[0-9]{7,15}$/, 'Invalid phone number')
+  .optional()
+  .or(z.literal(''))
+
+// Pagination query params
+export const paginationSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  per_page: z.coerce.number().int().min(1).max(100).default(15),
+})
+```
+
+---
+
+*Tags: `nextjs` `react` `react-hook-form` `zod` `forms` `validation` `laravel` `bearer-token` `intermediate`*

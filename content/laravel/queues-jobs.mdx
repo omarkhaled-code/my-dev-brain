@@ -1,0 +1,516 @@
+---
+title: "Queues & Jobs in Laravel"
+description: "How to use Laravel queues to run time-consuming tasks in the background — sending emails, processing images, calling APIs — without blocking the HTTP response"
+category: laravel
+tools: [laravel]
+tags: [queues, jobs, background, async, redis, laravel]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+---
+
+## Concept explanation
+
+A queue is a list of tasks (jobs) that run in the background — separate from your HTTP request cycle. When a user registers, instead of sending the welcome email before responding, you push a `SendWelcomeEmail` job onto the queue and respond instantly. A queue worker process picks up the job and sends the email in the background. The user gets a fast response — the heavy work happens asynchronously.
+
+```
+User registers
+      ↓
+Controller dispatches SendWelcomeEmail job → queue (Redis/database)
+      ↓
+Controller responds instantly → 201 Created
+      ↓ (separately)
+Queue worker picks up job → sends email → marks job done
+```
+
+## Why it's used
+
+- Keeps HTTP responses fast — don't make users wait for slow operations
+- Retry failed jobs automatically with configurable backoff
+- Process heavy tasks (image resize, PDF generation, API calls) without timeouts
+- Scale workers independently from web servers
+
+## Real-world use cases
+
+- Sending welcome, password reset, or notification emails
+- Resizing and optimizing uploaded images
+- Generating PDF invoices or reports
+- Syncing data with third-party APIs (Stripe, Mailchimp, Slack)
+- Sending push notifications to thousands of users
+- Processing large CSV imports row by row
+
+## Code example
+
+### Queue configuration
+
+```php
+// .env — choose your queue driver
+QUEUE_CONNECTION=redis      # production (fast)
+QUEUE_CONNECTION=database   # simpler setup (no Redis needed)
+QUEUE_CONNECTION=sync       # runs jobs immediately — for local dev/testing
+```
+
+```bash
+# If using database driver — create the jobs table
+php artisan queue:table
+php artisan migrate
+
+# If using Redis — install predis
+composer require predis/predis
+```
+
+### Generate a Job class
+
+```bash
+php artisan make:job SendWelcomeEmail
+php artisan make:job ProcessUserAvatar
+php artisan make:job GenerateInvoicePdf
+php artisan make:job SyncUserToMailchimp
+```
+
+### Basic Job class
+
+```php
+<?php
+// app/Jobs/SendWelcomeEmail.php
+
+namespace App\Jobs;
+
+use App\Models\User;
+use App\Mail\WelcomeEmail;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Mail;
+
+class SendWelcomeEmail implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    // How many times to retry if job fails
+    public int $tries = 3;
+
+    // Wait between retries (seconds)
+    public int $backoff = 60;
+
+    // Delete job if model no longer exists
+    public bool $deleteWhenMissingModels = true;
+
+    // Job timeout in seconds
+    public int $timeout = 30;
+
+    public function __construct(
+        public User $user // injected via constructor — serialized automatically
+    ) {}
+
+    public function handle(): void
+    {
+        Mail::to($this->user->email)
+            ->send(new WelcomeEmail($this->user));
+    }
+
+    // Called when all retries are exhausted
+    public function failed(\Throwable $exception): void
+    {
+        // Notify developer, log error, send to Slack etc.
+        \Log::error("SendWelcomeEmail failed for user {$this->user->id}", [
+            'error' => $exception->getMessage(),
+        ]);
+    }
+}
+```
+
+### Dispatch a job from a controller
+
+```php
+<?php
+// app/Http/Controllers/Api/AuthController.php
+
+use App\Jobs\SendWelcomeEmail;
+use App\Jobs\SyncUserToMailchimp;
+
+class AuthController extends Controller
+{
+    public function register(StoreUserRequest $request): JsonResponse
+    {
+        $user = User::create($request->validated());
+
+        // Dispatch job to queue — runs in background
+        SendWelcomeEmail::dispatch($user);
+
+        // Dispatch with delay — send after 1 minute
+        SendWelcomeEmail::dispatch($user)->delay(now()->addMinutes(1));
+
+        // Dispatch to specific queue
+        SendWelcomeEmail::dispatch($user)->onQueue('emails');
+
+        // Dispatch multiple jobs
+        SyncUserToMailchimp::dispatch($user);
+
+        return response()->json($user, 201);
+    }
+}
+```
+
+### Job with complex logic
+
+```php
+<?php
+// app/Jobs/ProcessUserAvatar.php
+
+namespace App\Jobs;
+
+use App\Models\User;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Storage;
+use Intervention\Image\Facades\Image;
+
+class ProcessUserAvatar implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public int $tries   = 3;
+    public int $timeout = 120; // 2 minutes — image processing can be slow
+
+    public function __construct(
+        public User   $user,
+        public string $tempPath // path to uploaded file
+    ) {}
+
+    public function handle(): void
+    {
+        // Load original image
+        $image = Image::make(Storage::get($this->tempPath));
+
+        // Generate multiple sizes
+        $sizes = [
+            'avatar_sm'  => [64,  64],
+            'avatar_md'  => [128, 128],
+            'avatar_lg'  => [256, 256],
+        ];
+
+        foreach ($sizes as $key => [$width, $height]) {
+            $resized  = clone $image;
+            $resized->fit($width, $height);
+            $path = "avatars/{$this->user->id}/{$key}.webp";
+            Storage::put($path, $resized->encode('webp', 85));
+        }
+
+        // Delete temp file
+        Storage::delete($this->tempPath);
+
+        // Update user record
+        $this->user->update([
+            'avatar_sm' => "avatars/{$this->user->id}/avatar_sm.webp",
+            'avatar_md' => "avatars/{$this->user->id}/avatar_md.webp",
+            'avatar_lg' => "avatars/{$this->user->id}/avatar_lg.webp",
+        ]);
+    }
+
+    public function failed(\Throwable $e): void
+    {
+        // Clean up temp file even on failure
+        Storage::delete($this->tempPath);
+        \Log::error("Avatar processing failed for user {$this->user->id}: {$e->getMessage()}");
+    }
+}
+```
+
+### Job chaining — run jobs in sequence
+
+```php
+// Run jobs one after another — each waits for previous to finish
+use Illuminate\Support\Facades\Bus;
+
+Bus::chain([
+    new ProcessUserAvatar($user, $tempPath),
+    new SendWelcomeEmail($user),
+    new SyncUserToMailchimp($user),
+])->dispatch();
+
+// With catch — handle chain failure
+Bus::chain([
+    new ProcessUserAvatar($user, $tempPath),
+    new SendWelcomeEmail($user),
+])->catch(function (\Throwable $e) use ($user) {
+    \Log::error("Job chain failed for user {$user->id}");
+})->dispatch();
+```
+
+### Job batching — run jobs in parallel
+
+```php
+use Illuminate\Support\Facades\Bus;
+use Illuminate\Bus\Batch;
+
+// Process multiple users simultaneously
+$batch = Bus::batch([
+    new SyncUserToMailchimp($user1),
+    new SyncUserToMailchimp($user2),
+    new SyncUserToMailchimp($user3),
+])->then(function (Batch $batch) {
+    // Runs when ALL jobs complete successfully
+    \Log::info('All users synced to Mailchimp');
+})->catch(function (Batch $batch, \Throwable $e) {
+    // Runs when any job fails
+    \Log::error('Batch sync failed: ' . $e->getMessage());
+})->finally(function (Batch $batch) {
+    // Always runs — success or failure
+    \Log::info('Batch finished');
+})->dispatch();
+
+// Track batch progress
+$batch->id;             // unique batch ID
+$batch->totalJobs;      // total jobs in batch
+$batch->processedJobs(); // completed jobs
+$batch->progress();      // 0-100 percentage
+$batch->finished();      // bool
+```
+
+```bash
+# Create batches table
+php artisan queue:batches-table
+php artisan migrate
+```
+
+### Queues for different priorities
+
+```php
+// routes/api.php or AppServiceProvider
+// Define multiple queues with different priorities
+
+// Dispatch to specific queues
+SendWelcomeEmail::dispatch($user)->onQueue('emails');
+ProcessUserAvatar::dispatch($user, $path)->onQueue('media');
+SyncUserToMailchimp::dispatch($user)->onQueue('integrations');
+GenerateInvoicePdf::dispatch($order)->onQueue('high');
+```
+
+```bash
+# Run worker with priority order
+# Processes 'high' first, then 'emails', then 'default'
+php artisan queue:work --queue=high,emails,media,integrations,default
+```
+
+### Running queue workers
+
+```bash
+# Start a worker — processes jobs one by one
+php artisan queue:work
+
+# Worker with specific connection and queue
+php artisan queue:work redis --queue=high,default
+
+# Worker that stops after processing one job (good for cron)
+php artisan queue:work --once
+
+# Worker with memory limit and timeout
+php artisan queue:work --memory=256 --timeout=60
+
+# Listen for new jobs without stopping (slower — for development)
+php artisan queue:listen
+
+# Restart workers gracefully after code changes
+php artisan queue:restart
+```
+
+### Monitoring failed jobs
+
+```bash
+# Create failed jobs table
+php artisan queue:failed-table
+php artisan migrate
+
+# List failed jobs
+php artisan queue:failed
+
+# Retry a specific failed job
+php artisan queue:retry {id}
+
+# Retry all failed jobs
+php artisan queue:retry all
+
+# Delete a failed job
+php artisan queue:forget {id}
+
+# Delete all failed jobs
+php artisan queue:flush
+```
+
+### Scheduled jobs — run on a timer
+
+```php
+// routes/console.php (Laravel 11+) or app/Console/Kernel.php
+
+use Illuminate\Support\Facades\Schedule;
+
+Schedule::job(new SyncUsersToMailchimp)->daily();
+Schedule::job(new GenerateDailyReport)->dailyAt('08:00');
+Schedule::job(new CleanupTempFiles)->hourly();
+Schedule::job(new SendWeeklyDigest)->weekly()->mondays()->at('09:00');
+
+// Custom frequency
+Schedule::job(new PingHealthCheck)->everyFiveMinutes();
+```
+
+```bash
+# Add to server cron — runs scheduler every minute
+* * * * * cd /path-to-your-project && php artisan schedule:run >> /dev/null 2>&1
+```
+
+### Using Horizon for queue monitoring
+
+```bash
+# Install Laravel Horizon (Redis only)
+composer require laravel/horizon
+php artisan horizon:install
+php artisan horizon
+```
+
+```php
+// config/horizon.php — configure workers per queue
+'environments' => [
+    'production' => [
+        'supervisor-1' => [
+            'connection' => 'redis',
+            'queue'      => ['high', 'emails', 'default'],
+            'balance'    => 'auto',
+            'processes'  => 10,
+            'tries'      => 3,
+        ],
+    ],
+],
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Passing large data directly to job constructor
+// Serializes entire object — slow and memory heavy
+class GenerateReport implements ShouldQueue
+{
+    public function __construct(
+        public array $allUsers, // ❌ could be thousands of rows
+        public array $rawData,  // ❌ large payload
+    ) {}
+}
+```
+</Wrong>
+<Right>
+```php
+// Pass only IDs — fetch data inside handle()
+class GenerateReport implements ShouldQueue
+{
+    public function __construct(
+        public int $reportId // ✅ just the ID
+    ) {}
+
+    public function handle(): void
+    {
+        $report = Report::find($this->reportId); // fetch inside
+        $users  = User::all(); // fetch fresh data
+    }
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Not implementing failed() method
+// Job silently fails — no logging, no notification
+class SendWelcomeEmail implements ShouldQueue
+{
+    public function handle(): void
+    {
+        Mail::to($this->user)->send(new WelcomeEmail($this->user));
+        // ❌ if this throws, job fails silently after retries
+    }
+}
+```
+</Wrong>
+<Right>
+```php
+// Always implement failed() to handle exhausted retries
+class SendWelcomeEmail implements ShouldQueue
+{
+    public function handle(): void
+    {
+        Mail::to($this->user)->send(new WelcomeEmail($this->user));
+    }
+
+    public function failed(\Throwable $e): void // ✅
+    {
+        \Log::error("Welcome email failed for {$this->user->email}: {$e->getMessage()}");
+        // Notify team, trigger fallback, etc.
+    }
+}
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always implement `failed()` — log errors and notify your team when retries are exhausted
+- Pass only IDs to job constructors — fetch full data inside `handle()`
+- Set `$tries`, `$backoff`, and `$timeout` explicitly — don't rely on defaults
+- Use multiple named queues with priority ordering for different job types
+- Use `ShouldBeUnique` interface to prevent duplicate jobs for the same resource
+- Run `php artisan queue:restart` after every deployment to reload code changes
+- Use Laravel Horizon in production for real-time queue monitoring
+
+<Callout type="tip">
+  Use `ShouldBeUnique` to prevent the same job running twice for the same model:
+```php
+  use Illuminate\Contracts\Queue\ShouldBeUnique;
+
+  class SyncUserToMailchimp implements ShouldQueue, ShouldBeUnique
+  {
+      public int $uniqueFor = 3600; // unique for 1 hour
+
+      public function uniqueId(): string
+      {
+          return $this->user->id; // one job per user at a time
+      }
+  }
+```
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between queue:work and queue:listen?" difficulty="easy">
+  `queue:work` loads the application once and keeps it in memory — processing jobs much faster. But it doesn't pick up code changes automatically — you must restart it after deployments with `queue:restart`. `queue:listen` reloads the application for every job — slower but always uses the latest code. Use `queue:work` in production for performance and `queue:listen` during development when code changes frequently.
+</InterviewQ>
+
+<InterviewQ question="Why should you pass only IDs to job constructors instead of full models?" difficulty="mid">
+  Jobs are serialized when pushed to the queue and unserialized when processed. Passing full Eloquent models serializes the entire model data. If the job sits in the queue for a while, the serialized data can become stale — the model in the queue doesn't reflect database changes made after dispatch. Passing only the ID and fetching fresh data inside `handle()` ensures you always work with the current database state. It also keeps the serialized payload small and fast.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between job chaining and job batching?" difficulty="mid">
+  Job chaining runs jobs sequentially — job 2 only starts after job 1 completes successfully. If any job fails, the chain stops. Use chaining when jobs depend on each other's results. Job batching runs jobs in parallel simultaneously — all jobs run at the same time. You can track overall progress and hook into `then`, `catch`, and `finally` callbacks. Use batching when jobs are independent and you want to process them as fast as possible.
+</InterviewQ>
+
+<InterviewQ question="How do you prevent a job from running multiple times simultaneously?" difficulty="hard">
+  Implement the `ShouldBeUnique` interface and define a `uniqueId()` method that returns a unique key for the job — usually the model ID. Laravel uses an atomic lock (via cache) to ensure only one instance of that job runs at a time. Set `$uniqueFor` to define how long the lock is held. This prevents race conditions when the same job gets dispatched multiple times quickly — like a user clicking a button twice.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The "pass IDs not models" rule took me a while to internalize. I had a bug where a job sent stale user data because the model was serialized at dispatch time but the user updated their email before the job ran. Now I always pass `$user->id` and fetch inside `handle()`.
+
+  Always implement `failed()`. I had jobs silently failing for weeks before I noticed because there was no logging. Now `failed()` is the first thing I write after `handle()`.
+
+  The `queue:restart` after deployment is easy to forget. Workers keep running old code after you deploy — `queue:restart` signals them to gracefully finish their current job and restart with the new code. Add it to your deployment script.
+
+  For local development I set `QUEUE_CONNECTION=sync` in `.env` — jobs run immediately without needing a worker. Switch to `redis` or `database` when testing actual queue behavior.
+</MyNotes>

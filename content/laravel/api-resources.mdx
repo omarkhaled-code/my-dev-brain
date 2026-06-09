@@ -1,0 +1,615 @@
+---
+title: "API Resources in Laravel"
+description: "How to transform Eloquent models into consistent JSON responses using Laravel API Resources — controlling what data gets exposed, adding computed fields, and structuring nested relationships"
+category: laravel
+tools: [laravel]
+tags: [api-resources, json, transformation, eloquent, laravel, rest]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - laravel/form-requests-validation
+  - laravel/policies-gates
+  - laravel/queues-jobs
+---
+
+## Concept explanation
+
+API Resources are transformation classes that sit between your Eloquent models and your JSON responses. Instead of returning raw models (which expose every column including sensitive ones), you define exactly what the response looks like. A `UserResource` controls which fields are returned, their names, their formats, and which relationships are included. This decouples your database schema from your API contract.
+
+```
+Controller fetches User model
+        ↓
+UserResource transforms it
+        ↓
+JSON response — only what you defined
+```
+
+## Why it's used
+
+- Hide sensitive fields (`password`, `remember_token`) from responses
+- Rename fields (`created_at` → `createdAt`) for frontend consistency
+- Add computed fields (`full_name`, `avatar_url`) not in the database
+- Control which relationships are included per endpoint
+- Consistent response structure across your entire API
+
+## Real-world use cases
+
+- Returning user data without exposing password or tokens
+- Formatting product data with computed discount percentage
+- Including nested relationships (post with author and comments)
+- Pagination responses with consistent metadata
+- Different resource shapes for list vs detail endpoints
+
+## Code example
+
+### Generate a Resource
+
+```bash
+# Single resource
+php artisan make:resource UserResource
+
+# Resource collection
+php artisan make:resource UserCollection
+
+# Both at once — resource + collection
+php artisan make:resource User --collection
+```
+
+### Basic Resource
+
+```php
+<?php
+// app/Http/Resources/UserResource.php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class UserResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'         => $this->id,
+            'name'       => $this->name,
+            'email'      => $this->email,
+            'role'       => $this->role,
+            'avatar'     => $this->avatar
+                                ? Storage::disk('public')->url($this->avatar)
+                                : null,
+            'created_at' => $this->created_at->toDateTimeString(),
+            'updated_at' => $this->updated_at->toDateTimeString(),
+            // ❌ password, remember_token NOT included — safely hidden
+        ];
+    }
+}
+```
+
+### Use Resource in controller
+
+```php
+<?php
+// app/Http/Controllers/Api/UserController.php
+
+use App\Http\Resources\UserResource;
+use App\Http\Resources\UserCollection;
+
+class UserController extends Controller
+{
+    // Return single resource
+    public function show(User $user): UserResource
+    {
+        return new UserResource($user);
+    }
+
+    // Return collection — wraps in data array automatically
+    public function index(): UserCollection
+    {
+        $users = User::paginate(15);
+        return new UserCollection($users);
+    }
+
+    // Or use ::collection() shorthand
+    public function index(): AnonymousResourceCollection
+    {
+        return UserResource::collection(User::paginate(15));
+    }
+}
+```
+
+### JSON response shape
+
+```json
+// Single resource — UserResource
+{
+    "data": {
+        "id": 1,
+        "name": "Omar Hassan",
+        "email": "omar@example.com",
+        "role": "admin",
+        "avatar": "https://myapp.com/storage/avatars/1/avatar.jpg",
+        "created_at": "2026-06-06 10:00:00"
+    }
+}
+
+// Collection — UserResource::collection()
+{
+    "data": [
+        { "id": 1, "name": "Omar Hassan", ... },
+        { "id": 2, "name": "Ahmed Ali",   ... }
+    ],
+    "links": {
+        "first": "https://myapp.com/api/users?page=1",
+        "last":  "https://myapp.com/api/users?page=5",
+        "prev":  null,
+        "next":  "https://myapp.com/api/users?page=2"
+    },
+    "meta": {
+        "current_page": 1,
+        "from":         1,
+        "last_page":    5,
+        "per_page":     15,
+        "to":           15,
+        "total":        75
+    }
+}
+```
+
+### Computed fields and formatting
+
+```php
+public function toArray(Request $request): array
+{
+    return [
+        'id'         => $this->id,
+        'name'       => $this->name,
+        'email'      => $this->email,
+
+        // Computed — not in database
+        'initials'   => collect(explode(' ', $this->name))
+                            ->map(fn($part) => strtoupper($part[0]))
+                            ->join(''),
+
+        // Format dates for frontend
+        'joined'     => $this->created_at->diffForHumans(),    // "3 months ago"
+        'joined_at'  => $this->created_at->toIso8601String(), // "2026-03-01T10:00:00+00:00"
+
+        // Conditional field
+        'is_admin'   => $this->role === 'admin',
+
+        // Formatted number
+        'balance'    => number_format($this->balance, 2),
+
+        // Full URL for storage files
+        'avatar_url' => $this->avatar
+                            ? Storage::disk('public')->url($this->avatar)
+                            : "https://ui-avatars.com/api/?name={$this->name}",
+    ];
+}
+```
+
+### Including relationships
+
+```php
+<?php
+// app/Http/Resources/PostResource.php
+
+class PostResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'         => $this->id,
+            'title'      => $this->title,
+            'slug'       => $this->slug,
+            'excerpt'    => $this->excerpt,
+            'content'    => $this->content,
+            'published'  => $this->published,
+            'created_at' => $this->created_at->toDateTimeString(),
+
+            // Nest UserResource inside PostResource
+            'author'     => new UserResource($this->user),
+
+            // Include comments collection
+            'comments'   => CommentResource::collection($this->comments),
+
+            // Include tags as plain array
+            'tags'       => $this->tags->pluck('name'),
+
+            // Count without loading relationship
+            'comments_count' => $this->comments_count,
+        ];
+    }
+}
+```
+
+### Conditional relationships — only load when needed
+
+```php
+public function toArray(Request $request): array
+{
+    return [
+        'id'    => $this->id,
+        'title' => $this->title,
+
+        // Only include if relationship was eager loaded
+        // Prevents N+1 — won't load if not already fetched
+        'author'   => new UserResource($this->whenLoaded('user')),
+        'comments' => CommentResource::collection($this->whenLoaded('comments')),
+        'tags'     => $this->whenLoaded('tags', fn() => $this->tags->pluck('name')),
+    ];
+}
+```
+
+```php
+// In controller — load only what you need
+public function show(Post $post): PostResource
+{
+    // Load relationships needed by the resource
+    $post->load(['user', 'comments.user', 'tags']);
+    return new PostResource($post);
+}
+
+public function index(): AnonymousResourceCollection
+{
+    // For list — skip comments to keep response light
+    $posts = Post::with(['user', 'tags'])->paginate(15);
+    return PostResource::collection($posts);
+}
+```
+
+### Conditional fields — show based on request or auth
+
+```php
+public function toArray(Request $request): array
+{
+    return [
+        'id'    => $this->id,
+        'name'  => $this->name,
+        'email' => $this->email,
+
+        // Only include phone if user is viewing their own profile
+        'phone' => $this->when(
+            $request->user()?->id === $this->id,
+            $this->phone
+        ),
+
+        // Only include for admins
+        'internal_notes' => $this->when(
+            $request->user()?->role === 'admin',
+            $this->internal_notes
+        ),
+
+        // Only include if field is not null
+        'deleted_at' => $this->when(
+            !is_null($this->deleted_at),
+            $this->deleted_at?->toDateTimeString()
+        ),
+
+        // Merge array conditionally
+        ...$this->when(
+            $request->user()?->role === 'admin',
+            [
+                'ip_address'  => $this->last_ip,
+                'login_count' => $this->login_count,
+            ]
+        ),
+    ];
+}
+```
+
+### Resource Collection with custom metadata
+
+```php
+<?php
+// app/Http/Resources/UserCollection.php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\ResourceCollection;
+
+class UserCollection extends ResourceCollection
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'data' => $this->collection,
+        ];
+    }
+
+    // Add custom metadata to the response
+    public function with(Request $request): array
+    {
+        return [
+            'meta' => [
+                'total_admins'  => $this->collection->where('role', 'admin')->count(),
+                'total_editors' => $this->collection->where('role', 'editor')->count(),
+                'generated_at'  => now()->toDateTimeString(),
+            ],
+        ];
+    }
+}
+```
+
+### Wrapping and unwrapping responses
+
+```php
+// By default resources wrap in "data" key:
+// { "data": { "id": 1, ... } }
+
+// Remove the "data" wrapper — globally
+// in AppServiceProvider::boot():
+JsonResource::withoutWrapping();
+
+// Remove wrapper for single response only
+return (new UserResource($user))->response()->setStatusCode(200);
+
+// Custom wrapper key
+return response()->json([
+    'user'    => new UserResource($user),
+    'success' => true,
+]);
+```
+
+### Standard API response wrapper
+
+```php
+<?php
+// app/Http/Resources/ApiResource.php
+// A base resource that adds consistent success/message fields
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class ApiResource extends JsonResource
+{
+    public string $message = 'Success';
+
+    public static function make(mixed $resource, string $message = 'Success'): static
+    {
+        $instance          = parent::make($resource);
+        $instance->message = $message;
+        return $instance;
+    }
+
+    public function with(Request $request): array
+    {
+        return [
+            'success' => true,
+            'message' => $this->message,
+        ];
+    }
+}
+```
+
+```php
+// Extend ApiResource instead of JsonResource
+class UserResource extends ApiResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'    => $this->id,
+            'name'  => $this->name,
+            'email' => $this->email,
+        ];
+    }
+}
+
+// Usage in controller
+return UserResource::make($user, 'User created successfully');
+
+// Response:
+// {
+//     "data": { "id": 1, "name": "Omar", "email": "omar@example.com" },
+//     "success": true,
+//     "message": "User created successfully"
+// }
+```
+
+### Full controller example
+
+```php
+<?php
+// app/Http/Controllers/Api/PostController.php
+
+use App\Http\Resources\PostResource;
+
+class PostController extends Controller
+{
+    public function index(): AnonymousResourceCollection
+    {
+        $posts = Post::with(['user', 'tags'])
+            ->withCount('comments')
+            ->latest()
+            ->paginate(15);
+
+        return PostResource::collection($posts);
+    }
+
+    public function show(Post $post): PostResource
+    {
+        $post->load(['user', 'comments.user', 'tags']);
+        return new PostResource($post);
+    }
+
+    public function store(StorePostRequest $request): PostResource
+    {
+        $post = Post::create([
+            ...$request->validated(),
+            'user_id' => $request->user()->id,
+        ]);
+
+        return new PostResource($post);
+    }
+
+    public function update(UpdatePostRequest $request, Post $post): PostResource
+    {
+        $this->authorize('update', $post);
+        $post->update($request->validated());
+        return new PostResource($post);
+    }
+
+    public function destroy(Post $post): JsonResponse
+    {
+        $this->authorize('delete', $post);
+        $post->delete();
+        return response()->json(null, 204);
+    }
+}
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Returning raw model — exposes everything including sensitive fields
+public function show(User $user): JsonResponse
+{
+    return response()->json($user); // ❌ exposes password, remember_token, etc.
+}
+
+// Also bad — returning all fields from resource
+public function toArray(Request $request): array
+{
+    return parent::toArray($request); // ❌ same as returning raw model
+}
+
+````
+</Wrong>
+<Right>
+```php
+// Always use a Resource — explicitly define what gets exposed
+public function show(User $user): UserResource
+{
+    return new UserResource($user); // ✅ only defined fields
+}
+
+public function toArray(Request $request): array
+{
+    return [
+        'id'    => $this->id,   // ✅ explicit fields only
+        'name'  => $this->name,
+        'email' => $this->email,
+        // password, remember_token — not listed = not exposed
+    ];
+}
+````
+
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Loading relationships inside the resource — causes N+1
+public function toArray(Request $request): array
+{
+    return [
+        'id'      => $this->id,
+        'author'  => new UserResource($this->user),       // ❌ N+1 query per post
+        'comments'=> CommentResource::collection($this->comments), // ❌ N+1
+    ];
+}
+```
+</Wrong>
+<Right>
+```php
+// Use whenLoaded() — only includes if already eager loaded
+public function toArray(Request $request): array
+{
+    return [
+        'id'      => $this->id,
+        'author'  => new UserResource($this->whenLoaded('user')),       // ✅
+        'comments'=> CommentResource::collection($this->whenLoaded('comments')), // ✅
+    ];
+}
+
+// Load in controller — one query for all posts
+$posts = Post::with(['user', 'comments'])->paginate(15); // ✅
+
+````
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always use `whenLoaded()` for relationships — prevents N+1 queries
+- Never call `parent::toArray()` — it exposes all model attributes
+- Load relationships in the controller with `with()` — not inside the resource
+- Store file paths in database, generate full URLs in the resource
+- Use `$this->when()` for fields that only certain users should see
+- Create separate resources for list vs detail views when they differ significantly
+- Use a base `ApiResource` class for consistent `success` and `message` fields
+
+<Callout type="tip">
+  Use `withCount()` in the controller query to include relationship counts without loading the full relationship:
+```php
+  $posts = Post::with(['user'])->withCount(['comments', 'likes'])->paginate(15);
+
+  // In resource:
+  'comments_count' => $this->comments_count, // from withCount — no extra query
+  'likes_count'    => $this->likes_count,
+````
+
+</Callout>
+
+## Interview questions
+
+<InterviewQ
+  question="Why use API Resources instead of returning Eloquent models directly?"
+  difficulty="easy"
+>
+  Returning models directly exposes every database column — including sensitive
+  fields like `password`, `remember_token`, and `email_verified_at`. It also
+  tightly couples your API response to your database schema — renaming a column
+  breaks your API. Resources let you define exactly what gets exposed, rename
+  fields, add computed properties, and control which relationships are included.
+  They decouple your database structure from your API contract.
+</InterviewQ>
+
+<InterviewQ question="What is whenLoaded() and why is it important?" difficulty="mid">
+  `whenLoaded('relationship')` includes a relationship in the resource output only if it was already eager loaded. Without it, accessing `$this->comments` inside a resource for a collection of posts triggers a separate database query for every post — the N+1 problem. With `whenLoaded`, the relationship is skipped if not loaded (no extra query) and included if it was loaded in the controller with `with()`. Always use it for relationships in resources.
+</InterviewQ>
+
+<InterviewQ question="How do you return different fields for different users in a Resource?" difficulty="mid">
+  Use `$this->when(condition, value)` to conditionally include fields. The condition gets the current request's authenticated user via `$request->user()`. For example `$this->when($request->user()?->role === 'admin', $this->internal_notes)` includes `internal_notes` only for admins. The field is completely omitted from the JSON (not set to null) when the condition is false — clean and secure.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between JsonResource and ResourceCollection?"
+  difficulty="easy"
+>
+  `JsonResource` transforms a single model instance. `ResourceCollection`
+  transforms a collection of models — it wraps them in a `data` array and
+  automatically includes pagination metadata (links, meta) when the collection
+  is paginated. You can customize `ResourceCollection` by overriding `toArray()`
+  and `with()` to add custom metadata like totals or filters to the response.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The `whenLoaded()` method is the most important thing in this file. Before I knew about it I had massive N+1 issues — every post in a list was firing separate queries for author and comments. Always use `whenLoaded()` in resources and always use `with()` in controllers.
+
+The `parent::toArray()` mistake is subtle — it looks right because it calls the parent method, but it actually just returns all model attributes as-is, defeating the whole purpose of having a resource. Always define fields explicitly.
+
+I use a base `ApiResource` class in every project that adds `success: true` and a `message` field to every response. Frontend developers love consistent response shapes — they can always check `response.data.success` and `response.data.message` regardless of the endpoint.
+
+The URL generation for storage files goes in the resource — not in the model or controller:
+
+```php
+  'avatar' => $this->avatar
+      ? Storage::disk('public')->url($this->avatar)
+      : null,
+```
+
+This keeps the URL generation in one place and makes it easy to switch disks later.
+
+</MyNotes>

@@ -1,0 +1,809 @@
+---
+title: "API Integration with Axios in Nuxt 3"
+description: "How to set up Axios in Nuxt 3 with interceptors, global error handling, per-request error handling, and CRUD patterns connected to a Laravel API through Nuxt server routes."
+category: api-integration
+tools: [vue, nuxt]
+tags: [axios, api, crud, nuxt, laravel, interceptors, typescript, error-handling]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+Axios in Nuxt 3 follows the same two-instance pattern as Next.js — one instance for server routes that reads the httpOnly cookie and calls Laravel, and one instance for client components that calls your Nuxt server routes.
+```tsx
+Server-side (server/api/ routes):
+axiosServer instance → reads httpOnly cookie → calls Laravel
+Client-side (components, composables):
+axiosClient instance → calls Nuxt server routes → never calls Laravel directly
+```
+**Axios vs $fetch in Nuxt:**
+
+| Feature | $fetch (ofetch) | Axios |
+|---------|----------------|-------|
+| Built-in | Yes | No — extra dependency |
+| JSON auto-parse | Yes | Yes |
+| Error on non-2xx | Yes | Yes |
+| Interceptors | onRequest / onResponseError | interceptors.request / response |
+| Progress tracking | No | Yes |
+| TypeScript | Good | Excellent |
+| Bundle size | ~7kb | ~14kb |
+
+<Callout type="note">
+  **When to use Axios over $fetch in Nuxt?** Use $fetch for most cases —
+  it is built in and integrates perfectly with Nuxt. Use Axios when your
+  team already uses it across projects, when you need upload progress
+  tracking, or when you want the exact same HTTP client code to work in
+  both your Next.js and Nuxt projects.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **Consistency:** Same Axios patterns work in Next.js and Nuxt — one mental model across projects.
+- **Interceptors:** Global error handling, logging, and token refresh in one place.
+- **Upload progress:** `onUploadProgress` for file uploads — not available in $fetch.
+- **TypeScript:** Full generic support with excellent type inference.
+- **Timeout:** Global timeout configuration.
+
+---
+
+## Real-World Use Cases
+
+- **Cross-project consistency:** Team uses Axios in Next.js projects — same instance pattern in Nuxt.
+- **Global 401 handling:** Interceptor catches every 401, clears Pinia store, redirects to login.
+- **File upload with progress bar:** Track upload progress with `onUploadProgress`.
+- **Request logging:** Log every outgoing request in development with one interceptor.
+- **Error normalization:** Transform Laravel error shapes into consistent format in one place.
+
+---
+
+## When NOT to Use It
+
+- **Simple data fetching:** `useFetch` is built in, SSR-aware, and zero bundle cost — use it for page data.
+- **When $fetch is enough:** For most Nuxt projects `$fetch` with `onResponseError` covers everything Axios does.
+- **Server routes:** Using Axios in server routes adds complexity — the built-in `$fetch` from ofetch works perfectly there.
+
+---
+
+## Code Examples
+
+### Install
+
+```bash
+npm install axios
+```
+
+---
+
+### Base Types
+
+```ts
+// lib/types/api.ts
+export interface PaginatedResponse<T> {
+  data: T[]
+  current_page: number
+  last_page: number
+  per_page: number
+  total: number
+  next_page_url: string | null
+  prev_page_url: string | null
+}
+
+export interface ApiError {
+  message: string
+  errors?: Record<string, string[]>
+  status: number
+}
+
+export interface Post {
+  id: string
+  title: string
+  body: string
+  user_id: string
+  created_at: string
+  updated_at: string
+}
+
+export interface User {
+  id: string
+  name: string
+  email: string
+  role: string
+}
+```
+
+---
+
+### Server-Side Axios Instance — For Server Routes
+
+```ts
+// server/utils/axiosServer.ts
+// Used inside server/api/ routes — reads httpOnly cookie, calls Laravel
+import axios from 'axios'
+import { H3Event } from 'h3'
+import type { ApiError } from '~/lib/types/api'
+
+export function createServerAxios(event: H3Event) {
+  const token = getCookie(event, 'auth_token')
+
+  if (!token) {
+    throw createError({ statusCode: 401, message: 'Unauthorized' })
+  }
+
+  const instance = axios.create({
+    baseURL: process.env.LARAVEL_API_URL,
+    timeout: 10000,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  // Normalize Laravel errors
+  instance.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      const status = error.response?.status
+      const data = error.response?.data
+
+      throw createError({
+        statusCode: status ?? 500,
+        message: data?.message ?? 'Something went wrong',
+        data: { errors: data?.errors },
+      })
+    }
+  )
+
+  return instance
+}
+```
+
+---
+
+### Client-Side Axios Instance — For Components
+
+```ts
+// lib/api/axiosClient.ts
+// Used in components and composables — calls Nuxt server routes only
+import axios from 'axios'
+import type { ApiError } from '@/lib/types/api'
+
+const axiosClient = axios.create({
+  baseURL: '/api', // calls own Nuxt server routes
+  timeout: 10000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+})
+
+// Request interceptor — log in development
+axiosClient.interceptors.request.use((config) => {
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[API] ${config.method?.toUpperCase()} ${config.url}`)
+  }
+  return config
+})
+
+// Response interceptor — global error handling
+axiosClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error.response?.status
+    const data = error.response?.data
+
+    // Global 401 — clear Pinia store and redirect
+    if (status === 401 && process.client) {
+      useAuthStore().clearUser()
+      navigateTo('/login')
+      return Promise.reject(error)
+    }
+
+    const apiError: ApiError = {
+      message: data?.message ?? 'Something went wrong',
+      errors: data?.errors,
+      status: status ?? 500,
+    }
+
+    return Promise.reject(apiError)
+  }
+)
+
+export { axiosClient }
+```
+
+---
+
+### Nuxt Plugin — Register Axios Globally
+
+```ts
+// plugins/axios.client.ts
+// Makes axiosClient available as $axios throughout the app
+import { axiosClient } from '@/lib/api/axiosClient'
+
+export default defineNuxtPlugin(() => {
+  return {
+    provide: {
+      axios: axiosClient,
+    },
+  }
+})
+
+// Usage in any component:
+// const { $axios } = useNuxtApp()
+// const { data } = await $axios.get<Post[]>('/posts')
+```
+
+---
+
+### Server Routes — CRUD with Axios
+
+```ts
+// server/api/posts/index.get.ts — GET list
+import type { PaginatedResponse, Post } from '~/lib/types/api'
+
+export default defineEventHandler(async (event) => {
+  const query = getQuery(event)
+  const page = query.page ?? 1
+  const perPage = query.per_page ?? 15
+
+  const axios = createServerAxios(event)
+  const { data } = await axios.get<PaginatedResponse<Post>>(
+    `/posts?page=${page}&per_page=${perPage}`
+  )
+
+  return data
+})
+```
+
+```ts
+// server/api/posts/index.post.ts — POST create
+import type { Post } from '~/lib/types/api'
+
+export default defineEventHandler(async (event) => {
+  const body = await readBody(event)
+
+  const axios = createServerAxios(event)
+  const { data } = await axios.post<Post>('/posts', body)
+
+  return data
+})
+```
+
+```ts
+// server/api/posts/[id].get.ts — GET single
+import type { Post } from '~/lib/types/api'
+
+export default defineEventHandler(async (event) => {
+  const id = getRouterParam(event, 'id')
+
+  const axios = createServerAxios(event)
+  const { data } = await axios.get<Post>(`/posts/${id}`)
+
+  return data
+})
+```
+
+```ts
+// server/api/posts/[id].patch.ts — PATCH update
+import type { Post } from '~/lib/types/api'
+
+export default defineEventHandler(async (event) => {
+  const id = getRouterParam(event, 'id')
+  const body = await readBody(event)
+
+  const axios = createServerAxios(event)
+  const { data } = await axios.patch<Post>(`/posts/${id}`, body)
+
+  return data
+})
+```
+
+```ts
+// server/api/posts/[id].delete.ts — DELETE
+export default defineEventHandler(async (event) => {
+  const id = getRouterParam(event, 'id')
+
+  const axios = createServerAxios(event)
+  await axios.delete(`/posts/${id}`)
+
+  return { success: true }
+})
+```
+
+---
+
+### Page — useFetch with Axios-powered Server Routes
+
+```vue
+<!-- pages/posts/index.vue -->
+<script setup lang="ts">
+import type { PaginatedResponse, Post } from '@/lib/types/api'
+
+const page = ref(1)
+
+// useFetch calls our server route which uses Axios internally
+const {
+  data,
+  pending,
+  error,
+  refresh,
+} = await useFetch<PaginatedResponse<Post>>('/api/posts', {
+  query: computed(() => ({ page: page.value, per_page: 15 })),
+  watch: [page],
+})
+
+async function handleDelete(id: string) {
+  try {
+    await $fetch(`/api/posts/${id}`, { method: 'DELETE' })
+    refresh()
+  } catch (err: any) {
+    alert(err.data?.message ?? 'Failed to delete')
+  }
+}
+</script>
+
+<template>
+  <div>
+    <div v-if="pending">Loading...</div>
+    <div v-else-if="error">{{ error.data?.message }}</div>
+
+    <template v-else-if="data">
+      <ul>
+        <li v-for="post in data.data" :key="post.id">
+          <span>{{ post.title }}</span>
+          <button @click="handleDelete(post.id)">Delete</button>
+        </li>
+      </ul>
+
+      <div>
+        <button @click="page--" :disabled="page === 1">Previous</button>
+        <span>Page {{ page }} of {{ data.last_page }}</span>
+        <button @click="page++" :disabled="page === data.last_page">Next</button>
+      </div>
+    </template>
+  </div>
+</template>
+```
+
+---
+
+### Component — axiosClient for Mutations
+
+```vue
+<!-- components/posts/CreatePost.vue -->
+<script setup lang="ts">
+import { axiosClient } from '@/lib/api/axiosClient'
+import type { Post, ApiError } from '@/lib/types/api'
+
+const title = ref('')
+const loading = ref(false)
+const error = ref<string | null>(null)
+const fieldErrors = ref<Record<string, string>>({})
+
+const emit = defineEmits<{ created: [post: Post] }>()
+
+async function handleCreate() {
+  loading.value = true
+  error.value = null
+  fieldErrors.value = {}
+
+  try {
+    const { data } = await axiosClient.post<Post>('/posts', {
+      title: title.value,
+      body: '',
+    })
+
+    title.value = ''
+    emit('created', data)
+  } catch (err) {
+    const apiError = err as ApiError
+
+    if (apiError.errors) {
+      Object.entries(apiError.errors).forEach(([field, messages]) => {
+        fieldErrors.value[field] = messages[0]
+      })
+    } else {
+      error.value = apiError.message
+    }
+  } finally {
+    loading.value = false
+  }
+}
+</script>
+
+<template>
+  <div>
+    <input v-model="title" placeholder="Post title" />
+    <p v-if="fieldErrors.title">{{ fieldErrors.title }}</p>
+    <p v-if="error">{{ error }}</p>
+
+    <button @click="handleCreate" :disabled="loading">
+      {{ loading ? 'Creating...' : 'Create Post' }}
+    </button>
+  </div>
+</template>
+```
+
+---
+
+### Advanced — Token Refresh Interceptor
+
+```ts
+// lib/api/axiosClient.ts — with token refresh
+import axios from 'axios'
+import type { ApiError } from '@/lib/types/api'
+
+const axiosClient = axios.create({
+  baseURL: '/api',
+  timeout: 10000,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+let isRefreshing = false
+let failedQueue: Array<{
+  resolve: (value: unknown) => void
+  reject: (reason?: unknown) => void
+}> = []
+
+function processQueue(error: unknown) {
+  failedQueue.forEach(({ resolve, reject }) => {
+    if (error) reject(error)
+    else resolve(null)
+  })
+  failedQueue = []
+}
+
+axiosClient.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config
+    const status = error.response?.status
+
+    if (status === 401 && !originalRequest._retry) {
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject })
+        }).then(() => axiosClient(originalRequest))
+          .catch((err) => Promise.reject(err))
+      }
+
+      originalRequest._retry = true
+      isRefreshing = true
+
+      try {
+        await axiosClient.post('/auth/refresh')
+        processQueue(null)
+        return axiosClient(originalRequest)
+      } catch (refreshError) {
+        processQueue(refreshError)
+        if (process.client) {
+          useAuthStore().clearUser()
+          navigateTo('/login')
+        }
+        return Promise.reject(refreshError)
+      } finally {
+        isRefreshing = false
+      }
+    }
+
+    const data = error.response?.data
+    const apiError: ApiError = {
+      message: data?.message ?? 'Something went wrong',
+      errors: data?.errors,
+      status: status ?? 500,
+    }
+
+    return Promise.reject(apiError)
+  }
+)
+
+export { axiosClient }
+```
+
+---
+
+### File Upload with Progress
+
+```vue
+<!-- components/FileUpload.vue -->
+<script setup lang="ts">
+import { axiosClient } from '@/lib/api/axiosClient'
+
+const progress = ref(0)
+const uploading = ref(false)
+const uploadedUrl = ref<string | null>(null)
+
+async function handleUpload(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+
+  const formData = new FormData()
+  formData.append('file', file)
+
+  uploading.value = true
+  progress.value = 0
+
+  try {
+    const { data } = await axiosClient.post<{ url: string }>(
+      '/upload',
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (progressEvent) => {
+          progress.value = Math.round(
+            (progressEvent.loaded * 100) / (progressEvent.total ?? 1)
+          )
+        },
+      }
+    )
+    uploadedUrl.value = data.url
+  } catch (error: any) {
+    console.error('Upload failed:', error.message)
+  } finally {
+    uploading.value = false
+  }
+}
+</script>
+
+<template>
+  <div>
+    <input type="file" @change="handleUpload" :disabled="uploading" />
+
+    <div v-if="uploading">
+      <div :style="{ width: `${progress}%` }" />
+      <span>{{ progress }}%</span>
+    </div>
+
+    <img v-if="uploadedUrl" :src="uploadedUrl" alt="Uploaded" />
+  </div>
+</template>
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```ts
+// Using axiosClient (browser) inside a server route — wrong instance
+// server/api/posts/index.get.ts
+import { axiosClient } from '@/lib/api/axiosClient'
+
+export default defineEventHandler(async (event) => {
+  const { data } = await axiosClient.get('/posts') // ❌ calls /api/posts on itself
+})
+```
+</Wrong>
+<Right>
+```ts
+// Use createServerAxios in server routes
+export default defineEventHandler(async (event) => {
+  const axios = createServerAxios(event) // ✅ reads cookie, calls Laravel
+  const { data } = await axios.get('/posts')
+})
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Using window inside interceptor — crashes on server-side rendering
+axiosClient.interceptors.response.use(null, (error) => {
+  if (error.response?.status === 401) {
+    window.location.href = '/login' // ❌ window does not exist on server
+  }
+})
+```
+</Wrong>
+<Right>
+```ts
+// Check process.client before using browser APIs
+axiosClient.interceptors.response.use(null, (error) => {
+  if (error.response?.status === 401 && process.client) {
+    navigateTo('/login') // ✅ Nuxt's navigateTo works everywhere
+  }
+})
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Calling useAuthStore() at module level — no active Pinia instance
+const auth = useAuthStore() // ❌ called outside setup/plugin context
+
+axiosClient.interceptors.response.use(null, (error) => {
+  if (error.response?.status === 401) {
+    auth.clearUser() // might work but unreliable
+  }
+})
+```
+</Wrong>
+<Right>
+```ts
+// Call useAuthStore() inside the interceptor function — called at runtime
+axiosClient.interceptors.response.use(null, (error) => {
+  if (error.response?.status === 401 && process.client) {
+    useAuthStore().clearUser() // ✅ called inside function, Pinia is active
+    navigateTo('/login')
+  }
+})
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** In Nuxt 3, `axiosClient.ts` is imported during SSR as well as on the client. Any browser API in your interceptors (`window`, `document`, `localStorage`) will crash on the server. Always guard with `process.client` or use Nuxt composables like `navigateTo` that work in both environments.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Two separate instances: `server/utils/axiosServer.ts` for server routes, `lib/api/axiosClient.ts` for components
+- Register interceptors once at module level — never inside composables or components
+- Always type Axios calls: `axios.get<Post>('/posts/1')`
+- Use `process.client` guard for any browser API inside interceptors
+
+**Performance tips**
+```ts
+// Cancel requests when component unmounts
+const controller = new AbortController()
+
+onMounted(async () => {
+  try {
+    const { data } = await axiosClient.get('/posts', {
+      signal: controller.signal,
+    })
+    posts.value = data.data
+  } catch (err) {
+    if (axios.isCancel(err)) return // ignore cancellation
+    error.value = (err as ApiError).message
+  }
+})
+
+onUnmounted(() => controller.abort())
+```
+
+**Security considerations**
+- Never add the Bearer token to `axiosClient` — it runs in the browser
+- Keep `createServerAxios` in `server/utils/` — Nuxt prevents server utils from being imported in client code
+- Never log Axios config in production — the Authorization header is in `config.headers`
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="When would you choose Axios over $fetch in a Nuxt 3 project?"
+  difficulty="easy"
+>
+  Choose Axios when you need upload progress tracking via `onUploadProgress`,
+  when your team already uses Axios across Next.js and Nuxt projects and wants
+  consistency, or when you need the full interceptor system with request
+  queuing for token refresh. For most data fetching cases, `$fetch` and
+  `useFetch` are built in and cover everything without the extra bundle cost.
+</InterviewQ>
+
+<InterviewQ
+  question="Why do you call useAuthStore() inside the interceptor function rather than at module level?"
+  difficulty="mid"
+>
+  Pinia requires an active app instance to be created before you can use
+  stores. When `axiosClient.ts` is first imported and the module is evaluated,
+  the Nuxt app and Pinia might not be initialized yet — especially during SSR.
+  Calling `useAuthStore()` inside the interceptor function means it runs at
+  request time, after the app and Pinia are fully initialized. At module level
+  it runs at import time which is too early.
+</InterviewQ>
+
+<InterviewQ
+  question="How does process.client protect your interceptors in Nuxt?"
+  difficulty="mid"
+>
+  Nuxt renders pages on both the server and the client. `process.client` is
+  `true` only in the browser — it is `false` during SSR on Node.js. Wrapping
+  browser APIs like `window.location`, `localStorage`, or DOM manipulation in
+  `process.client` guards ensures they never execute during server-side
+  rendering where they would throw a ReferenceError. Nuxt composables like
+  `navigateTo` handle this internally, which is why they are preferred over
+  `window.location.href` in Nuxt code.
+</InterviewQ>
+
+<InterviewQ
+  question="Why does createServerAxios take the H3Event as a parameter instead of reading the cookie globally?"
+  difficulty="hard"
+>
+  In Nuxt server routes, each request is an isolated H3Event object. There
+  is no global request context like `req` in Express — the event is passed
+  explicitly through the call chain. `getCookie(event, 'auth_token')` reads
+  the cookie from that specific request's headers. If you tried to read the
+  cookie globally or from a module-level variable, you would either get
+  undefined or accidentally share state between concurrent requests from
+  different users — a serious security bug. The event parameter makes the
+  per-request isolation explicit and safe.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The `process.client` guard in interceptors is the most important Nuxt-specific
+  thing to remember when using Axios. I hit the `window is not defined` crash
+  in production on first deploy because I forgot the guard. Nuxt SSR runs your
+  JavaScript on Node.js — anything browser-specific needs the guard.
+</MyNotes>
+
+<MyNotes>
+  I keep `createServerAxios` in `server/utils/` specifically because Nuxt
+  auto-imports from that folder only in server routes — it is impossible to
+  accidentally import it in a component. This is better than a naming
+  convention alone.
+</MyNotes>
+
+<MyNotes>
+  For most Nuxt projects I actually use $fetch and only add Axios when I
+  specifically need upload progress. The built-in $fetch with onResponseError
+  covers 95% of use cases with zero bundle cost. Axios is a tool I reach for
+  when I have a specific reason, not a default.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### useAxiosQuery Composable
+
+```ts
+// composables/useAxiosQuery.ts
+import { axiosClient } from '@/lib/api/axiosClient'
+import type { ApiError } from '@/lib/types/api'
+import axios from 'axios'
+
+export function useAxiosQuery<T>(
+  url: string,
+  params?: Record<string, unknown>
+) {
+  const data = ref<T | null>(null)
+  const loading = ref(true)
+  const error = ref<string | null>(null)
+
+  onMounted(async () => {
+    const controller = new AbortController()
+
+    try {
+      const response = await axiosClient.get<T>(url, {
+        params,
+        signal: controller.signal,
+      })
+      data.value = response.data
+    } catch (err) {
+      if (axios.isCancel(err)) return
+      error.value = (err as ApiError).message
+    } finally {
+      loading.value = false
+    }
+
+    onUnmounted(() => controller.abort())
+  })
+
+  return { data, loading, error }
+}
+
+// Usage:
+// const { data, loading, error } = useAxiosQuery<PaginatedResponse<Post>>(
+//   '/posts',
+//   { page: 1 }
+// )
+```
+
+---
+
+*Tags: `nuxt` `vue` `axios` `api` `crud` `interceptors` `laravel` `typescript` `intermediate`*

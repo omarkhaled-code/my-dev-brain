@@ -1,0 +1,428 @@
+---
+title: "Dropdown Menu with Next.js + Tailwind CSS"
+description: "How to build a reusable, accessible dropdown menu in Next.js with click outside to close, keyboard navigation, positioning, and smooth animations using Tailwind CSS"
+category: ui-patterns
+tools: [nextjs, tailwind]
+tags: [dropdown, menu, select, accessible, keyboard-navigation, app-router]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - ui-patterns/dropdown-vue
+  - ui-patterns/navbar-nextjs
+  - ui-patterns/toast-nextjs
+---
+
+## Concept explanation
+
+A dropdown menu in React/Next.js uses `useState` to control open/closed state, `useRef` to reference the trigger/panel elements, and `useEffect` to attach and clean up outside-click and keyboard listeners. The trigger accepts `children` as a render prop so the dropdown works with any custom button — avatar, icon, text button, or anything else.
+
+<Callout type="note">
+  **Next.js vs React difference:** This component is pure React — no Next.js-specific APIs. Works identically in plain React (Vite). Just copy it and use it anywhere.
+</Callout>
+
+## Why it's used
+
+- Saves space by hiding options until needed
+- Groups related actions under one trigger
+- More flexible than a native `<select>` — supports icons, dividers, custom styling
+- Standard pattern users already know from every OS and web app
+
+## Real-world use cases
+
+- User avatar menu (profile, settings, logout)
+- Table row actions (edit, duplicate, delete)
+- Filter menu (sort by, filter by status)
+- Language / theme switcher
+- Share menu with options
+
+## Code example
+
+### Basic dropdown component
+
+```tsx
+// components/Dropdown.tsx
+"use client";
+
+import {
+  useState,
+  useRef,
+  useEffect,
+  type ReactNode,
+} from "react";
+
+type DropdownItem = {
+  label: string;
+  icon?: string;
+  danger?: boolean;
+  divider?: boolean;
+  onClick?: () => void;
+};
+
+type Props = {
+  items: DropdownItem[];
+  align?: "left" | "right";
+  trigger: ReactNode;
+};
+
+export function Dropdown({ items, align = "left", trigger }: Props) {
+  const [isOpen, setIsOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    const handleMouseDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => document.removeEventListener("mousedown", handleMouseDown);
+  }, []);
+
+  // Close on Escape key
+  useEffect(() => {
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsOpen(false);
+    };
+    if (isOpen) document.addEventListener("keydown", handleKeydown);
+    return () => document.removeEventListener("keydown", handleKeydown);
+  }, [isOpen]);
+
+  const handleItemClick = (item: DropdownItem) => {
+    item.onClick?.();
+    setIsOpen(false);
+  };
+
+  return (
+    <div className="relative inline-block" ref={ref}>
+
+      {/* Trigger */}
+      <div onClick={() => setIsOpen((prev) => !prev)}>
+        {trigger}
+      </div>
+
+      {/* Panel */}
+      {isOpen && (
+        <div
+          className={`
+            absolute top-full mt-1.5 z-50 min-w-44
+            bg-white dark:bg-neutral-900
+            border border-neutral-200 dark:border-neutral-700
+            rounded-xl shadow-lg py-1 overflow-hidden
+            animate-in fade-in zoom-in-95 duration-150
+            ${align === "right" ? "right-0" : "left-0"}
+          `}
+          role="menu"
+        >
+          {items.map((item, i) =>
+            item.divider ? (
+              <div
+                key={i}
+                className="my-1 border-t border-neutral-100 dark:border-neutral-800"
+              />
+            ) : (
+              <button
+                key={i}
+                onClick={() => handleItemClick(item)}
+                className={`
+                  w-full flex items-center gap-2.5 px-3 py-2 text-sm
+                  transition-colors text-left
+                  ${item.danger
+                    ? "text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
+                    : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                  }
+                `}
+                role="menuitem"
+              >
+                {item.icon && <span className="text-base">{item.icon}</span>}
+                {item.label}
+              </button>
+            )
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### How to use it — user avatar menu
+
+```tsx
+// components/AppHeader.tsx
+"use client";
+
+import { useRouter } from "next/navigation";
+import { Dropdown } from "@/components/Dropdown";
+
+export function AppHeader() {
+  const router = useRouter();
+
+  const userMenuItems = [
+    { label: "My Profile",  icon: "👤", onClick: () => router.push("/profile") },
+    { label: "Settings",    icon: "⚙️", onClick: () => router.push("/settings") },
+    { label: "Help",        icon: "❓", onClick: () => router.push("/help") },
+    { divider: true },
+    {
+      label: "Sign out",
+      icon: "🚪",
+      danger: true,
+      onClick: async () => {
+        await signOut();
+        router.push("/login");
+      },
+    },
+  ];
+
+  return (
+    <header className="flex items-center justify-between px-6 h-14 border-b border-neutral-200 dark:border-neutral-800">
+      <span className="font-semibold">Dashboard</span>
+
+      <Dropdown
+        items={userMenuItems}
+        align="right"
+        trigger={
+          <button className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+            <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-medium">
+              O
+            </div>
+            <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+              Omar
+            </span>
+            <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        }
+      />
+    </header>
+  );
+}
+```
+
+### Table row actions dropdown
+
+```tsx
+// components/RowActions.tsx
+"use client";
+
+import { Dropdown } from "@/components/Dropdown";
+
+type Props = {
+  onEdit:      () => void;
+  onDuplicate: () => void;
+  onDelete:    () => void;
+};
+
+export function RowActions({ onEdit, onDuplicate, onDelete }: Props) {
+  const items = [
+    { label: "Edit",      icon: "✏️",  onClick: onEdit },
+    { label: "Duplicate", icon: "📋", onClick: onDuplicate },
+    { divider: true },
+    { label: "Delete",    icon: "🗑️",  danger: true, onClick: onDelete },
+  ];
+
+  return (
+    <Dropdown
+      items={items}
+      align="right"
+      trigger={
+        <button className="p-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors text-neutral-400">
+          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="5" r="1.5" />
+            <circle cx="12" cy="12" r="1.5" />
+            <circle cx="12" cy="19" r="1.5" />
+          </svg>
+        </button>
+      }
+    />
+  );
+}
+```
+
+### With checkbox items (filter dropdown)
+
+```tsx
+// components/FilterDropdown.tsx
+"use client";
+
+import { useState, useRef, useEffect } from "react";
+
+type Filter = {
+  label: string;
+  checked: boolean;
+};
+
+export function FilterDropdown() {
+  const [isOpen, setIsOpen] = useState(false);
+  const [filters, setFilters] = useState<Filter[]>([
+    { label: "Active",   checked: true },
+    { label: "Inactive", checked: false },
+    { label: "Pending",  checked: true },
+  ]);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const activeCount = filters.filter((f) => f.checked).length;
+
+  useEffect(() => {
+    const handleMouseDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => document.removeEventListener("mousedown", handleMouseDown);
+  }, []);
+
+  const toggleFilter = (index: number) => {
+    setFilters((prev) =>
+      prev.map((f, i) => (i === index ? { ...f, checked: !f.checked } : f))
+    );
+  };
+
+  return (
+    <div className="relative inline-block" ref={ref}>
+      <button
+        onClick={() => setIsOpen((prev) => !prev)}
+        className="flex items-center gap-2 px-3 py-2 text-sm border border-neutral-200 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
+      >
+        🔽 Filter
+        {activeCount > 0 && (
+          <span className="text-xs bg-blue-600 text-white rounded-full w-4 h-4 flex items-center justify-center">
+            {activeCount}
+          </span>
+        )}
+      </button>
+
+      {isOpen && (
+        <div className="absolute top-full mt-1.5 left-0 z-50 w-48 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-xl shadow-lg p-2">
+          <p className="text-xs font-semibold text-neutral-400 uppercase tracking-wider px-2 mb-2">
+            Status
+          </p>
+          {filters.map((filter, i) => (
+            <label
+              key={filter.label}
+              className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                checked={filter.checked}
+                onChange={() => toggleFilter(i)}
+                className="rounded border-neutral-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm text-neutral-700 dark:text-neutral-300">
+                {filter.label}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```tsx
+// Using click on window — dropdown opens and immediately
+// closes on first click because both handlers fire together
+useEffect(() => {
+  window.addEventListener("click", handleClose) // ❌
+  return () => window.removeEventListener("click", handleClose)
+}, [])
+```
+</Wrong>
+<Right>
+```tsx
+// Use mousedown on document — fires before click
+// so open and close don't conflict on the trigger
+useEffect(() => {
+  document.addEventListener("mousedown", handleClose) // ✅
+  return () => document.removeEventListener("mousedown", handleClose)
+}, [])
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Passing onClick directly on the wrapper div
+// Every click inside the panel also triggers the toggle
+<div onClick={() => setIsOpen(prev => !prev)}>
+  <button>Trigger</button>
+  {isOpen && (
+    <div> {/* ❌ clicks here bubble up and close the dropdown */}
+      <button onClick={handleAction}>Action</button>
+    </div>
+  )}
+</div>
+```
+</Wrong>
+<Right>
+```tsx
+// Separate trigger div from panel div
+// Panel clicks don't bubble to the toggle handler
+<div ref={ref}>
+  <div onClick={() => setIsOpen(prev => !prev)}> {/* trigger only */}
+    <button>Trigger</button>
+  </div>
+  {isOpen && (
+    <div> {/* ✅ panel is separate — no bubbling issue */}
+      <button onClick={handleAction}>Action</button>
+    </div>
+  )}
+</div>
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Use `mousedown` not `click` on document for outside-click — avoids open/close conflict
+- Always clean up `addEventListener` in the `useEffect` return function
+- Close on `Escape` key for keyboard accessibility
+- Add `role="menu"` to panel and `role="menuitem"` to each button
+- Accept `trigger` as a prop (not children) so the dropdown is fully composable
+- Add `align` prop to control left/right panel positioning
+- Close the dropdown after any item is clicked
+
+<Callout type="tip">
+  For production apps with complex positioning (dropdown near viewport edges, inside modals or scrollable containers), use **Floating UI**:
+```bash
+  npm install @floating-ui/react
+```
+  It handles all edge cases — flip, shift, auto-placement — automatically.
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="Why use mousedown instead of click for outside click detection in React?" difficulty="mid">
+  If you toggle the dropdown on `click` of the trigger and close it on `click` of the document, both handlers fire in the same event cycle — the dropdown opens and immediately closes. `mousedown` fires before `click`, so the outside-click handler runs first, then the toggle runs. This means clicking outside closes it cleanly, and clicking the trigger toggles it correctly without the conflict.
+</InterviewQ>
+
+<InterviewQ question="How do you handle a dropdown that gets clipped by overflow:hidden on a parent?" difficulty="hard">
+  Use a React Portal (`createPortal`) to render the dropdown panel at `document.body` level, positioned absolutely using the trigger's `getBoundingClientRect()` coordinates. This escapes the parent's overflow context entirely. Floating UI handles this automatically — it uses the portal approach internally and recalculates position on scroll and resize.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between a Dropdown and a Select element?" difficulty="easy">
+  A native `<select>` is a browser-native form control — it's accessible by default, works without JS, and submits with forms. A custom dropdown is a styled div — fully customizable with icons, images, dividers, and complex layouts, but requires manual accessibility implementation. Use native `<select>` for simple form inputs. Use custom dropdowns for action menus, user avatar menus, and cases where you need custom styling or complex item content.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The `trigger` prop pattern is the best decision for reusability. Instead of always rendering a default button, you accept any ReactNode as the trigger. This lets you use the same `Dropdown` component for:
+  - Avatar button in the header
+  - Three-dot icon in table rows
+  - Text button with chevron in filters
+  - Any future trigger you need
+
+  The `mousedown` vs `click` bug is the classic first-time mistake. Symptom: dropdown opens then immediately closes on the first click. Fix: always use `mousedown` on document.
+
+  **Vue vs React difference:** Vue uses `onMounted`/`onUnmounted` lifecycle hooks and a template ref. React uses `useEffect` and `useRef`. The logic is identical — attach on mount, detach on unmount, check if click is inside the ref element.
+</MyNotes>

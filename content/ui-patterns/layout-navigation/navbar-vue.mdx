@@ -1,0 +1,307 @@
+---
+title: "Responsive Navbar with Vue + Tailwind CSS"
+description: "How to build a fully responsive navigation bar in Vue 3 with mobile hamburger menu, dropdown support, and active link highlighting using Tailwind CSS"
+category: ui-patterns
+subcategory: layout-navigation
+tools: [vue, tailwind]
+tags: [navbar, navigation, responsive, hamburger, dropdown]
+difficulty: beginner
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - ui-patterns/navbar-react
+  - ui-patterns/sidebar-vue
+---
+
+## Concept explanation
+
+A responsive navbar collapses into a hamburger menu on mobile and expands into a horizontal nav on desktop. In Vue 3, we manage the open/closed state with `ref()` and toggle it on click. Tailwind CSS handles the responsive breakpoints with `md:` prefixes — no custom CSS needed.
+
+## Why it's used
+
+- Mobile traffic is over 50% for most apps — a desktop-only navbar breaks the UX completely
+- Tailwind's utility classes make responsive design declarative and fast
+- Vue's reactivity system makes toggle state trivial to manage
+
+## Real-world use cases
+
+- SaaS dashboards with top navigation
+- Marketing sites with links + CTA button
+- Portfolio sites with smooth scroll links
+- Admin panels with user avatar dropdown
+
+## Code example
+
+### Basic responsive navbar
+
+```vue
+<!-- components/AppNavbar.vue -->
+<script setup lang="ts">
+import { ref } from 'vue'
+import { useRoute } from 'vue-router'
+
+const route = useRoute()
+const isOpen = ref(false)
+
+const links = [
+  { label: 'Home',     to: '/' },
+  { label: 'About',    to: '/about' },
+  { label: 'Projects', to: '/projects' },
+  { label: 'Contact',  to: '/contact' },
+]
+
+const isActive = (path: string) => route.path === path
+</script>
+
+<template>
+  <nav class="bg-white border-b border-neutral-200 sticky top-0 z-50">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+
+        <!-- Logo -->
+        <RouterLink to="/" class="text-lg font-bold text-neutral-900">
+          🧠 DevBrain
+        </RouterLink>
+
+        <!-- Desktop links -->
+        <div class="hidden md:flex items-center gap-6">
+          <RouterLink
+            v-for="link in links"
+            :key="link.to"
+            :to="link.to"
+            :class="[
+              'text-sm font-medium transition-colors',
+              isActive(link.to)
+                ? 'text-blue-600'
+                : 'text-neutral-600 hover:text-neutral-900'
+            ]"
+          >
+            {{ link.label }}
+          </RouterLink>
+
+          <!-- CTA Button -->
+          
+            href="#"
+            class="text-sm font-medium bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Get Started
+          </a>
+        </div>
+
+        <!-- Mobile hamburger button -->
+        <button
+          @click="isOpen = !isOpen"
+          class="md:hidden p-2 rounded-lg text-neutral-600 hover:bg-neutral-100 transition-colors"
+          :aria-expanded="isOpen"
+          aria-label="Toggle menu"
+        >
+          <!-- Hamburger icon -->
+          <svg v-if="!isOpen" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+          </svg>
+          <!-- Close icon -->
+          <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+
+      </div>
+    </div>
+
+    <!-- Mobile menu -->
+    <div v-if="isOpen" class="md:hidden border-t border-neutral-200 bg-white">
+      <div class="px-4 py-3 space-y-1">
+        <RouterLink
+          v-for="link in links"
+          :key="link.to"
+          :to="link.to"
+          @click="isOpen = false"
+          :class="[
+            'block px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+            isActive(link.to)
+              ? 'bg-blue-50 text-blue-600'
+              : 'text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900'
+          ]"
+        >
+          {{ link.label }}
+        </RouterLink>
+
+        
+          href="#"
+          class="block px-3 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors text-center mt-2"
+        >
+          Get Started
+        </a>
+      </div>
+    </div>
+  </nav>
+</template>
+```
+
+### With dropdown menu
+
+```vue
+<!-- components/AppNavbar.vue (with dropdown) -->
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted } from 'vue'
+
+const isOpen = ref(false)
+const dropdownOpen = ref(false)
+const dropdownRef = ref<HTMLElement | null>(null)
+
+// Close dropdown when clicking outside
+const handleClickOutside = (e: MouseEvent) => {
+  if (dropdownRef.value && !dropdownRef.value.contains(e.target as Node)) {
+    dropdownOpen.value = false
+  }
+}
+
+onMounted(() => document.addEventListener('click', handleClickOutside))
+onUnmounted(() => document.removeEventListener('click', handleClickOutside))
+</script>
+
+<template>
+  <nav class="bg-white border-b border-neutral-200 sticky top-0 z-50">
+    <div class="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+
+      <RouterLink to="/" class="text-lg font-bold">🧠 DevBrain</RouterLink>
+
+      <div class="hidden md:flex items-center gap-6">
+        <RouterLink to="/" class="text-sm text-neutral-600 hover:text-neutral-900">
+          Home
+        </RouterLink>
+
+        <!-- Dropdown -->
+        <div class="relative" ref="dropdownRef">
+          <button
+            @click="dropdownOpen = !dropdownOpen"
+            class="flex items-center gap-1 text-sm text-neutral-600 hover:text-neutral-900"
+          >
+            Products
+            <svg class="w-4 h-4 transition-transform" :class="{ 'rotate-180': dropdownOpen }"
+              fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+          </button>
+
+          <div
+            v-if="dropdownOpen"
+            class="absolute top-full left-0 mt-2 w-48 bg-white rounded-xl border border-neutral-200 shadow-lg py-1 z-50"
+          >
+            <a href="#" class="block px-4 py-2 text-sm text-neutral-700 hover:bg-neutral-50">
+              Feature One
+            </a>
+            <a href="#" class="block px-4 py-2 text-sm text-neutral-700 hover:bg-neutral-50">
+              Feature Two
+            </a>
+            <a href="#" class="block px-4 py-2 text-sm text-neutral-700 hover:bg-neutral-50">
+              Feature Three
+            </a>
+          </div>
+        </div>
+
+        <RouterLink to="/contact" class="text-sm text-neutral-600 hover:text-neutral-900">
+          Contact
+        </RouterLink>
+      </div>
+
+      <!-- Mobile toggle -->
+      <button @click="isOpen = !isOpen" class="md:hidden p-2 rounded-lg hover:bg-neutral-100">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+    </div>
+  </nav>
+</template>
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Toggling with v-show on a div that doesn't exist yet -->
+<div v-show="isOpen">
+  <!-- This works but keeps DOM hidden, not removed -->
+</div>
+
+<!-- Also wrong: no aria attributes on the button -->
+<button @click="isOpen = !isOpen">Menu</button>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Use v-if to fully remove from DOM when closed -->
+<div v-if="isOpen">
+  <!-- Removed from DOM when closed — better for accessibility -->
+</div>
+
+<!-- Always add aria attributes for screen readers -->
+<button
+  @click="isOpen = !isOpen"
+  :aria-expanded="isOpen"
+  aria-label="Toggle menu"
+>
+  Menu
+</button>
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Forgetting to close mobile menu on link click -->
+<RouterLink to="/about">About</RouterLink>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Always close menu when a link is clicked on mobile -->
+<RouterLink
+  to="/about"
+  @click="isOpen = false"
+>
+  About
+</RouterLink>
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always use `sticky top-0 z-50` so the navbar stays visible while scrolling
+- Add `aria-expanded` and `aria-label` to the hamburger button for accessibility
+- Use `v-if` instead of `v-show` for the mobile menu — removes it from DOM completely when closed
+- Close the mobile menu `@click="isOpen = false"` on every RouterLink click
+- Close dropdowns when clicking outside using `onMounted` + `document.addEventListener`
+- Keep the links array as a `const` outside the component or in a separate config file for easy maintenance
+
+<Callout type="tip">
+  Add `router.afterEach(() => { isOpen.value = false })` in your router setup to automatically close the mobile menu on every navigation — even if the user clicks the browser back button.
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between v-if and v-show?" difficulty="easy">
+  `v-if` completely removes the element from the DOM when false — better for elements that rarely toggle.
+  `v-show` keeps the element in the DOM but sets `display: none` — better for elements that toggle frequently since there's no DOM creation cost.
+  For a mobile navbar that opens and closes often, either works, but `v-if` is cleaner for accessibility since hidden content isn't in the DOM at all.
+</InterviewQ>
+
+<InterviewQ question="How do you handle clicking outside a dropdown to close it in Vue 3?" difficulty="mid">
+  Add a click event listener on `document` inside `onMounted` and remove it in `onUnmounted`. Use a `ref` on the dropdown element and check if the click target is inside it using `element.contains(e.target)`. If the click is outside, set the open state to false.
+</InterviewQ>
+
+<InterviewQ question="How do you make a navbar accessible?" difficulty="mid">
+  Add `aria-expanded` to the toggle button so screen readers know if the menu is open. Add `aria-label` to icon-only buttons. Use semantic `nav` element with `aria-label="Main navigation"`. Ensure all links are keyboard focusable. Use `role="menuitem"` on dropdown items if using a dropdown pattern.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  I always forget to add `@click="isOpen = false"` on mobile links — the menu stays open after navigation which looks broken. Make it a habit to add it to every RouterLink inside the mobile menu.
+
+  Also for Nuxt projects use `useRoute()` from `#imports` not from `vue-router` directly — same API, but Nuxt auto-imports it.
+</MyNotes>

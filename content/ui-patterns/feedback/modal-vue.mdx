@@ -1,0 +1,427 @@
+---
+title: "Modal / Dialog with Vue + Tailwind CSS"
+description: "How to build an accessible, reusable modal dialog in Vue 3 with backdrop click to close, ESC key support, focus trap, and smooth transitions using Tailwind CSS"
+category: ui-patterns
+subcategory: feedback
+tools: [vue, tailwind]
+tags: [modal, dialog, overlay, accessible, transition]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+---
+
+## Concept explanation
+
+A modal is a dialog box that appears on top of the main content and blocks interaction with the rest of the page until dismissed. In Vue 3 we control visibility with a `ref()` boolean, use `Teleport` to render the modal at the `<body>` level (avoiding z-index issues), and Vue's `<Transition>` component for smooth animations.
+
+<Callout type="note">
+  **Vue vs Nuxt difference:** The code is identical in both Vue 3 and Nuxt 3. Nuxt auto-imports `ref`, `watch`, `onMounted`, and `onUnmounted` — so you can skip the imports in Nuxt.
+</Callout>
+
+## Why it's used
+
+- Confirms destructive actions (delete, logout) without navigating away
+- Displays forms (create user, upload file) without leaving the current page
+- Shows image previews, videos, or detail views inline
+- Collects quick input without a full page redirect
+
+## Real-world use cases
+
+- "Are you sure you want to delete this?" confirmation dialog
+- "Create new project" form inside a modal
+- Image lightbox / preview
+- Cookie consent dialog
+- Share / invite team member dialog
+
+## Code example
+
+### Basic modal
+
+```vue
+<!-- components/AppModal.vue -->
+<script setup lang="ts">
+import { watch, onMounted, onUnmounted } from 'vue'
+
+const props = defineProps<{
+  isOpen: boolean
+  title?: string
+}>()
+
+const emit = defineEmits<{
+  close: []
+}>()
+
+// Close on ESC key
+const handleKeydown = (e: KeyboardEvent) => {
+  if (e.key === 'Escape') emit('close')
+}
+
+onMounted(() => document.addEventListener('keydown', handleKeydown))
+onUnmounted(() => document.removeEventListener('keydown', handleKeydown))
+
+// Prevent body scroll when modal is open
+watch(() => props.isOpen, (val) => {
+  document.body.style.overflow = val ? 'hidden' : ''
+})
+</script>
+
+<template>
+  <Teleport to="body">
+    <Transition
+      enter-active-class="transition duration-200 ease-out"
+      enter-from-class="opacity-0"
+      enter-to-class="opacity-100"
+      leave-active-class="transition duration-150 ease-in"
+      leave-from-class="opacity-100"
+      leave-to-class="opacity-0"
+    >
+      <div
+        v-if="isOpen"
+        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="title"
+      >
+        <!-- Backdrop -->
+        <div
+          class="absolute inset-0 bg-black/50 backdrop-blur-sm"
+          @click="emit('close')"
+        />
+
+        <!-- Modal panel -->
+        <Transition
+          enter-active-class="transition duration-200 ease-out"
+          enter-from-class="opacity-0 scale-95"
+          enter-to-class="opacity-100 scale-100"
+          leave-active-class="transition duration-150 ease-in"
+          leave-from-class="opacity-100 scale-100"
+          leave-to-class="opacity-0 scale-95"
+        >
+          <div
+            v-if="isOpen"
+            class="relative bg-white dark:bg-neutral-900 rounded-2xl shadow-xl w-full max-w-md z-10 overflow-hidden"
+          >
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-neutral-200 dark:border-neutral-800">
+              <h2 class="text-base font-semibold text-neutral-900 dark:text-neutral-100">
+                {{ title }}
+              </h2>
+              <button
+                @click="emit('close')"
+                class="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                aria-label="Close modal"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Body -->
+            <div class="px-6 py-5">
+              <slot />
+            </div>
+
+            <!-- Footer -->
+            <div
+              v-if="$slots.footer"
+              class="px-6 py-4 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-end gap-3"
+            >
+              <slot name="footer" />
+            </div>
+          </div>
+        </Transition>
+      </div>
+    </Transition>
+  </Teleport>
+</template>
+```
+
+### How to use it in any page
+
+```vue
+<!-- pages/users.vue -->
+<script setup lang="ts">
+import { ref } from 'vue'
+import AppModal from '@/components/AppModal.vue'
+
+const isOpen = ref(false)
+</script>
+
+<template>
+  <div>
+    <button
+      @click="isOpen = true"
+      class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+    >
+      Open Modal
+    </button>
+
+    <AppModal
+      :is-open="isOpen"
+      title="Create New User"
+      @close="isOpen = false"
+    >
+      <!-- Body slot -->
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-neutral-700 mb-1">Name</label>
+          <input
+            type="text"
+            placeholder="Omar Hassan"
+            class="w-full px-3 py-2 border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-neutral-700 mb-1">Email</label>
+          <input
+            type="email"
+            placeholder="omar@example.com"
+            class="w-full px-3 py-2 border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+      </div>
+
+      <!-- Footer slot -->
+      <template #footer>
+        <button
+          @click="isOpen = false"
+          class="px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 rounded-lg transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          class="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          Create User
+        </button>
+      </template>
+    </AppModal>
+  </div>
+</template>
+```
+
+### Confirmation modal (delete dialog)
+
+```vue
+<!-- components/ConfirmModal.vue -->
+<script setup lang="ts">
+defineProps<{
+  isOpen: boolean
+  title: string
+  message: string
+  confirmLabel?: string
+  danger?: boolean
+}>()
+
+const emit = defineEmits<{
+  confirm: []
+  cancel: []
+}>()
+</script>
+
+<template>
+  <Teleport to="body">
+    <div
+      v-if="isOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+    >
+      <!-- Backdrop -->
+      <div
+        class="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        @click="emit('cancel')"
+      />
+
+      <!-- Panel -->
+      <div class="relative bg-white dark:bg-neutral-900 rounded-2xl shadow-xl w-full max-w-sm z-10 p-6">
+        <!-- Icon -->
+        <div
+          :class="[
+            'w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4',
+            danger ? 'bg-red-100' : 'bg-amber-100'
+          ]"
+        >
+          <svg
+            class="w-6 h-6"
+            :class="danger ? 'text-red-600' : 'text-amber-600'"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+            />
+          </svg>
+        </div>
+
+        <h3 class="text-base font-semibold text-neutral-900 text-center mb-2">
+          {{ title }}
+        </h3>
+        <p class="text-sm text-neutral-500 text-center mb-6">
+          {{ message }}
+        </p>
+
+        <div class="flex gap-3">
+          <button
+            @click="emit('cancel')"
+            class="flex-1 px-4 py-2 text-sm font-medium text-neutral-600 border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            @click="emit('confirm')"
+            :class="[
+              'flex-1 px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors',
+              danger
+                ? 'bg-red-600 hover:bg-red-700'
+                : 'bg-blue-600 hover:bg-blue-700'
+            ]"
+          >
+            {{ confirmLabel ?? 'Confirm' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+</template>
+```
+
+### How to use the confirmation modal
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import ConfirmModal from '@/components/ConfirmModal.vue'
+
+const showConfirm = ref(false)
+
+const handleDelete = () => {
+  // call your API here
+  console.log('User deleted!')
+  showConfirm.value = false
+}
+</script>
+
+<template>
+  <button
+    @click="showConfirm = true"
+    class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700"
+  >
+    Delete User
+  </button>
+
+  <ConfirmModal
+    :is-open="showConfirm"
+    title="Delete User"
+    message="Are you sure you want to delete this user? This action cannot be undone."
+    confirm-label="Delete"
+    :danger="true"
+    @confirm="handleDelete"
+    @cancel="showConfirm = false"
+  />
+</template>
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Not using Teleport — modal renders inside a parent with
+     overflow:hidden or low z-index and gets clipped -->
+<template>
+  <div class="relative">
+    <div v-if="isOpen" class="fixed inset-0 z-50">
+      <!-- gets clipped by parent overflow:hidden ❌ -->
+    </div>
+  </div>
+</template>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Always use Teleport to render modal at body level
+     avoids ALL z-index and overflow clipping issues -->
+<template>
+  <Teleport to="body">
+    <div v-if="isOpen" class="fixed inset-0 z-50">
+      <!-- renders directly on body ✅ -->
+    </div>
+  </Teleport>
+</template>
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Forgetting to lock body scroll — page scrolls
+     behind the modal, looks broken -->
+<script setup>
+const props = defineProps(['isOpen'])
+// nothing to prevent scroll ❌
+</script>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Always lock body scroll when modal opens -->
+<script setup>
+import { watch } from 'vue'
+const props = defineProps(['isOpen'])
+
+watch(() => props.isOpen, (val) => {
+  document.body.style.overflow = val ? 'hidden' : '' // ✅
+})
+</script>
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always use `<Teleport to="body">` to avoid z-index and overflow clipping issues
+- Lock body scroll with `document.body.style.overflow = 'hidden'` when modal opens — restore it on close
+- Listen for `Escape` key with `document.addEventListener('keydown', ...)` and clean up in `onUnmounted`
+- Add `role="dialog"` and `aria-modal="true"` for screen reader accessibility
+- Click on backdrop should close the modal — but click inside the panel should not bubble up
+- Use named slots (`#footer`) to keep the modal reusable across different use cases
+- Reset form state when modal closes using a `watch` on `isOpen`
+
+<Callout type="tip">
+  To reset a form when the modal closes, watch `isOpen` and reset your form ref:
+```ts
+  watch(() => props.isOpen, (val) => {
+    if (!val) {
+      formData.value = { name: '', email: '' }
+    }
+  })
+```
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is Vue's Teleport and why do we use it for modals?" difficulty="mid">
+  `Teleport` renders a component's template in a different part of the DOM — usually `body` — while keeping it logically inside the Vue component tree. For modals this is critical because modals use `fixed` positioning and high `z-index`. If the modal is inside a parent with `overflow: hidden` or a lower stacking context, it gets clipped. Teleporting to `body` avoids all of these issues.
+</InterviewQ>
+
+<InterviewQ question="How do you prevent the page from scrolling behind an open modal?" difficulty="easy">
+  Set `document.body.style.overflow = 'hidden'` when the modal opens and restore it to an empty string when it closes. In Vue, do this inside a `watch` on the `isOpen` prop. Make sure to also restore it if the component unmounts while the modal is open.
+</InterviewQ>
+
+<InterviewQ question="How do you make a modal accessible?" difficulty="mid">
+  Add `role="dialog"` and `aria-modal="true"` to the modal panel. Add `aria-label` or `aria-labelledby` pointing to the modal title. Support `Escape` key to close. When the modal opens, move focus inside it — ideally to the first interactive element. When it closes, return focus to the element that triggered it. This complete focus management is called a focus trap.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The two things I always forget:
+  1. `Teleport to="body"` — without it the modal gets clipped inside a parent with overflow hidden and I spend 10 minutes debugging z-index
+  2. Restoring `document.body.style.overflow` — if the modal closes without restoring it, the entire page gets stuck and can't scroll
+
+  For Nuxt — everything is identical. `ref`, `watch`, `onMounted`, `onUnmounted` are all auto-imported so you can skip the import lines at the top.
+
+  If you need a modal with a form, always reset the form data in the `watch` when `isOpen` becomes false — otherwise the user opens the modal a second time and sees the previous input still there.
+</MyNotes>

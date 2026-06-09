@@ -1,0 +1,552 @@
+---
+title: "Next.js App Router — Basics & Dynamic Routes"
+description: "Complete guide to Next.js 13+ App Router — file-based routing, layouts, dynamic routes, route groups, loading and error boundaries, and reading URL params"
+category: routing
+tools: [nextjs]
+tags: [routing, app-router, dynamic-routes, layouts, next.js]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+---
+
+## Concept explanation
+
+Next.js App Router uses the file system as the router. Every folder inside `app/` represents a URL segment. Special files like `page.tsx`, `layout.tsx`, `loading.tsx`, and `error.tsx` control what renders at each route. This replaces the old `pages/` directory from Next.js 12 and below.
+
+```
+app/
+├── page.tsx              → /
+├── about/
+│   └── page.tsx          → /about
+├── blog/
+│   ├── page.tsx          → /blog
+│   └── [slug]/
+│       └── page.tsx      → /blog/anything
+└── dashboard/
+    ├── layout.tsx        → wraps all dashboard pages
+    ├── page.tsx          → /dashboard
+    └── settings/
+        └── page.tsx      → /dashboard/settings
+```
+
+## Why it's used
+
+- No manual route configuration — folder structure is the router
+- Nested layouts eliminate repeated code across related pages
+- Server Components by default — pages fetch data without client JS
+- Built-in loading, error, and not-found states per route segment
+
+## Real-world use cases
+
+- Marketing site with nested pages (blog, docs, about)
+- SaaS dashboard with shared sidebar layout
+- E-commerce with product pages (`/products/[id]`)
+- Documentation site with category/slug structure
+- Multi-tenant app with dynamic subpaths
+
+## Code example
+
+### Basic file structure
+
+```
+app/
+├── layout.tsx            → root layout (html, body)
+├── page.tsx              → / (home page)
+├── not-found.tsx         → global 404 page
+│
+├── about/
+│   └── page.tsx          → /about
+│
+├── blog/
+│   ├── page.tsx          → /blog (list)
+│   └── [slug]/
+│       ├── page.tsx      → /blog/my-post
+│       └── not-found.tsx → /blog/unknown-post 404
+│
+└── dashboard/
+    ├── layout.tsx        → dashboard shell (sidebar, header)
+    ├── page.tsx          → /dashboard
+    ├── users/
+    │   ├── page.tsx      → /dashboard/users
+    │   └── [id]/
+    │       └── page.tsx  → /dashboard/users/123
+    └── settings/
+        └── page.tsx      → /dashboard/settings
+```
+
+### Root layout
+
+```tsx
+// app/layout.tsx
+import type { Metadata } from "next";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: { default: "MyApp", template: "%s | MyApp" },
+  description: "My application",
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
+  );
+}
+```
+
+### Nested layout (dashboard shell)
+
+```tsx
+// app/dashboard/layout.tsx
+import { Sidebar } from "@/components/Sidebar";
+
+// This layout wraps ALL pages inside /dashboard/*
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-h-screen">
+      <Sidebar />
+      <main className="flex-1 p-6">{children}</main>
+    </div>
+  );
+}
+```
+
+### Static page
+
+```tsx
+// app/about/page.tsx
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "About",
+  description: "Learn about our company",
+};
+
+export default function AboutPage() {
+  return (
+    <div>
+      <h1>About Us</h1>
+      <p>We build great software.</p>
+    </div>
+  );
+}
+```
+
+### Dynamic route — single param
+
+```tsx
+// app/blog/[slug]/page.tsx
+type Props = {
+  params: Promise<{ slug: string }>;
+};
+
+// Generate static pages at build time
+export async function generateStaticParams() {
+  const posts = await getPosts();
+  return posts.map((post) => ({ slug: post.slug }));
+}
+
+export async function generateMetadata({ params }: Props) {
+  const { slug } = await params;
+  const post = await getPostBySlug(slug);
+  return { title: post.title, description: post.excerpt };
+}
+
+export default async function BlogPostPage({ params }: Props) {
+  const { slug } = await params;
+  const post = await getPostBySlug(slug);
+
+  if (!post) notFound();
+
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <p>{post.content}</p>
+    </article>
+  );
+}
+```
+
+### Dynamic route — multiple params
+
+```tsx
+// app/dashboard/users/[id]/page.tsx
+type Props = {
+  params: Promise<{ id: string }>;
+};
+
+export default async function UserPage({ params }: Props) {
+  const { id } = await params;
+  const user = await getUserById(id);
+
+  if (!user) notFound();
+
+  return (
+    <div>
+      <h1>{user.name}</h1>
+      <p>{user.email}</p>
+    </div>
+  );
+}
+```
+
+### Catch-all routes
+
+```
+app/
+└── docs/
+    └── [...slug]/
+        └── page.tsx   → matches /docs/a, /docs/a/b, /docs/a/b/c
+```
+
+```tsx
+// app/docs/[...slug]/page.tsx
+type Props = {
+  params: Promise<{ slug: string[] }>;
+};
+
+export default async function DocsPage({ params }: Props) {
+  const { slug } = await params;
+  // slug = ["getting-started", "installation"]
+  // for URL: /docs/getting-started/installation
+
+  const doc = await getDoc(slug.join("/"));
+  return <div>{doc.content}</div>;
+}
+```
+
+### Optional catch-all routes
+
+```
+app/
+└── shop/
+    └── [[...filters]]/
+        └── page.tsx   → matches /shop AND /shop/category/red
+```
+
+```tsx
+// app/shop/[[...filters]]/page.tsx
+type Props = {
+  params: Promise<{ filters?: string[] }>;
+};
+
+export default async function ShopPage({ params }: Props) {
+  const { filters } = await params;
+  // filters = undefined      → /shop
+  // filters = ["electronics"]→ /shop/electronics
+  // filters = ["electronics", "phones"] → /shop/electronics/phones
+
+  return <div>Shop with filters: {filters?.join(", ") ?? "none"}</div>;
+}
+```
+
+### Route groups — organize without affecting URL
+
+```
+app/
+├── (marketing)/         ← group — NOT part of URL
+│   ├── layout.tsx       ← marketing layout (no sidebar)
+│   ├── page.tsx         → /
+│   ├── about/
+│   │   └── page.tsx     → /about
+│   └── pricing/
+│       └── page.tsx     → /pricing
+│
+└── (dashboard)/         ← group — NOT part of URL
+    ├── layout.tsx       ← dashboard layout (with sidebar)
+    ├── dashboard/
+    │   └── page.tsx     → /dashboard
+    └── settings/
+        └── page.tsx     → /settings
+```
+
+```tsx
+// app/(marketing)/layout.tsx — marketing pages have no sidebar
+export default function MarketingLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <div>
+      <nav>Marketing Nav</nav>
+      {children}
+      <footer>Footer</footer>
+    </div>
+  );
+}
+
+// app/(dashboard)/layout.tsx — dashboard pages have sidebar
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex">
+      <Sidebar />
+      <main>{children}</main>
+    </div>
+  );
+}
+```
+
+### Loading state
+
+```tsx
+// app/dashboard/users/loading.tsx
+// Automatically shown while the page is fetching data
+export default function Loading() {
+  return (
+    <div className="space-y-4">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} className="h-12 bg-neutral-100 dark:bg-neutral-800 rounded-xl animate-pulse" />
+      ))}
+    </div>
+  );
+}
+```
+
+### Error boundary
+
+```tsx
+// app/dashboard/error.tsx
+"use client"; // error boundaries must be client components
+
+import { useEffect } from "react";
+
+type Props = {
+  error: Error & { digest?: string };
+  reset: () => void;
+};
+
+export default function Error({ error, reset }: Props) {
+  useEffect(() => {
+    console.error(error);
+  }, [error]);
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
+      <p className="text-4xl mb-4">⚠️</p>
+      <h2 className="text-xl font-semibold mb-2">Something went wrong</h2>
+      <p className="text-neutral-500 mb-6">{error.message}</p>
+      <button
+        onClick={reset}
+        className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+```
+
+### Not found page
+
+```tsx
+// app/not-found.tsx — global 404
+import Link from "next/link";
+
+export default function NotFound() {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen text-center">
+      <p className="text-6xl mb-4">404</p>
+      <h1 className="text-2xl font-bold mb-2">Page not found</h1>
+      <p className="text-neutral-500 mb-6">The page you're looking for doesn't exist.</p>
+      <Link href="/" className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
+        Go home
+      </Link>
+    </div>
+  );
+}
+```
+
+### Reading params and searchParams
+
+```tsx
+// app/products/page.tsx
+// URL: /products?category=electronics&sort=price
+
+type Props = {
+  searchParams: Promise<{
+    category?: string;
+    sort?: string;
+    page?: string;
+  }>;
+};
+
+export default async function ProductsPage({ searchParams }: Props) {
+  const { category, sort, page } = await searchParams;
+
+  const products = await getProducts({
+    category,
+    sort,
+    page: Number(page) || 1,
+  });
+
+  return (
+    <div>
+      <p>Category: {category ?? "all"}</p>
+      <p>Sort: {sort ?? "default"}</p>
+      {/* products list */}
+    </div>
+  );
+}
+```
+
+```tsx
+// app/products/[id]/page.tsx
+// URL: /products/123?color=red
+
+type Props = {
+  params:       Promise<{ id: string }>;
+  searchParams: Promise<{ color?: string }>;
+};
+
+export default async function ProductPage({ params, searchParams }: Props) {
+  const { id }    = await params;
+  const { color } = await searchParams;
+
+  return <div>Product {id} in color {color ?? "default"}</div>;
+}
+```
+
+### Client-side navigation
+
+```tsx
+// Any client component
+"use client";
+
+import Link from "next/link";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
+
+export function NavExample() {
+  const router     = useRouter();
+  const pathname   = usePathname();    // current path
+  const searchParams = useSearchParams(); // current query params
+
+  return (
+    <div>
+      {/* Declarative navigation — preferred */}
+      <Link href="/dashboard">Dashboard</Link>
+      <Link href="/dashboard/users" prefetch={false}>Users</Link>
+
+      {/* Programmatic navigation */}
+      <button onClick={() => router.push("/dashboard")}>
+        Go to Dashboard
+      </button>
+      <button onClick={() => router.replace("/login")}>
+        Replace (no history entry)
+      </button>
+      <button onClick={() => router.back()}>
+        Go back
+      </button>
+
+      <p>Current path: {pathname}</p>
+    </div>
+  );
+}
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```tsx
+// Reading params without awaiting in Next.js 15+
+// params is now a Promise — not awaiting causes a type error
+export default function Page({ params }) {
+  const { id } = params // ❌ params is a Promise in Next.js 15+
+  return <div>{id}</div>
+}
+```
+</Wrong>
+<Right>
+```tsx
+// Always await params and searchParams in Next.js 15+
+export default async function Page({ params }) {
+  const { id } = await params // ✅
+  return <div>{id}</div>
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Putting a layout in the wrong place — layout applies
+// to siblings too, not just children
+app/
+├── layout.tsx         ← applies to everything ✅
+└── dashboard/
+    ├── page.tsx
+    └── layout.tsx     ← only applies to dashboard/* ✅
+
+// Common mistake: expecting layout.tsx to NOT wrap page.tsx
+// in the same folder — it always does
+```
+</Wrong>
+<Right>
+```tsx
+// Use route groups to apply different layouts
+// to pages at the same URL level
+app/
+├── (marketing)/
+│   ├── layout.tsx   ← marketing layout
+│   └── page.tsx     → / (home)
+└── (auth)/
+    ├── layout.tsx   ← auth layout (centered, no sidebar)
+    ├── login/
+    │   └── page.tsx → /login
+    └── register/
+        └── page.tsx → /register
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Use route groups `(group)` to apply different layouts to pages at the same level
+- Always `await params` and `searchParams` — they are Promises in Next.js 15+
+- Use `generateStaticParams` for dynamic routes that can be pre-rendered at build time
+- Use `loading.tsx` per route segment for granular loading states
+- Use `error.tsx` per route segment so errors don't crash the whole app
+- Use `notFound()` from `next/navigation` inside pages — never return null for missing data
+- Prefer `<Link>` over `router.push()` — it prefetches on hover and is faster
+
+<Callout type="tip">
+  Use route groups to have the home page (`/`) use a different layout than the dashboard (`/dashboard`) without affecting the URLs:
+```
+  app/
+  ├── (marketing)/layout.tsx  ← no sidebar
+  │   └── page.tsx            → /
+  └── (app)/layout.tsx        ← with sidebar
+      └── dashboard/page.tsx  → /dashboard
+```
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between layout.tsx and template.tsx in Next.js?" difficulty="mid">
+  `layout.tsx` persists across route changes — it mounts once and doesn't re-render when navigating between child routes. This is great for sidebars and headers that should stay mounted. `template.tsx` creates a new instance on every navigation — it re-mounts and re-renders on each route change. Use `template.tsx` when you need enter/exit animations or need to reset state on every navigation.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between [...slug] and [[...slug]]?" difficulty="mid">
+  `[...slug]` is a catch-all route — it matches `/docs/a`, `/docs/a/b` but NOT `/docs` itself (the segment is required). `[[...slug]]` is an optional catch-all — it matches `/docs` (slug is undefined), `/docs/a`, and `/docs/a/b`. Use optional catch-all when the base route and sub-routes share the same page component.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Server Components and Client Components in Next.js routing?" difficulty="hard">
+  By default every component in `app/` is a Server Component — it runs only on the server, can fetch data directly, and sends zero JS to the browser. Client Components are marked with `"use client"` — they run in the browser and can use hooks, event handlers, and browser APIs. For routing, `useRouter`, `usePathname`, and `useSearchParams` are client-only hooks. `params` and `searchParams` props work in both server and client components.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The most confusing thing when switching from Pages Router to App Router was understanding that `layout.tsx` always wraps `page.tsx` in the same folder. You can't opt a page out of its own layout — use route groups for that.
+
+  `params` being a Promise in Next.js 15 caught me off guard on an upgrade. Always add `async` to page components and `await params` — takes 2 seconds and saves confusing type errors.
+
+  The route groups pattern `(marketing)` and `(app)` is one of the most useful features — it lets you have completely different layouts for the landing page vs the authenticated app without any URL changes.
+</MyNotes>

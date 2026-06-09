@@ -1,0 +1,448 @@
+---
+title: "Frontend Performance Optimization"
+description: "How to make your Vue, Nuxt, React, and Next.js apps load faster — covering Core Web Vitals, lazy loading, code splitting, image optimization, and caching strategies."
+category: system-design
+tools: [vue, nuxt, react, next]
+tags: [performance, optimization, core-web-vitals, lazy-loading, code-splitting, frontend, system-design]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## Concept Explanation
+
+Frontend performance is about how fast your app **loads**, **renders**, and **responds** to user interactions. Slow apps lose users — studies show 1 second of delay reduces conversions by 7%.
+
+```
+Performance is measured in 3 stages:
+
+1. Loading      → How fast does the browser get your files?
+2. Rendering    → How fast does the browser paint something on screen?
+3. Interactivity → How fast does the page respond to user input?
+```
+
+---
+
+## Core Web Vitals (Google's Performance Metrics)
+
+These are the 3 metrics Google uses to rank your site and measure user experience:
+
+```
+LCP — Largest Contentful Paint
+  What: How long until the biggest visible element loads (hero image, heading)
+  Goal: under 2.5 seconds
+  Fix:  Optimize images, preload fonts, fast server response
+
+FID / INP — Interaction to Next Paint (replaced FID in 2024)
+  What: How long until the page responds to a user click/tap
+  Goal: under 200ms
+  Fix:  Reduce JavaScript execution time, split heavy tasks
+
+CLS — Cumulative Layout Shift
+  What: How much does the page "jump around" while loading
+  Goal: under 0.1
+  Fix:  Always set width/height on images, reserve space for dynamic content
+```
+
+---
+
+## Why It's Used
+
+- **SEO:** Google ranks faster sites higher in search results.
+- **Conversion:** Faster pages = more sales, sign-ups, engagement.
+- **User experience:** Nobody waits for slow apps — especially on mobile.
+- **Cheaper hosting:** Optimized apps transfer less data = lower bandwidth costs.
+
+---
+
+## Real-World Use Cases
+
+- E-commerce product page loads in under 1 second → higher purchase rate.
+- Dashboard lazy-loads heavy chart components → initial load is instant.
+- Images served as WebP with correct sizes → 60% smaller than JPEG.
+- Route-based code splitting → user only downloads code for the page they visit.
+
+---
+
+## Code Examples
+
+### Code Splitting & Lazy Loading Routes
+
+```javascript
+// Vue Router — lazy load each route
+// Each route becomes a separate JS chunk downloaded only when visited
+
+const router = createRouter({
+  routes: [
+    {
+      path: '/',
+      component: () => import('@/pages/Home.vue'),         // lazy loaded
+    },
+    {
+      path: '/dashboard',
+      component: () => import('@/pages/Dashboard.vue'),    // lazy loaded
+    },
+    {
+      path: '/products',
+      component: () => import('@/pages/Products.vue'),     // lazy loaded
+    },
+  ],
+})
+```
+
+```javascript
+// Next.js — dynamic imports
+import dynamic from 'next/dynamic'
+
+// Lazy load a heavy component
+const HeavyChart = dynamic(() => import('@/components/HeavyChart'), {
+  loading: () => <p>Loading chart...</p>,
+  ssr: false,    // don't render on server (useful for browser-only libs)
+})
+
+// Usage — Chart only loads when this component renders
+export default function Dashboard() {
+  return <HeavyChart data={data} />
+}
+```
+
+### Lazy Loading Components in Vue
+
+```vue
+<!-- Only load the modal component when it's actually needed -->
+<script setup>
+import { defineAsyncComponent, ref } from 'vue'
+
+const showModal = ref(false)
+
+// Component JS is only downloaded when showModal becomes true
+const HeavyModal = defineAsyncComponent({
+  loader: () => import('@/components/HeavyModal.vue'),
+  loadingComponent: LoadingSpinner,
+  errorComponent: ErrorDisplay,
+  delay: 200,       // show loading after 200ms (prevents flash for fast loads)
+  timeout: 5000,    // fail after 5 seconds
+})
+</script>
+
+<template>
+  <button @click="showModal = true">Open Modal</button>
+  <HeavyModal v-if="showModal" @close="showModal = false" />
+</template>
+```
+
+### Image Optimization
+
+```vue
+<!-- Nuxt: use <NuxtImg> — automatically optimizes, resizes, converts to WebP -->
+<NuxtImg
+  src="/images/hero.jpg"
+  width="1200"
+  height="600"
+  format="webp"
+  loading="lazy"      <!-- defer off-screen images -->
+  placeholder         <!-- show blurred placeholder while loading -->
+  sizes="100vw sm:800px md:1200px"  <!-- responsive sizes -->
+  alt="Hero image"
+/>
+```
+
+```jsx
+// Next.js: use <Image> component — same benefits
+import Image from 'next/image'
+
+<Image
+  src="/images/product.jpg"
+  width={800}
+  height={600}
+  alt="Product"
+  loading="lazy"
+  placeholder="blur"
+  blurDataURL="data:image/jpeg;base64,..."  // tiny base64 preview
+  sizes="(max-width: 768px) 100vw, 50vw"   // tells browser what size to expect
+/>
+```
+
+```html
+<!-- Plain HTML — always set width and height (prevents CLS) -->
+<img
+  src="product.jpg"
+  width="800"
+  height="600"
+  loading="lazy"
+  decoding="async"
+  alt="Product"
+/>
+
+<!-- Responsive images — browser picks the right size -->
+<img
+  srcset="product-400.webp 400w,
+          product-800.webp 800w,
+          product-1200.webp 1200w"
+  sizes="(max-width: 600px) 400px,
+         (max-width: 1200px) 800px,
+         1200px"
+  src="product-800.webp"
+  alt="Product"
+/>
+```
+
+### Preloading Critical Resources
+
+```html
+<!-- In <head> — tell browser to load these early -->
+
+<!-- Preload critical font (prevents invisible text flash) -->
+<link rel="preload" href="/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
+
+<!-- Preload hero image (improves LCP) -->
+<link rel="preload" href="/images/hero.webp" as="image">
+
+<!-- Prefetch next page (loads in background when browser is idle) -->
+<link rel="prefetch" href="/dashboard">
+
+<!-- Preconnect to external domains (DNS + TCP + TLS early) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://api.myapp.com">
+```
+
+```javascript
+// Nuxt — in nuxt.config.ts
+export default defineNuxtConfig({
+  app: {
+    head: {
+      link: [
+        { rel: 'preconnect', href: 'https://api.myapp.com' },
+        { rel: 'preload', as: 'font', href: '/fonts/Inter.woff2', crossorigin: '' },
+      ],
+    },
+  },
+})
+```
+
+### Virtual Scrolling — Render Only Visible Items
+
+```vue
+<!-- Rendering 10,000 rows crashes browsers — render only visible ones -->
+<!-- Install: npm install vue-virtual-scroller -->
+
+<script setup>
+import { RecycleScroller } from 'vue-virtual-scroller'
+import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
+</script>
+
+<template>
+  <!-- Only renders ~20 items at a time regardless of total count -->
+  <RecycleScroller
+    :items="allProducts"
+    :item-size="80"
+    key-field="id"
+    v-slot="{ item }"
+  >
+    <ProductRow :product="item" />
+  </RecycleScroller>
+</template>
+```
+
+### Debouncing & Throttling
+
+```typescript
+// Debounce: wait until user stops typing before running
+// Throttle: run at most once per N milliseconds
+
+// Search input — debounce so we don't query on every keystroke
+import { ref } from 'vue'
+import { useDebounceFn } from '@vueuse/core'
+
+const searchQuery = ref('')
+
+const search = useDebounceFn(async (query: string) => {
+  await fetchProducts(query)   // only fires 300ms after user stops typing
+}, 300)
+
+watch(searchQuery, (val) => search(val))
+```
+
+```typescript
+// Scroll handler — throttle so it doesn't fire 60 times per second
+import { useThrottleFn } from '@vueuse/core'
+
+const handleScroll = useThrottleFn(() => {
+  // update sticky header, load more items, etc.
+}, 100)  // runs at most every 100ms
+
+window.addEventListener('scroll', handleScroll)
+```
+
+### Bundle Analysis & Optimization
+
+```bash
+# Nuxt — analyze your bundle
+npx nuxi analyze
+
+# Next.js — analyze bundle
+npm install @next/bundle-analyzer
+# Shows which packages are largest so you can optimize or replace them
+```
+
+```javascript
+// next.config.ts — enable bundle analyzer
+const withBundleAnalyzer = require('@next/bundle-analyzer')({
+  enabled: process.env.ANALYZE === 'true',
+})
+module.exports = withBundleAnalyzer({})
+
+// Run: ANALYZE=true npm run build
+```
+
+```javascript
+// Replace heavy libraries with lighter alternatives:
+// moment.js (330kb) → day.js (6kb)
+// lodash (70kb)     → lodash-es + tree shaking, or native JS
+// axios (13kb)      → native fetch (0kb)
+
+// Import only what you need (tree shaking)
+import { format } from 'date-fns'          // ✅ only imports format
+import * as dateFns from 'date-fns'        // ❌ imports entire library
+```
+
+### Caching — HTTP & Service Worker
+
+```javascript
+// nuxt.config.ts — set cache headers for static assets
+export default defineNuxtConfig({
+  nitro: {
+    routeRules: {
+      '/api/**': { headers: { 'cache-control': 'no-store' } },            // never cache API
+      '/_nuxt/**': { headers: { 'cache-control': 'max-age=31536000, immutable' } }, // cache assets 1yr
+      '/images/**': { headers: { 'cache-control': 'max-age=604800' } },   // cache images 1 week
+    },
+  },
+})
+```
+
+```javascript
+// next.config.ts
+module.exports = {
+  async headers() {
+    return [
+      {
+        source: '/_next/static/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      },
+    ]
+  },
+}
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```html
+<!-- No width/height on images — causes layout shift (bad CLS) -->
+<img src="product.jpg" alt="Product" />  <!-- ❌ browser doesn't know size until loaded -->
+```
+</Wrong>
+<Right>
+```html
+<!-- Always set dimensions — browser reserves space before image loads -->
+<img src="product.jpg" width="800" height="600" alt="Product" />  <!-- ✅ no layout shift -->
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```javascript
+// Importing entire library when you only need one function
+import _ from 'lodash'                    // ❌ 70kb for one function
+const result = _.groupBy(items, 'type')
+```
+</Wrong>
+<Right>
+```javascript
+import { groupBy } from 'lodash-es'       // ✅ tree-shakeable, only imports groupBy
+const result = groupBy(items, 'type')
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```javascript
+// Loading all routes upfront
+import Dashboard from '@/pages/Dashboard.vue'   // ❌ all pages in one bundle
+import Products from '@/pages/Products.vue'
+import Reports from '@/pages/Reports.vue'
+```
+</Wrong>
+<Right>
+```javascript
+// Lazy load each route — separate chunks
+const Dashboard = () => import('@/pages/Dashboard.vue')  // ✅
+const Products  = () => import('@/pages/Products.vue')
+const Reports   = () => import('@/pages/Reports.vue')
+```
+</Right>
+</WrongRight>
+
+---
+
+## Best Practices
+
+- Always set `width` and `height` on images — prevents CLS.
+- Use `loading="lazy"` on all below-the-fold images.
+- Convert images to WebP — 25-35% smaller than JPEG at same quality.
+- Lazy load every route and heavy component.
+- Preload the LCP image (hero/banner) — it's the most impactful single optimization.
+- Debounce search inputs, throttle scroll handlers.
+- Audit your bundle — one large unused library can double your JS size.
+- Use `rel="preconnect"` for every external domain your app talks to.
+- Measure first with Lighthouse or Chrome DevTools — optimize what's actually slow.
+
+---
+
+## Interview Questions
+
+<InterviewQ question="What are Core Web Vitals?" difficulty="easy">
+  Three metrics Google uses to measure user experience: LCP (Largest Contentful Paint) —
+  how fast the main content loads, goal under 2.5s. INP (Interaction to Next Paint) —
+  how fast the page responds to input, goal under 200ms. CLS (Cumulative Layout Shift) —
+  how much the layout jumps around while loading, goal under 0.1. They directly affect
+  Google search ranking.
+</InterviewQ>
+
+<InterviewQ question="What is code splitting and why does it matter?" difficulty="easy">
+  Code splitting breaks your JavaScript bundle into smaller chunks that load on demand
+  instead of all upfront. Without it, a user visiting the homepage downloads code for
+  every page in your app. With it, they only download the homepage code — other chunks
+  load when navigated to. This dramatically reduces initial load time, especially for
+  large applications.
+</InterviewQ>
+
+<InterviewQ question="What causes layout shift (CLS) and how do you fix it?" difficulty="mid">
+  Layout shift happens when elements move after they've already been rendered — typically
+  because images load without reserved space, fonts swap causing text reflow, or dynamic
+  content is injected above existing content. Fix it by always setting `width` and `height`
+  on images, using `font-display: optional` or preloading fonts, and reserving space
+  for ads and dynamic content with min-height or skeleton placeholders.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The highest-impact single optimization I've done consistently: adding `width` and `height`
+  to images and using `<NuxtImg>` or Next.js `<Image>`. It fixes CLS instantly, enables
+  lazy loading properly, and converts to WebP automatically. Takes 5 minutes, huge improvement.
+</MyNotes>
+
+<MyNotes>
+  Before optimizing anything, open Chrome DevTools → Lighthouse → run a report.
+  It tells you exactly what's slow and how to fix it with specific recommendations.
+  Don't guess — measure first. I wasted hours optimizing things that weren't actually bottlenecks.
+</MyNotes>

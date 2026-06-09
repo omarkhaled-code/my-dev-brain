@@ -1,0 +1,759 @@
+---
+title: "Server State Management with TanStack Query (React Query)"
+description: "How to fetch, cache, sync, and update server state in Next.js App Router using TanStack Query v5 with SSR prefetching, Laravel API integration, and TypeScript support."
+category: state-management
+tools: [nextjs, react]
+tags:
+  [
+    react-query,
+    tanstack-query,
+    server-state,
+    fetching,
+    caching,
+    nextjs,
+    laravel,
+  ]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+TanStack Query (formerly React Query) is a server state management library. It handles everything related to **fetching data from an external source** — your Laravel API, a database, or any REST/GraphQL endpoint — including caching, background refetching, loading states, error states, and pagination.
+
+The core mental model is simple: **your server data is not your UI state**. A user's profile fetched from an API is not the same kind of state as "is the sidebar open." TanStack Query manages the first; Zustand manages the second. They are designed to work together, not compete.
+
+```text
+┌─────────────────────────────────────────────────┐
+│                  Your App                       │
+│                                                 │
+│   Server State          │   Client/UI State     │
+│   ─────────────         │   ────────────        │
+│   TanStack Query        │   Zustand             │
+│   • API responses       │   • sidebar open      │
+│   • Cached DB data      │   • modal visible     │
+│   • Paginated lists     │   • theme             │
+│   • Mutations           │   • form wizard step  │
+└─────────────────────────────────────────────────┘
+```
+
+In **Next.js App Router**, TanStack Query v5 supports SSR prefetching — the server fetches data, dehydrates it into the HTML, and the client rehydrates it without an extra network request on load.
+
+<Callout type="note">
+  **What is server state?** Data that lives on your server (database, API) and
+  your app only has a temporary copy of it. It can change at any time from
+  outside your app — another user updates a record, a background job runs, etc.
+  TanStack Query keeps your UI in sync with this reality automatically.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **Automatic Caching:** Fetched data is cached by a query key. The same data requested from multiple components only triggers one network request.
+- **Background Refetching:** When a user returns to a tab or reconnects to the internet, stale data is automatically refreshed.
+- **Loading / Error States Built-in:** No more `const [loading, setLoading] = useState(false)` boilerplate around every fetch.
+- **Mutations with Cache Invalidation:** After a POST/PUT/DELETE, you can automatically invalidate and refetch related queries.
+- **SSR Support:** Prefetch data on the server and send it to the client already cached — zero loading spinner on first paint.
+- **Pagination and Infinite Scroll:** First-class support for paginated and cursor-based APIs.
+
+---
+
+## Real-World Use Cases
+
+- **User Profile Page:** Fetch and cache user data from `GET /api/user/{id}` — shared across multiple components with one request.
+- **Product Listings:** Paginated product list from your Laravel API with automatic background refresh.
+- **Dashboard Stats:** Multiple widgets each fetching their own data independently, with shared cache.
+- **Form Submissions:** POST to Laravel API, then invalidate the list query so the UI updates automatically.
+- **Infinite Scroll Feed:** Load more posts as the user scrolls using `useInfiniteQuery`.
+
+---
+
+## When NOT to Use It
+
+- **Client-only UI state:** Sidebar, modal, theme, wizard steps — use Zustand for these.
+- **WebSocket / real-time data:** TanStack Query is poll-based. For true real-time, use WebSockets or SSE directly.
+- **One-time static data:** If data never changes (country list, config), just import a JSON file or use React Server Components.
+- **Nuxt / Vue projects:** Use TanStack Query for Vue or Nuxt's built-in `useFetch` / `useAsyncData` instead.
+
+---
+
+## Code Examples
+
+### Setup
+
+```bash
+npm install @tanstack/react-query
+```
+
+```tsx
+// app/providers.tsx
+"use client";
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
+import { useState } from "react";
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            staleTime: 60 * 1000, // 1 minute — data stays fresh for 1 min before background refetch
+            retry: 2, // retry failed requests twice
+          },
+        },
+      }),
+  );
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      {children}
+      <ReactQueryDevtools initialIsOpen={false} />
+    </QueryClientProvider>
+  );
+}
+```
+
+```tsx
+// app/layout.tsx
+import { Providers } from "./providers";
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body>
+        <Providers>{children}</Providers>
+      </body>
+    </html>
+  );
+}
+```
+
+---
+
+### Basic Query — Fetch from Laravel API
+
+```ts
+// lib/api/users.ts
+const API_URL = process.env.NEXT_PUBLIC_API_URL; // e.g. http://localhost:8000/api
+
+export async function fetchUsers() {
+  const res = await fetch(`${API_URL}/users`);
+  if (!res.ok) throw new Error("Failed to fetch users");
+  return res.json();
+}
+
+export async function fetchUserById(id: string) {
+  const res = await fetch(`${API_URL}/users/${id}`);
+  if (!res.ok) throw new Error("Failed to fetch user");
+  return res.json();
+}
+```
+
+```tsx
+// components/UserList.tsx
+"use client";
+
+import { useQuery } from "@tanstack/react-query";
+import { fetchUsers } from "@/lib/api/users";
+
+interface User {
+  id: string;
+  name: string;
+  email: string;
+}
+
+export function UserList() {
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ["users"],
+    queryFn: fetchUsers,
+  });
+
+  if (isLoading) return <div>Loading...</div>;
+  if (isError) return <div>Error: {error.message}</div>;
+
+  return (
+    <ul>
+      {data.map((user: User) => (
+        <li key={user.id}>
+          {user.name} — {user.email}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+---
+
+### Query with Parameters
+
+```tsx
+// components/UserProfile.tsx
+"use client";
+
+import { useQuery } from "@tanstack/react-query";
+import { fetchUserById } from "@/lib/api/users";
+
+export function UserProfile({ userId }: { userId: string }) {
+  const { data: user, isLoading } = useQuery({
+    queryKey: ["users", userId], // unique key per user
+    queryFn: () => fetchUserById(userId),
+    enabled: !!userId, // only run if userId exists
+  });
+
+  if (isLoading) return <div>Loading profile...</div>;
+
+  return (
+    <div>
+      <h1>{user.name}</h1>
+      <p>{user.email}</p>
+    </div>
+  );
+}
+```
+
+---
+
+### Mutation — POST / PUT / DELETE to Laravel API
+
+```ts
+// lib/api/posts.ts
+export async function createPost(data: { title: string; body: string }) {
+  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/posts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to create post");
+  return res.json();
+}
+
+export async function deletePost(id: string) {
+  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/posts/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("Failed to delete post");
+  return res.json();
+}
+```
+
+```tsx
+// components/CreatePostForm.tsx
+"use client";
+
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { createPost } from "@/lib/api/posts";
+import { useState } from "react";
+
+export function CreatePostForm() {
+  const queryClient = useQueryClient();
+  const [title, setTitle] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: createPost,
+    onSuccess: () => {
+      // Invalidate the posts list so it refetches automatically
+      queryClient.invalidateQueries({ queryKey: ["posts"] });
+      setTitle("");
+    },
+    onError: (error) => {
+      console.error("Failed to create post:", error);
+    },
+  });
+
+  return (
+    <div>
+      <input
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder="Post title"
+      />
+      <button
+        onClick={() => mutation.mutate({ title, body: "" })}
+        disabled={mutation.isPending}
+      >
+        {mutation.isPending ? "Creating..." : "Create Post"}
+      </button>
+      {mutation.isError && <p>Error: {mutation.error.message}</p>}
+    </div>
+  );
+}
+```
+
+---
+
+### Auth Token in Every Request
+
+```ts
+// lib/api/client.ts
+import { useAuthStore } from "@/lib/store/useAuthStore";
+
+export async function apiFetch<T>(
+  endpoint: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const token = useAuthStore.getState().token; // access Zustand store outside React
+
+  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}${endpoint}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options.headers,
+    },
+  });
+
+  if (res.status === 401) {
+    useAuthStore.getState().logout();
+    throw new Error("Unauthorized");
+  }
+
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+
+  return res.json();
+}
+```
+
+```ts
+// lib/api/users.ts — now using the wrapper
+import { apiFetch } from "@/lib/api/client";
+
+export const fetchUsers = () => apiFetch<User[]>("/users");
+export const fetchUserById = (id: string) => apiFetch<User>(`/users/${id}`);
+```
+
+---
+
+### SSR Prefetching in Next.js App Router
+
+```tsx
+// app/posts/page.tsx — Server Component
+import {
+  dehydrate,
+  HydrationBoundary,
+  QueryClient,
+} from "@tanstack/react-query";
+import { PostList } from "@/components/PostList";
+
+async function fetchPosts() {
+  const res = await fetch(`${process.env.API_URL}/posts`);
+  return res.json();
+}
+
+export default async function PostsPage() {
+  const queryClient = new QueryClient();
+
+  // Prefetch on server — data is already in cache when client loads
+  await queryClient.prefetchQuery({
+    queryKey: ["posts"],
+    queryFn: fetchPosts,
+  });
+
+  return (
+    <HydrationBoundary state={dehydrate(queryClient)}>
+      <PostList />
+    </HydrationBoundary>
+  );
+}
+```
+
+```tsx
+// components/PostList.tsx — Client Component
+"use client";
+
+import { useQuery } from "@tanstack/react-query";
+import { fetchPosts } from "@/lib/api/posts";
+
+export function PostList() {
+  const { data: posts, isLoading } = useQuery({
+    queryKey: ["posts"],
+    queryFn: fetchPosts,
+    // On first render: data is already here from SSR prefetch — no loading spinner
+  });
+
+  if (isLoading) return <div>Loading...</div>;
+
+  return (
+    <ul>
+      {posts.map((post: any) => (
+        <li key={post.id}>{post.title}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+---
+
+### Pagination
+
+```tsx
+// components/PaginatedPosts.tsx
+"use client";
+
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { useState } from "react";
+
+async function fetchPostsPage(page: number) {
+  const res = await fetch(
+    `${process.env.NEXT_PUBLIC_API_URL}/posts?page=${page}`,
+  );
+  return res.json();
+}
+
+export function PaginatedPosts() {
+  const [page, setPage] = useState(1);
+
+  const { data, isLoading, isPlaceholderData } = useQuery({
+    queryKey: ["posts", page],
+    queryFn: () => fetchPostsPage(page),
+    placeholderData: keepPreviousData, // keep old data visible while new page loads
+  });
+
+  return (
+    <div>
+      {isLoading ? (
+        <div>Loading...</div>
+      ) : (
+        <ul>
+          {data?.data.map((post: any) => (
+            <li key={post.id}>{post.title}</li>
+          ))}
+        </ul>
+      )}
+
+      <div>
+        <button
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page === 1}
+        >
+          Previous
+        </button>
+        <span> Page {page} </span>
+        <button
+          onClick={() => setPage((p) => p + 1)}
+          disabled={isPlaceholderData || !data?.next_page_url}
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```tsx
+// Fetching inside useEffect manually — this is exactly what React Query replaces
+useEffect(() => {
+  setLoading(true)
+  fetch('/api/users')
+    .then(r => r.json())
+    .then(data => {
+      setUsers(data)
+      setLoading(false)
+    })
+}, [])
+```
+</Wrong>
+<Right>
+```tsx
+// Let React Query handle everything
+const { data: users, isLoading } = useQuery({
+  queryKey: ['users'],
+  queryFn: fetchUsers,
+})
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Using the same queryKey for different data — cache collision!
+const users = useQuery({ queryKey: ['data'], queryFn: fetchUsers })
+const posts = useQuery({ queryKey: ['data'], queryFn: fetchPosts })
+```
+</Wrong>
+<Right>
+```tsx
+// Always use specific, descriptive query keys
+const users = useQuery({ queryKey: ['users'], queryFn: fetchUsers })
+const posts = useQuery({ queryKey: ['posts'], queryFn: fetchPosts })
+
+// With parameters — include them in the key
+const user = useQuery({ queryKey: ['users', userId], queryFn: () => fetchUserById(userId) })
+
+````
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Forgetting to invalidate after mutation — UI stays stale!
+const mutation = useMutation({
+  mutationFn: deletePost,
+  // onSuccess missing — posts list never refreshes
+})
+````
+
+</Wrong>
+<Right>
+```tsx
+const queryClient = useQueryClient()
+
+const mutation = useMutation({
+mutationFn: deletePost,
+onSuccess: () => {
+queryClient.invalidateQueries({ queryKey: ['posts'] })
+},
+})
+
+````
+</Right>
+</WrongRight>
+
+**Gotcha from production:** `staleTime` defaults to `0` — meaning data is considered stale immediately after fetching. This causes a background refetch every time a component mounts. Set a reasonable `staleTime` in your `QueryClient` defaults (60 seconds is usually fine for most data) to avoid hammering your Laravel API.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Put all fetch functions in `lib/api/` — never write `fetch()` directly inside a component.
+- Use a query key factory to keep keys consistent across the app:
+
+```ts
+// lib/api/queryKeys.ts
+export const queryKeys = {
+  users: {
+    all: ['users'] as const,
+    byId: (id: string) => ['users', id] as const,
+    posts: (userId: string) => ['users', userId, 'posts'] as const,
+  },
+  posts: {
+    all: ['posts'] as const,
+    paginated: (page: number) => ['posts', page] as const,
+    byId: (id: string) => ['posts', id] as const,
+  },
+}
+
+// Usage
+useQuery({ queryKey: queryKeys.users.byId(userId), queryFn: ... })
+queryClient.invalidateQueries({ queryKey: queryKeys.users.all })
+````
+
+**Performance tips**
+
+- Set `staleTime` globally to reduce unnecessary refetches.
+- Use `select` to transform / filter data inside the query instead of in the component — the transformation is memoized:
+
+```ts
+const { data: userNames } = useQuery({
+  queryKey: ["users"],
+  queryFn: fetchUsers,
+  select: (data) => data.map((u) => u.name), // component only gets names array
+});
+```
+
+**Security considerations**
+
+- Never put auth tokens directly in `queryKey` arrays — they show up in DevTools.
+- Always throw errors in your fetch functions when `res.ok` is false — React Query needs thrown errors to trigger `isError` state and retry logic.
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between server state and client state?"
+  difficulty="easy"
+>
+  Client state is owned entirely by the frontend — sidebar open/closed, form
+  inputs, selected tab. Server state is data that lives on a remote source
+  (database, API) and your app only has a cached copy of it. Server state can
+  change at any time from outside your app. TanStack Query is built specifically
+  to manage the complexity of server state — caching, syncing, and keeping it
+  fresh — while Zustand or useState handle client state.
+</InterviewQ>
+
+<InterviewQ
+  question="What is a query key and why is it important?"
+  difficulty="easy"
+>
+  A query key is a unique identifier for a piece of cached data — it is an array
+  like `['users']` or `['users', userId]`. TanStack Query uses it to store,
+  retrieve, and invalidate cache entries. If two components use the same query
+  key, they share the same cache and only one network request is made. If you
+  change a parameter (like a user ID), you include it in the key so each
+  variation is cached separately.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between staleTime and gcTime in TanStack Query v5?"
+  difficulty="mid"
+>
+  `staleTime` controls how long data is considered fresh. During this window, no
+  background refetch happens even if the component remounts. After `staleTime`
+  expires, the data is stale and will be refetched in the background on the next
+  mount or focus event — but the stale data is still shown immediately while the
+  new data loads. `gcTime` (garbage collection time, formerly `cacheTime`)
+  controls how long unused cached data stays in memory before being deleted. A
+  query is unused when no component is subscribed to it.
+</InterviewQ>
+
+<InterviewQ
+  question="How does SSR prefetching work in Next.js App Router with TanStack Query?"
+  difficulty="mid"
+>
+  On the server, you create a `QueryClient`, call `prefetchQuery` to fetch and
+  cache the data, then call `dehydrate` to serialize the cache into a plain
+  object. You pass this to `HydrationBoundary` which sends the serialized cache
+  to the client inside the HTML. On the client, the cache is rehydrated so the
+  data is already available when the component mounts — no loading spinner and
+  no duplicate network request.
+</InterviewQ>
+
+<InterviewQ
+  question="How would you implement optimistic updates with TanStack Query?"
+  difficulty="hard"
+>
+  In `useMutation`, use `onMutate` to immediately update the cache before the
+  server responds, `onError` to roll back if the request fails, and `onSettled`
+  to always refetch the real data from the server afterward. This gives instant
+  UI feedback while the request is in flight.
+
+```ts
+const mutation = useMutation({
+  mutationFn: updatePost,
+  onMutate: async (newPost) => {
+    await queryClient.cancelQueries({ queryKey: ["posts", newPost.id] });
+    const previous = queryClient.getQueryData(["posts", newPost.id]);
+    queryClient.setQueryData(["posts", newPost.id], newPost); // optimistic update
+    return { previous };
+  },
+  onError: (err, newPost, context) => {
+    queryClient.setQueryData(["posts", newPost.id], context?.previous); // rollback
+  },
+  onSettled: (data, err, newPost) => {
+    queryClient.invalidateQueries({ queryKey: ["posts", newPost.id] }); // sync with server
+  },
+});
+```
+
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The biggest mindset shift: stop thinking about fetching data as something you
+  trigger manually. React Query fetches automatically when a component mounts,
+  when the user refocuses the tab, when the network reconnects. Your job is just
+  to describe WHAT data you need and WHERE to get it — React Query handles WHEN.
+</MyNotes>
+
+<MyNotes>
+  In production with a Laravel API: always make sure your Laravel responses
+  throw proper HTTP status codes (401, 403, 404, 422, 500). React Query's retry
+  and error logic depends on your fetch function throwing errors, which depends
+  on you checking `res.ok`. A Laravel API that always returns 200 with an error
+  message in the body will silently break React Query error handling.
+</MyNotes>
+
+<MyNotes>
+  `staleTime: Infinity` is useful for static reference data that never changes —
+  country lists, categories, config. Fetch once, cache forever for the session.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Typed API Hook Factory
+
+```ts
+// lib/api/useApiQuery.ts
+import { useQuery, UseQueryOptions } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api/client";
+
+export function createQuery<T>(
+  key: readonly unknown[],
+  endpoint: string,
+  options?: Omit<UseQueryOptions<T>, "queryKey" | "queryFn">,
+) {
+  return function useApiQuery() {
+    return useQuery<T>({
+      queryKey: key,
+      queryFn: () => apiFetch<T>(endpoint),
+      ...options,
+    });
+  };
+}
+
+// Usage — create once, use anywhere
+export const useUsers = createQuery<User[]>(["users"], "/users");
+export const useCategories = createQuery<Category[]>(
+  ["categories"],
+  "/categories",
+  { staleTime: Infinity },
+);
+```
+
+---
+
+### Global Error Handler
+
+```tsx
+// app/providers.tsx
+import {
+  QueryCache,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
+import { useAuthStore } from "@/lib/store/useAuthStore";
+import toast from "react-hot-toast";
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        queryCache: new QueryCache({
+          onError: (error) => {
+            if (error.message === "Unauthorized") {
+              useAuthStore.getState().logout();
+            } else {
+              toast.error(error.message);
+            }
+          },
+        }),
+        defaultOptions: {
+          queries: { staleTime: 60 * 1000 },
+        },
+      }),
+  );
+
+  return (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+}
+```
+
+---
+
+_Tags: `nextjs` `react` `tanstack-query` `react-query` `server-state` `laravel` `intermediate`_

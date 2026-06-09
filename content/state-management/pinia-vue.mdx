@@ -1,0 +1,638 @@
+---
+title: "Global State Management with Pinia"
+description: "How to build and scale a lightweight, intuitive global store in Vue 3 and Nuxt 3 with SSR safety, composable stores, and TypeScript support."
+category: state-management
+tools: [vue, nuxt]
+tags: [pinia, state, vue3, nuxt3, ssr-safe, composables]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+Pinia is the official state management library for Vue 3. It replaced Vuex as the recommended solution because it is simpler, fully TypeScript-friendly, and works seamlessly with the Vue Composition API. Unlike Vuex, there are no mutations — you update state directly inside actions.
+
+In **Vite + Vue**, Pinia is a straightforward plugin you register once and your stores are available anywhere.
+
+In **Nuxt 3**, Pinia integrates via the `@pinia/nuxt` module, which adds auto-imports and SSR-safe store hydration out of the box.
+
+<Callout type="note">
+  **Vue vs Nuxt difference:** In a plain Vite + Vue SPA, stores are client-side
+  singletons — safe and simple. In Nuxt 3, because pages are server-rendered,
+  Pinia automatically creates a fresh store instance per request to avoid state
+  leaking between different users. This is handled for you by `@pinia/nuxt` —
+  you do not need to do anything extra.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **No Mutations:** Unlike Vuex, you update state directly inside actions — no boilerplate.
+- **Full TypeScript Support:** Store types are inferred automatically with zero extra configuration.
+- **Composition API Style:** You can define stores using the same `ref` / `computed` / functions pattern you already know from `<script setup>`.
+- **DevTools Integration:** Works with Vue DevTools out of the box — time-travel, store inspection, action history.
+- **Tiny Bundle:** ~1.5KB gzipped.
+
+---
+
+## Real-World Use Cases
+
+- **Auth State:** Store the logged-in user and token, access from any page or component.
+- **Shopping Cart:** Add/remove items from product pages and reflect changes instantly in the navbar badge.
+- **UI State:** Sidebar open/close, active modal, theme preference.
+- **Multi-step Forms:** Cache form data across wizard steps before submitting to a Laravel API.
+- **Real-time Data:** Store WebSocket messages or polling results globally.
+
+---
+
+## When NOT to Use It
+
+- **Server-Only Data:** If you are just fetching and displaying API data, use `useFetch` or `useAsyncData` in Nuxt, or TanStack Query in Vue. Do not dump API responses into Pinia.
+- **Local Component State:** For a single dropdown `isOpen` toggle, use local `ref()`. Do not pollute the global store.
+- **Nuxt Server Routes:** Pinia only runs on the client side after hydration. Never rely on Pinia state inside `server/` directory files.
+
+---
+
+## Code Examples
+
+### Setup — Vite + Vue
+
+```bash
+npm install pinia
+```
+
+```ts
+// main.ts
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import App from './App.vue'
+
+const app = createApp(App)
+app.use(createPinia())
+app.mount('#app')
+```
+
+---
+
+### Setup — Nuxt 3
+
+```bash
+npm install @pinia/nuxt
+```
+
+```ts
+// nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['@pinia/nuxt'],
+})
+```
+
+> In Nuxt 3, that is it. No `app.use(createPinia())` needed — the module handles it. Also, all stores are auto-imported, no need to manually import `useMyStore` in every component.
+
+---
+
+### Option Store Style (simple, closer to Vuex)
+
+```ts
+// stores/useCounterStore.ts
+import { defineStore } from 'pinia'
+
+export const useCounterStore = defineStore('counter', {
+  state: () => ({
+    count: 0,
+  }),
+  getters: {
+    doubled: (state) => state.count * 2,
+  },
+  actions: {
+    increment() {
+      this.count++
+    },
+    decrement() {
+      this.count--
+    },
+    reset() {
+      this.count = 0
+    },
+  },
+})
+```
+
+---
+
+### Setup Store Style (recommended — Composition API)
+
+```ts
+// stores/useCounterStore.ts
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+
+export const useCounterStore = defineStore('counter', () => {
+  // state
+  const count = ref(0)
+
+  // getters
+  const doubled = computed(() => count.value * 2)
+
+  // actions
+  function increment() { count.value++ }
+  function decrement() { count.value-- }
+  function reset() { count.value = 0 }
+
+  return { count, doubled, increment, decrement, reset }
+})
+```
+
+---
+
+### Auth Store with Persist — Vite + Vue
+
+```bash
+npm install pinia-plugin-persistedstate
+```
+
+```ts
+// main.ts
+import { createPinia } from 'pinia'
+import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
+
+const pinia = createPinia()
+pinia.use(piniaPluginPersistedstate)
+```
+
+```ts
+// stores/useAuthStore.ts
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+
+interface User {
+  id: string
+  name: string
+  email: string
+  role: 'admin' | 'user'
+}
+
+export const useAuthStore = defineStore('auth', () => {
+  const user = ref<User | null>(null)
+  const token = ref<string | null>(null)
+  const isAuthenticated = computed(() => !!token.value)
+
+  function login(userData: User, userToken: string) {
+    user.value = userData
+    token.value = userToken
+  }
+
+  function logout() {
+    user.value = null
+    token.value = null
+  }
+
+  function updateUser(data: Partial<User>) {
+    if (user.value) {
+      user.value = { ...user.value, ...data }
+    }
+  }
+
+  return { user, token, isAuthenticated, login, logout, updateUser }
+}, {
+  persist: {
+    pick: ['user', 'token'],
+  },
+})
+```
+
+---
+
+### Auth Store with Persist — Nuxt 3
+
+```bash
+npm install @pinia-plugin-persistedstate/nuxt
+```
+
+```ts
+// nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['@pinia/nuxt', '@pinia-plugin-persistedstate/nuxt'],
+})
+```
+
+```ts
+// stores/useAuthStore.ts
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+
+interface User {
+  id: string
+  name: string
+  email: string
+  role: 'admin' | 'user'
+}
+
+export const useAuthStore = defineStore('auth', () => {
+  const user = ref<User | null>(null)
+  const token = ref<string | null>(null)
+  const isAuthenticated = computed(() => !!token.value)
+
+  function login(userData: User, userToken: string) {
+    user.value = userData
+    token.value = userToken
+  }
+
+  function logout() {
+    user.value = null
+    token.value = null
+  }
+
+  return { user, token, isAuthenticated, login, logout }
+}, {
+  persist: true,
+})
+```
+
+---
+
+### Seeding Server Data into Pinia — Nuxt 3 Only
+
+```ts
+// stores/useTodoStore.ts
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+
+interface Todo {
+  id: string
+  text: string
+  completed: boolean
+}
+
+export const useTodoStore = defineStore('todos', () => {
+  const todos = ref<Todo[]>([])
+
+  function setTodos(data: Todo[]) {
+    todos.value = data
+  }
+
+  function addTodo(text: string) {
+    todos.value.push({ id: crypto.randomUUID(), text, completed: false })
+  }
+
+  function toggleTodo(id: string) {
+    const todo = todos.value.find((t) => t.id === id)
+    if (todo) todo.completed = !todo.completed
+  }
+
+  return { todos, setTodos, addTodo, toggleTodo }
+})
+```
+
+```vue
+<!-- pages/todos/index.vue -->
+<script setup lang="ts">
+const todoStore = useTodoStore()
+
+const { data } = await useFetch('/api/todos')
+if (data.value) {
+  todoStore.setTodos(data.value)
+}
+</script>
+
+<template>
+  <div>
+    <TodoList />
+  </div>
+</template>
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```ts
+// Destructuring loses reactivity — count is now a plain number!
+const { count } = useCounterStore()
+```
+</Wrong>
+<Right>
+```ts
+// Use storeToRefs to keep reactivity on state and getters
+import { storeToRefs } from 'pinia'
+
+const counterStore = useCounterStore()
+const { count, doubled } = storeToRefs(counterStore)
+// actions do NOT need storeToRefs — destructure them directly
+const { increment, reset } = counterStore
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Direct mutation outside store — bypasses DevTools tracking
+const store = useCounterStore()
+store.count = 99
+```
+</Wrong>
+<Right>
+```ts
+// Option 1: use an action (recommended)
+store.increment()
+
+// Option 2: $patch for multiple keys at once
+store.$patch({ count: 99 })
+
+// Option 3: $patch with function for complex logic
+store.$patch((state) => {
+  state.count = 99
+})
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Calling useStore() outside setup() — throws error
+export function doSomething() {
+  const auth = useAuthStore() // ❌ no active Pinia instance
+}
+```
+</Wrong>
+<Right>
+```ts
+// Pass the pinia instance explicitly when outside setup
+import { getActivePinia } from 'pinia'
+
+export function doSomething() {
+  const auth = useAuthStore(getActivePinia())
+}
+
+// OR better: call it inside a composable or component setup
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** When using `persist` in Nuxt 3, the store hydrates from `localStorage` on the client after SSR. This can cause a flash where the page renders with empty state for a split second. Fix it by checking `store.$hydrated` or wrapping sensitive UI in a `ClientOnly` component:
+
+```vue
+<ClientOnly>
+  <UserAvatar />
+</ClientOnly>
+```
+
+---
+
+## Best Practices
+
+**Community conventions**
+- One store per feature domain: `useAuthStore`, `useCartStore`, `useUIStore` — never one giant store.
+- Name files `useXxxStore.ts` and put them all in a `stores/` folder.
+- Always use Setup Store style (Composition API) over Options Store for consistency with the rest of your Vue 3 codebase.
+
+**Performance tips**
+```ts
+// Use storeToRefs to avoid re-computing getters unnecessarily
+const { expensiveGetter } = storeToRefs(useMyStore())
+
+// Use $patch to batch multiple state updates in one operation
+// instead of calling multiple individual assignments
+store.$patch({
+  loading: false,
+  error: null,
+  data: result,
+})
+```
+
+**Security considerations**
+- Never store passwords, raw credit card data, or unencrypted sensitive tokens in a persisted store — `localStorage` is readable by any JS on the page.
+- Always use `pick` in persist options to whitelist only what you actually need to save:
+
+```ts
+persist: {
+  pick: ['theme', 'language'], // NOT: token, password, sensitive PII
+}
+```
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between Pinia and Vuex?"
+  difficulty="easy"
+>
+  Pinia is the modern replacement for Vuex. The key differences are: Pinia has
+  no mutations — you update state directly inside actions. Pinia is fully
+  TypeScript-friendly with automatic type inference. Pinia uses the Composition
+  API style. Pinia supports multiple stores without nested modules. Vuex required
+  a strict mutations/actions/getters separation that added a lot of boilerplate.
+</InterviewQ>
+
+<InterviewQ
+  question="Why do you need storeToRefs when destructuring from a Pinia store?"
+  difficulty="easy"
+>
+  Pinia stores use Vue's reactivity system under the hood. When you destructure
+  state or getters directly, you get plain values that lose their reactive
+  connection to the store. `storeToRefs` wraps each property in a `ref` so they
+  stay reactive. Actions are plain functions so they do not need `storeToRefs`.
+</InterviewQ>
+
+<InterviewQ
+  question="How does Pinia handle SSR in Nuxt 3 to prevent state leaking between users?"
+  difficulty="mid"
+>
+  In Nuxt 3, `@pinia/nuxt` creates a fresh Pinia instance per server request
+  instead of sharing a singleton. The store state is serialized into the HTML
+  payload sent to the client and then rehydrated on the client side. This means
+  each user gets their own isolated store during SSR, and the client takes over
+  seamlessly after hydration without an extra network request.
+</InterviewQ>
+
+<InterviewQ
+  question="What is the difference between $patch and directly setting state in Pinia?"
+  difficulty="mid"
+>
+  Both work, but `$patch` is the preferred way for external mutations because it
+  batches all changes into a single DevTools entry, making debugging easier. It
+  also supports a function form for complex logic. Direct assignment works but
+  creates one DevTools entry per assignment, which clutters the timeline.
+</InterviewQ>
+
+<InterviewQ
+  question="How would you share state between two completely unrelated Pinia stores?"
+  difficulty="hard"
+>
+  You import one store inside the other store's setup function. Because both
+  stores are singletons in the same app instance, you can call `useCartStore()`
+  inside `useOrderStore()` and access its state directly. Be careful about
+  circular dependencies — if Store A imports Store B and Store B imports Store A,
+  you will get a runtime error. In that case, extract shared logic into a
+  composable that both stores use.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The most painful bug I hit: destructuring state from a store without
+  `storeToRefs` and then wondering why the UI never updates. Always use
+  `storeToRefs` for state and getters, always destructure actions directly.
+  Took me longer than I want to admit to remember this consistently.
+</MyNotes>
+
+<MyNotes>
+  In Nuxt 3, if you update the persisted store schema (add/remove keys), old
+  users will have broken state in their localStorage from the old version. Always
+  bump the `version` key in persist options and provide a `migrate` function to
+  handle old data gracefully — same as Zustand's persist middleware.
+</MyNotes>
+
+<MyNotes>
+  For connecting to Laravel API: always handle the auth token from `useAuthStore`
+  inside a custom `$fetch` wrapper or a `useFetch` composable, never read the
+  store directly in `server/` routes. The server side has no access to the
+  client Pinia store.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Auth Guard Middleware — Nuxt 3
+
+```ts
+// middleware/auth.ts
+export default defineNuxtRouteMiddleware(() => {
+  const auth = useAuthStore()
+
+  if (!auth.isAuthenticated) {
+    return navigateTo('/login')
+  }
+})
+```
+
+```vue
+<!-- Use in any page -->
+<script setup lang="ts">
+definePageMeta({
+  middleware: 'auth',
+})
+</script>
+```
+
+---
+
+### Auth Guard Navigation Guard — Vite + Vue Router
+
+```ts
+// router/index.ts
+import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/useAuthStore'
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [...],
+})
+
+router.beforeEach((to) => {
+  const auth = useAuthStore()
+
+  if (to.meta.requiresAuth && !auth.isAuthenticated) {
+    return { name: 'login' }
+  }
+})
+
+export default router
+```
+
+---
+
+### Reset All Stores on Logout
+
+```ts
+// composables/useLogout.ts
+import { useAuthStore } from '@/stores/useAuthStore'
+import { useCartStore } from '@/stores/useCartStore'
+import { useUIStore } from '@/stores/useUIStore'
+
+export function useLogout() {
+  const auth = useAuthStore()
+  const cart = useCartStore()
+  const ui = useUIStore()
+
+  function logout() {
+    auth.$reset()
+    cart.$reset()
+    ui.$reset()
+    // Note: $reset() only works with Options Store style.
+    // For Setup Store style, define a manual reset action in each store.
+  }
+
+  return { logout }
+}
+```
+
+---
+
+### API Fetch Wrapper with Auth Token — Vite + Vue
+
+```ts
+// composables/useApi.ts
+import { useAuthStore } from '@/stores/useAuthStore'
+
+export function useApi() {
+  const auth = useAuthStore()
+
+  async function apiFetch<T>(url: string, options: RequestInit = {}): Promise<T> {
+    const response = await fetch(`${import.meta.env.VITE_API_URL}${url}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+        ...options.headers,
+      },
+    })
+
+    if (!response.ok) {
+      if (response.status === 401) auth.logout()
+      throw new Error(`API error: ${response.status}`)
+    }
+
+    return response.json()
+  }
+
+  return { apiFetch }
+}
+```
+
+---
+
+### API Fetch Wrapper with Auth Token — Nuxt 3
+
+```ts
+// composables/useApi.ts
+export function useApi() {
+  const auth = useAuthStore()
+
+  function apiFetch<T>(url: string, options = {}) {
+    return $fetch<T>(url, {
+      baseURL: useRuntimeConfig().public.apiBase,
+      headers: {
+        ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+      },
+      ...options,
+    })
+  }
+
+  return { apiFetch }
+}
+```
+
+---
+
+*Tags: `vue` `nuxt` `pinia` `state-management` `typescript` `intermediate`*

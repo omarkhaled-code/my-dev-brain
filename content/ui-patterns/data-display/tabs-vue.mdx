@@ -1,0 +1,439 @@
+---
+title: "Tabs with Vue + Tailwind CSS"
+description: "How to build a reusable, accessible tabs component in Vue 3 with animated indicator, keyboard navigation, dynamic content, and multiple styles using Tailwind CSS"
+category: ui-patterns
+tools: [vue, tailwind]
+tags: [tabs, navigation, accessible, keyboard-navigation, animation]
+difficulty: beginner
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - ui-patterns/tabs-nextjs
+  - ui-patterns/dropdown-vue
+---
+
+## Concept explanation
+
+Tabs separate content into different views within the same context without changing the page. In Vue 3 we track the active tab with a `ref()` string or index, and show/hide content panels conditionally with `v-if` or `v-show`. The tab list accepts a simple array of objects — label, value, optional icon — keeping the component fully data-driven.
+
+<Callout type="note">
+  **Vue vs Nuxt difference:** Code is identical in both. Nuxt auto-imports `ref` and `computed` so you can skip those imports.
+</Callout>
+
+## Why it's used
+
+- Organizes related content into digestible sections without navigation
+- Keeps the user on the same page — no full page reload
+- Reduces visual clutter by showing only one section at a time
+- Standard pattern users already know from browsers, IDEs, and dashboards
+
+## Real-world use cases
+
+- User profile page (Overview, Activity, Settings)
+- Product page (Description, Reviews, Specifications)
+- Dashboard (Analytics, Reports, Exports)
+- Code editor (multiple open files)
+- Settings page (General, Security, Notifications, Billing)
+
+## Code example
+
+### Basic tabs component
+
+```vue
+<!-- components/AppTabs.vue -->
+<script setup lang="ts">
+import { ref } from 'vue'
+
+type Tab = {
+  value: string
+  label: string
+  icon?: string
+  disabled?: boolean
+}
+
+const props = defineProps<{
+  tabs: Tab[]
+  modelValue?: string
+}>()
+
+const emit = defineEmits<{
+  'update:modelValue': [value: string]
+}>()
+
+// Use modelValue if provided (controlled), otherwise manage internally
+const internalValue = ref(props.modelValue ?? props.tabs[0]?.value)
+
+const activeTab = computed({
+  get: () => props.modelValue ?? internalValue.value,
+  set: (val) => {
+    internalValue.value = val
+    emit('update:modelValue', val)
+  }
+})
+
+const setTab = (tab: Tab) => {
+  if (!tab.disabled) activeTab.value = tab.value
+}
+</script>
+
+<template>
+  <div>
+    <!-- Tab list -->
+    <div
+      class="flex border-b border-neutral-200 dark:border-neutral-800"
+      role="tablist"
+    >
+      <button
+        v-for="tab in tabs"
+        :key="tab.value"
+        @click="setTab(tab)"
+        @keydown.left="setTab(tabs[Math.max(0, tabs.indexOf(tab) - 1)])"
+        @keydown.right="setTab(tabs[Math.min(tabs.length - 1, tabs.indexOf(tab) + 1)])"
+        :disabled="tab.disabled"
+        :aria-selected="activeTab === tab.value"
+        :aria-controls="`panel-${tab.value}`"
+        role="tab"
+        :class="[
+          'flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px',
+          activeTab === tab.value
+            ? 'border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400'
+            : 'border-transparent text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 hover:border-neutral-300 dark:hover:border-neutral-600',
+          tab.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
+        ]"
+      >
+        <span v-if="tab.icon">{{ tab.icon }}</span>
+        {{ tab.label }}
+      </button>
+    </div>
+
+    <!-- Tab panels -->
+    <div class="mt-4">
+      <div
+        v-for="tab in tabs"
+        :key="tab.value"
+        :id="`panel-${tab.value}`"
+        :aria-labelledby="tab.value"
+        role="tabpanel"
+        v-show="activeTab === tab.value"
+      >
+        <slot :name="tab.value" />
+      </div>
+    </div>
+  </div>
+</template>
+```
+
+### How to use it
+
+```vue
+<!-- pages/profile.vue -->
+<script setup lang="ts">
+import { ref } from 'vue'
+import AppTabs from '@/components/AppTabs.vue'
+
+const tabs = [
+  { value: 'overview',  label: 'Overview',  icon: '👤' },
+  { value: 'activity',  label: 'Activity',  icon: '📊' },
+  { value: 'settings',  label: 'Settings',  icon: '⚙️' },
+  { value: 'billing',   label: 'Billing',   icon: '💳', disabled: true },
+]
+
+const activeTab = ref('overview')
+</script>
+
+<template>
+  <div class="max-w-3xl">
+    <AppTabs :tabs="tabs" v-model="activeTab">
+
+      <template #overview>
+        <div class="space-y-4">
+          <h2 class="text-lg font-semibold">Profile Overview</h2>
+          <p class="text-neutral-500">Your profile information and summary.</p>
+        </div>
+      </template>
+
+      <template #activity>
+        <div class="space-y-4">
+          <h2 class="text-lg font-semibold">Recent Activity</h2>
+          <p class="text-neutral-500">Your recent actions and events.</p>
+        </div>
+      </template>
+
+      <template #settings>
+        <div class="space-y-4">
+          <h2 class="text-lg font-semibold">Account Settings</h2>
+          <p class="text-neutral-500">Manage your account preferences.</p>
+        </div>
+      </template>
+
+      <template #billing>
+        <div class="space-y-4">
+          <h2 class="text-lg font-semibold">Billing</h2>
+          <p class="text-neutral-500">Manage your subscription and payments.</p>
+        </div>
+      </template>
+
+    </AppTabs>
+  </div>
+</template>
+```
+
+### Pill style tabs
+
+```vue
+<!-- components/PillTabs.vue -->
+<script setup lang="ts">
+import { ref } from 'vue'
+
+type Tab = {
+  value: string
+  label: string
+  icon?: string
+}
+
+const props = defineProps<{ tabs: Tab[] }>()
+const activeTab = ref(props.tabs[0]?.value)
+</script>
+
+<template>
+  <div>
+    <!-- Pill tab list -->
+    <div class="flex gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-xl w-fit">
+      <button
+        v-for="tab in tabs"
+        :key="tab.value"
+        @click="activeTab = tab.value"
+        :class="[
+          'flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all',
+          activeTab === tab.value
+            ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-sm'
+            : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300'
+        ]"
+      >
+        <span v-if="tab.icon">{{ tab.icon }}</span>
+        {{ tab.label }}
+      </button>
+    </div>
+
+    <!-- Panels -->
+    <div class="mt-4">
+      <div
+        v-for="tab in tabs"
+        :key="tab.value"
+        v-show="activeTab === tab.value"
+      >
+        <slot :name="tab.value" />
+      </div>
+    </div>
+  </div>
+</template>
+```
+
+### Vertical tabs
+
+```vue
+<!-- components/VerticalTabs.vue -->
+<script setup lang="ts">
+import { ref } from 'vue'
+
+type Tab = {
+  value: string
+  label: string
+  icon?: string
+}
+
+const props = defineProps<{ tabs: Tab[] }>()
+const activeTab = ref(props.tabs[0]?.value)
+</script>
+
+<template>
+  <div class="flex gap-6">
+
+    <!-- Vertical tab list -->
+    <div class="flex flex-col gap-0.5 w-48 shrink-0">
+      <button
+        v-for="tab in tabs"
+        :key="tab.value"
+        @click="activeTab = tab.value"
+        :class="[
+          'flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-left',
+          activeTab === tab.value
+            ? 'bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300'
+            : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:text-neutral-900 dark:hover:text-neutral-100'
+        ]"
+      >
+        <span v-if="tab.icon">{{ tab.icon }}</span>
+        {{ tab.label }}
+      </button>
+    </div>
+
+    <!-- Panel -->
+    <div class="flex-1 min-w-0">
+      <div
+        v-for="tab in tabs"
+        :key="tab.value"
+        v-show="activeTab === tab.value"
+      >
+        <slot :name="tab.value" />
+      </div>
+    </div>
+
+  </div>
+</template>
+```
+
+### URL-based tabs (shareable)
+
+```vue
+<!-- pages/settings.vue -->
+<script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+
+const route = useRoute()
+const router = useRouter()
+
+const tabs = [
+  { value: 'general',       label: 'General',       icon: '⚙️' },
+  { value: 'security',      label: 'Security',       icon: '🔐' },
+  { value: 'notifications', label: 'Notifications',  icon: '🔔' },
+  { value: 'billing',       label: 'Billing',        icon: '💳' },
+]
+
+// Read active tab from URL query param
+const activeTab = computed({
+  get: () => String(route.query.tab ?? tabs[0].value),
+  set: (val) => router.push({ query: { ...route.query, tab: val } })
+})
+</script>
+
+<template>
+  <div>
+    <!-- Tab list -->
+    <div class="flex border-b border-neutral-200 dark:border-neutral-800">
+      <button
+        v-for="tab in tabs"
+        :key="tab.value"
+        @click="activeTab = tab.value"
+        :class="[
+          'flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors',
+          activeTab === tab.value
+            ? 'border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400'
+            : 'border-transparent text-neutral-500 hover:text-neutral-900 hover:border-neutral-300'
+        ]"
+      >
+        <span>{{ tab.icon }}</span>
+        {{ tab.label }}
+      </button>
+    </div>
+
+    <!-- Panels -->
+    <div class="mt-6">
+      <div v-show="activeTab === 'general'">
+        <h2 class="text-lg font-semibold mb-4">General Settings</h2>
+        <!-- General settings form -->
+      </div>
+      <div v-show="activeTab === 'security'">
+        <h2 class="text-lg font-semibold mb-4">Security Settings</h2>
+        <!-- Security form -->
+      </div>
+      <div v-show="activeTab === 'notifications'">
+        <h2 class="text-lg font-semibold mb-4">Notification Preferences</h2>
+        <!-- Notifications form -->
+      </div>
+      <div v-show="activeTab === 'billing'">
+        <h2 class="text-lg font-semibold mb-4">Billing & Plans</h2>
+        <!-- Billing info -->
+      </div>
+    </div>
+  </div>
+</template>
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Using v-if instead of v-show for tab panels
+     destroys and recreates DOM on every tab switch
+     loses form state, scroll position, and triggers animations -->
+<div v-if="activeTab === tab.value">
+  <slot :name="tab.value" /> <!-- ❌ remounts on every switch -->
+</div>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Use v-show — keeps DOM alive, just toggles display
+     preserves form state and scroll position -->
+<div v-show="activeTab === tab.value">
+  <slot :name="tab.value" /> <!-- ✅ stays in DOM -->
+</div>
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Hardcoding tab content inside the tabs component
+     makes it impossible to reuse with different content -->
+<template>
+  <div v-show="activeTab === 'overview'">
+    <!-- Overview content hardcoded ❌ -->
+    <p>Overview content here</p>
+  </div>
+</template>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Use named slots — parent provides content
+     tabs component stays generic and reusable -->
+<template>
+  <div v-show="activeTab === tab.value">
+    <slot :name="tab.value" /> <!-- ✅ parent controls content -->
+  </div>
+</template>
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Use `v-show` not `v-if` for tab panels — preserves DOM state and form inputs between switches
+- Use named slots for panel content — keeps the tabs component fully reusable
+- Support `v-model` for controlled usage from the parent
+- Add `role="tablist"`, `role="tab"`, and `role="tabpanel"` for accessibility
+- Support `disabled` tabs with `cursor-not-allowed` and reduced opacity
+- Add left/right arrow key navigation for keyboard accessibility
+- For settings pages, use URL-based tabs so the active tab is bookmarkable
+
+<Callout type="tip">
+  Use `v-show` for tabs that contain forms — `v-if` destroys the form inputs on every tab switch, losing any unsaved values the user typed. `v-show` keeps them alive in the DOM hidden with `display: none`.
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between v-if and v-show and when should you use each for tabs?" difficulty="easy">
+  `v-if` completely removes the element from the DOM when false — the component unmounts and all its state is lost. `v-show` keeps the element in the DOM but sets `display: none`. For tabs, use `v-show` because it preserves form inputs, scroll position, and component state when switching between tabs. Use `v-if` only if you want the panel to fully reset every time it's shown.
+</InterviewQ>
+
+<InterviewQ question="How do you make tabs accessible for keyboard and screen reader users?" difficulty="mid">
+  Add `role="tablist"` to the container, `role="tab"` to each tab button, and `role="tabpanel"` to each panel. Set `aria-selected="true"` on the active tab and connect each tab to its panel with `aria-controls` and `id`. Support arrow key navigation — left/right arrows move between tabs. Screen readers then announce "Tab 1, selected, 1 of 3" automatically.
+</InterviewQ>
+
+<InterviewQ question="How do you make the active tab persist across page refreshes?" difficulty="mid">
+  Store the active tab in the URL as a query param using Vue Router — `?tab=settings`. Read it with `route.query.tab` and update it with `router.push({ query: { tab: value } })`. The active tab is now in the URL — it persists on refresh, works with the browser back button, and users can share or bookmark a specific tab directly.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The `v-show` vs `v-if` distinction is the most important practical thing here. I've broken forms inside tabs before by using `v-if` — user fills half the form, switches tab, comes back, and all input is gone. Always use `v-show` for tabs that contain any kind of form or stateful content.
+
+  The URL-based tabs pattern is what I use for all settings pages now. It costs almost nothing extra and users get bookmarkable, shareable tab state for free.
+
+  For Nuxt — `ref` and `computed` are auto-imported. `useRoute` and `useRouter` are also auto-imported in Nuxt. Skip all imports at the top.
+</MyNotes>

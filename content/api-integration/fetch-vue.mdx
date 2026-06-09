@@ -1,0 +1,838 @@
+---
+title: "API Integration with Fetch in Nuxt 3"
+description: "How to integrate with your Laravel API in Nuxt 3 using $fetch and useFetch — covering server routes, direct Laravel calls, CRUD patterns, error handling, loading states, and TypeScript response types."
+category: api-integration
+tools: [vue, nuxt]
+tags:
+  [
+    fetch,
+    ofetch,
+    useFetch,
+    api,
+    crud,
+    nuxt,
+    laravel,
+    server-routes,
+    typescript,
+    error-handling,
+  ]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+
+---
+
+## Concept Explanation
+
+In Nuxt 3 you have three ways to call your Laravel API:
+
+**1. From Server Routes (server-side)** — for protected requests. The client calls your Nuxt server route, the server route reads the httpOnly cookie and calls Laravel.
+
+**2. From `useAsyncData` / `useFetch` in pages (server + client)** — for data fetching during page render. Runs on the server first, then the client takes over.
+
+**3. From components with `$fetch` (client-side)** — calls your own Nuxt server routes only. Never calls Laravel directly from the browser.
+
+```tsx
+Pattern A — Component → Server Route → Laravel
+Browser → /api/posts (Nuxt Server Route) → Laravel /api/posts
+Pattern B — Page useFetch → Server Route → Laravel
+Nuxt SSR → /api/posts → Laravel (reads httpOnly cookie)
+Pattern C — Public data (no auth needed)
+Browser → Laravel /api/public-posts directly (no token needed)
+```
+
+<Callout type="note">
+  **$fetch vs useFetch:** `$fetch` is a plain async function — use it for
+  mutations (POST, PATCH, DELETE) and imperative calls inside event handlers.
+  `useFetch` is a composable that returns reactive `data`, `pending`, and
+  `error` refs — use it for data fetching that should be reactive and SSR-aware.
+  Both are built on `ofetch` under the hood.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **ofetch built-in:** Nuxt ships with `ofetch` — a smarter fetch with automatic JSON parsing, error throwing on non-2xx, and retry support.
+- **useFetch for SSR:** Fetches on the server during SSR and passes the result to the client without a duplicate request.
+- **$fetch for mutations:** Simple, promise-based, throws on error — perfect for form submissions and actions.
+- **Full TypeScript:** Both `useFetch` and `$fetch` support generic types for full type safety.
+
+---
+
+## Real-World Use Cases
+
+- **CRUD for posts:** GET list with `useFetch`, create/update/delete with `$fetch` in event handlers.
+- **User profile:** Page fetches profile on load with `useFetch`, form updates via server route with `$fetch`.
+- **Public search:** Component calls Laravel directly with `$fetch` — no auth needed.
+- **File upload:** POST with FormData through server route to Laravel.
+- **Paginated lists:** `useFetch` with reactive page ref, re-fetches automatically when page changes.
+
+---
+
+## Code Examples
+
+### Base Types — Laravel Response Shapes
+
+```ts
+// lib/types/api.ts
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  current_page: number;
+  last_page: number;
+  per_page: number;
+  total: number;
+  next_page_url: string | null;
+  prev_page_url: string | null;
+}
+
+export interface LaravelValidationError {
+  message: string;
+  errors: Record<string, string[]>;
+}
+
+export interface ApiError {
+  message: string;
+  errors?: Record<string, string[]>;
+  statusCode: number;
+}
+
+export interface Post {
+  id: string;
+  title: string;
+  body: string;
+  user_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  created_at: string;
+}
+```
+
+---
+
+### Laravel Fetch Helpers
+
+```ts
+// server/utils/laravelFetch.ts
+import { H3Event } from "h3";
+
+const LARAVEL_API = process.env.LARAVEL_API_URL;
+
+// Authenticated fetch — reads token from httpOnly cookie
+export async function laravelFetch<T = unknown>(
+  event: H3Event,
+  endpoint: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const token = getCookie(event, "auth_token");
+
+  if (!token) {
+    throw createError({ statusCode: 401, message: "Unauthorized" });
+  }
+
+  return $fetch<T>(`${LARAVEL_API}${endpoint}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      ...(options.headers as Record<string, string>),
+    },
+  });
+}
+
+// Public fetch — no token required
+export async function laravelPublicFetch<T = unknown>(
+  endpoint: string,
+  options: RequestInit = {},
+): Promise<T> {
+  return $fetch<T>(`${LARAVEL_API}${endpoint}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers as Record<string, string>),
+    },
+  });
+}
+```
+
+---
+
+### Server Routes — Full CRUD for Posts
+
+```ts
+// server/api/posts/index.get.ts — GET list
+import type { PaginatedResponse, Post } from "~/lib/types/api";
+
+export default defineEventHandler(async (event) => {
+  const query = getQuery(event);
+  const page = query.page ?? 1;
+  const perPage = query.per_page ?? 15;
+
+  const data = await laravelFetch<PaginatedResponse<Post>>(
+    event,
+    `/posts?page=${page}&per_page=${perPage}`,
+  ).catch((error) => {
+    throw createError({
+      statusCode: error.statusCode ?? 500,
+      message: error.message ?? "Failed to fetch posts",
+    });
+  });
+
+  return data;
+});
+```
+
+```ts
+// server/api/posts/index.post.ts — POST create
+import type { Post } from "~/lib/types/api";
+
+export default defineEventHandler(async (event) => {
+  const body = await readBody(event);
+
+  const data = await laravelFetch<Post>(event, "/posts", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }).catch((error) => {
+    throw createError({
+      statusCode: error.statusCode ?? 500,
+      message: error.message ?? "Failed to create post",
+      data: { errors: error.data?.errors },
+    });
+  });
+
+  return data;
+});
+```
+
+```ts
+// server/api/posts/[id].get.ts — GET single
+import type { Post } from "~/lib/types/api";
+
+export default defineEventHandler(async (event) => {
+  const id = getRouterParam(event, "id");
+
+  const data = await laravelFetch<Post>(event, `/posts/${id}`).catch(
+    (error) => {
+      throw createError({
+        statusCode: error.statusCode ?? 500,
+        message: error.message ?? "Post not found",
+      });
+    },
+  );
+
+  return data;
+});
+```
+
+```ts
+// server/api/posts/[id].patch.ts — PATCH update
+import type { Post } from "~/lib/types/api";
+
+export default defineEventHandler(async (event) => {
+  const id = getRouterParam(event, "id");
+  const body = await readBody(event);
+
+  const data = await laravelFetch<Post>(event, `/posts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  }).catch((error) => {
+    throw createError({
+      statusCode: error.statusCode ?? 500,
+      message: error.message ?? "Failed to update post",
+      data: { errors: error.data?.errors },
+    });
+  });
+
+  return data;
+});
+```
+
+```ts
+// server/api/posts/[id].delete.ts — DELETE
+export default defineEventHandler(async (event) => {
+  const id = getRouterParam(event, "id");
+
+  await laravelFetch(event, `/posts/${id}`, {
+    method: "DELETE",
+  }).catch((error) => {
+    throw createError({
+      statusCode: error.statusCode ?? 500,
+      message: error.message ?? "Failed to delete post",
+    });
+  });
+
+  return { success: true };
+});
+```
+
+---
+
+### Page — useFetch for SSR Data
+
+```vue
+<!-- pages/posts/index.vue -->
+<script setup lang="ts">
+import type { PaginatedResponse, Post } from "@/lib/types/api";
+
+const page = ref(1);
+
+// useFetch re-fetches automatically when page changes
+const { data, pending, error, refresh } = await useFetch<
+  PaginatedResponse<Post>
+>("/api/posts", {
+  query: computed(() => ({ page: page.value, per_page: 15 })),
+  watch: [page],
+});
+
+async function handleDelete(id: string) {
+  try {
+    await $fetch(`/api/posts/${id}`, { method: "DELETE" });
+    refresh(); // refetch the list after delete
+  } catch (error: any) {
+    alert(error.data?.message ?? "Failed to delete");
+  }
+}
+</script>
+
+<template>
+  <div>
+    <div v-if="pending">Loading...</div>
+
+    <div v-else-if="error">
+      Error: {{ error.data?.message ?? "Failed to load posts" }}
+    </div>
+
+    <template v-else-if="data">
+      <p>Total: {{ data.total }}</p>
+
+      <ul>
+        <li v-for="post in data.data" :key="post.id">
+          <span>{{ post.title }}</span>
+          <button @click="handleDelete(post.id)">Delete</button>
+        </li>
+      </ul>
+
+      <div>
+        <button @click="page--" :disabled="page === 1">Previous</button>
+        <span>Page {{ page }} of {{ data.last_page }}</span>
+        <button @click="page++" :disabled="page === data.last_page">
+          Next
+        </button>
+      </div>
+    </template>
+  </div>
+</template>
+```
+
+---
+
+### Component — $fetch for Mutations
+
+```vue
+<!-- components/posts/CreatePost.vue -->
+<script setup lang="ts">
+import type { Post, ApiError } from "@/lib/types/api";
+
+const title = ref("");
+const loading = ref(false);
+const error = ref<string | null>(null);
+const fieldErrors = ref<Record<string, string>>({});
+
+const emit = defineEmits<{ created: [post: Post] }>();
+
+async function handleCreate() {
+  loading.value = true;
+  error.value = null;
+  fieldErrors.value = {};
+
+  try {
+    const post = await $fetch<Post>("/api/posts", {
+      method: "POST",
+      body: { title: title.value, body: "" },
+    });
+
+    title.value = "";
+    emit("created", post);
+  } catch (err: any) {
+    const status = err.response?.status;
+    const body = err.data;
+
+    if (status === 422 && body?.errors) {
+      Object.entries(body.errors).forEach(([field, messages]) => {
+        fieldErrors.value[field] = (messages as string[])[0];
+      });
+    } else {
+      error.value = body?.message ?? "Failed to create post";
+    }
+  } finally {
+    loading.value = false;
+  }
+}
+</script>
+
+<template>
+  <div>
+    <input v-model="title" placeholder="Post title" />
+    <p v-if="fieldErrors.title">{{ fieldErrors.title }}</p>
+    <p v-if="error">{{ error }}</p>
+
+    <button @click="handleCreate" :disabled="loading">
+      {{ loading ? "Creating..." : "Create Post" }}
+    </button>
+  </div>
+</template>
+```
+
+---
+
+### Component — Direct Public Laravel Call
+
+```vue
+<!-- components/PublicPostList.vue -->
+<!-- For public endpoints with no auth — call Laravel directly -->
+<script setup lang="ts">
+import type { PaginatedResponse, Post } from "@/lib/types/api";
+
+const config = useRuntimeConfig();
+
+const { data, pending, error } = await useFetch<PaginatedResponse<Post>>(
+  `${config.public.laravelUrl}/api/public/posts`,
+);
+</script>
+
+<template>
+  <div>
+    <div v-if="pending">Loading...</div>
+    <div v-else-if="error">Failed to load</div>
+    <ul v-else>
+      <li v-for="post in data?.data" :key="post.id">
+        {{ post.title }}
+      </li>
+    </ul>
+  </div>
+</template>
+```
+
+---
+
+### Reusable $fetch Composable — With Error Handling
+
+```ts
+// composables/useApiFetch.ts
+import type { ApiError } from "@/lib/types/api";
+
+interface FetchOptions {
+  method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+  body?: Record<string, unknown>;
+  params?: Record<string, string | number>;
+}
+
+export function useApiFetch() {
+  const loading = ref(false);
+  const error = ref<string | null>(null);
+  const fieldErrors = ref<Record<string, string>>({});
+
+  async function apiFetch<T>(
+    url: string,
+    options: FetchOptions = {},
+  ): Promise<T | null> {
+    loading.value = true;
+    error.value = null;
+    fieldErrors.value = {};
+
+    try {
+      const data = await $fetch<T>(url, {
+        method: options.method ?? "GET",
+        body: options.body,
+        params: options.params,
+      });
+
+      return data;
+    } catch (err: any) {
+      const status = err.response?.status;
+      const body = err.data;
+
+      if (status === 422 && body?.errors) {
+        Object.entries(body.errors).forEach(([field, messages]) => {
+          fieldErrors.value[field] = (messages as string[])[0];
+        });
+      } else if (status === 401) {
+        useAuthStore().clearUser();
+        await navigateTo("/login");
+      } else {
+        error.value = body?.message ?? "Something went wrong";
+      }
+
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  return { apiFetch, loading, error, fieldErrors };
+}
+
+// Usage:
+// const { apiFetch, loading, error, fieldErrors } = useApiFetch()
+// const post = await apiFetch<Post>('/api/posts', {
+//   method: 'POST',
+//   body: { title: 'Hello' },
+// })
+```
+
+---
+
+### File Upload Through Server Route
+
+```ts
+// server/api/upload.post.ts
+export default defineEventHandler(async (event) => {
+  const token = getCookie(event, "auth_token");
+
+  if (!token) {
+    throw createError({ statusCode: 401, message: "Unauthorized" });
+  }
+
+  // Read multipart form data
+  const formData = await readMultipartFormData(event);
+
+  if (!formData || formData.length === 0) {
+    throw createError({ statusCode: 422, message: "No file provided" });
+  }
+
+  // Rebuild FormData to forward to Laravel
+  const laravelFormData = new FormData();
+  formData.forEach((field) => {
+    if (field.name && field.data) {
+      const blob = new Blob([field.data], { type: field.type });
+      laravelFormData.append(field.name, blob, field.filename);
+    }
+  });
+
+  const data = await fetch(`${process.env.LARAVEL_API_URL}/upload`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: laravelFormData,
+  }).then((res) => {
+    if (!res.ok) throw createError({ statusCode: res.status });
+    return res.json();
+  });
+
+  return data;
+});
+```
+
+```vue
+<!-- components/FileUpload.vue -->
+<script setup lang="ts">
+const uploading = ref(false);
+const uploadedUrl = ref<string | null>(null);
+
+async function handleUpload(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+
+  uploading.value = true;
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const data = await $fetch<{ url: string }>("/api/upload", {
+      method: "POST",
+      body: formData,
+    });
+    uploadedUrl.value = data.url;
+  } catch (error: any) {
+    console.error("Upload failed:", error.data?.message);
+  } finally {
+    uploading.value = false;
+  }
+}
+</script>
+
+<template>
+  <div>
+    <input type="file" @change="handleUpload" :disabled="uploading" />
+    <p v-if="uploading">Uploading...</p>
+    <img v-if="uploadedUrl" :src="uploadedUrl" alt="Uploaded" />
+  </div>
+</template>
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```ts
+// Using fetch() instead of $fetch in Nuxt — misses auto JSON parsing and error throwing
+const res = await fetch('/api/posts')
+const data = await res.json() // manual parsing
+if (!res.ok) throw new Error(data.message) // manual error handling
+```
+</Wrong>
+<Right>
+```ts
+// $fetch parses JSON automatically and throws on non-2xx
+try {
+  const data = await $fetch<PaginatedResponse<Post>>('/api/posts')
+} catch (error: any) {
+  console.error(error.data?.message) // already parsed error body
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```vue
+<script setup>
+// Using $fetch for SSR page data — runs twice (server + client)
+const posts = ref([])
+onMounted(async () => {
+  posts.value = await $fetch('/api/posts') // ❌ only runs on client, no SSR
+})
+</script>
+```
+</Wrong>
+<Right>
+```vue
+<script setup>
+// useFetch runs on server, passes result to client — no duplicate request
+const { data: posts } = await useFetch('/api/posts') // ✅ SSR-aware
+</script>
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Calling Pinia inside a server route — Pinia is client-only
+// server/api/posts/index.get.ts
+export default defineEventHandler(async (event) => {
+  const auth = useAuthStore() // ❌ does not exist on the server
+  const token = auth.token
+})
+```
+</Wrong>
+<Right>
+```ts
+// Read the httpOnly cookie directly in server routes
+export default defineEventHandler(async (event) => {
+  const token = getCookie(event, 'auth_token') // ✅
+})
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** `useFetch` in Nuxt deduplicates requests using the URL as the key. If you have two `useFetch('/api/posts')` calls on the same page, they share the same cache. This is usually good but can surprise you when you expect independent requests. Use the `key` option to force separate requests.
+
+---
+
+## Best Practices
+
+**Community conventions**
+
+- Use `useFetch` for page-level data that needs SSR
+- Use `$fetch` for mutations and imperative calls inside event handlers
+- Keep all types in `lib/types/api.ts`
+- Name server route files by HTTP method: `index.get.ts`, `index.post.ts`, `[id].patch.ts`
+
+**Performance tips**
+
+```ts
+// Lazy fetch — don't block page render, show loading state instead
+const { data, pending } = useFetch("/api/posts", { lazy: true });
+
+// Deduplicate with a custom key
+const { data } = useFetch("/api/posts", { key: "posts-page-1" });
+
+// Transform response — pick only what you need
+const { data } = useFetch<PaginatedResponse<Post>>("/api/posts", {
+  transform: (res) => res.data, // only keep the array, not pagination meta
+});
+```
+
+**Security considerations**
+
+- Never call Laravel directly from components for protected endpoints
+- Never use Pinia inside server routes — it is client-only
+- Always use `getCookie(event, 'auth_token')` in server routes — never trust client-sent tokens in the body
+- Set `LARAVEL_API_URL` without `NUXT_PUBLIC_` prefix — keep it server-side only
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between useFetch and $fetch in Nuxt 3?"
+  difficulty="easy"
+>
+  `useFetch` is a composable that wraps `$fetch` with SSR awareness — it runs on
+  the server during SSR, passes the result to the client, and the client does
+  not make a duplicate request. It returns reactive `data`, `pending`, and
+  `error` refs. `$fetch` is a plain async function — it always makes a network
+  request when called, works anywhere (setup, event handlers, server routes),
+  and is better for mutations. Use `useFetch` for page data, `$fetch` for
+  actions.
+</InterviewQ>
+
+<InterviewQ
+  question="Why does $fetch throw on non-2xx responses while native fetch does not?"
+  difficulty="easy"
+>
+  `$fetch` is built on `ofetch` which is an opinionated fetch wrapper. It
+  automatically parses JSON responses and throws a `FetchError` when the
+  response status is not 2xx. The thrown error includes the parsed response body
+  in `error.data` so you can access field errors and messages without manually
+  checking `res.ok` and parsing separately. Native `fetch` never throws on HTTP
+  errors — it only throws on network failures.
+</InterviewQ>
+
+<InterviewQ
+  question="How does useFetch deduplicate requests and when does it cause problems?"
+  difficulty="mid"
+>
+  `useFetch` uses the URL and options as a cache key. If two components call
+  `useFetch('/api/posts')` on the same page, they share one request and one
+  reactive state. This is efficient but causes problems when you want
+  independent fetches — for example two different filtered lists at the same
+  endpoint. Fix it with the `key` option: `useFetch('/api/posts', { key:
+  'featured-posts' })` forces a separate cache entry.
+</InterviewQ>
+
+<InterviewQ
+  question="When would you call Laravel directly from a Nuxt component instead of going through a server route?"
+  difficulty="mid"
+>
+  Only for truly public endpoints that require no authentication — a public blog
+  post list, a country dropdown, a search endpoint open to everyone. In these
+  cases there is no token to protect so calling Laravel directly from the client
+  is acceptable and saves a server round-trip. For any endpoint that requires
+  auth, always go through a Nuxt server route so the Bearer token stays in the
+  httpOnly cookie on the server.
+</InterviewQ>
+
+<InterviewQ
+  question="How would you implement request retry logic with $fetch in Nuxt?"
+  difficulty="hard"
+>
+  `ofetch` (which powers `$fetch`) has a built-in `retry` option. You can
+  set it globally when configuring your fetch instance or per-request. For
+  more advanced retry logic — like refreshing an expired token before
+  retrying — you use the `onResponseError` interceptor to detect 401, call
+  a token refresh endpoint, update the cookie, then retry the original
+  request with the new token:
+
+```ts
+const customFetch = $fetch.create({
+  retry: 3,
+  retryDelay: 500,
+  onResponseError: async ({ request, options, response }) => {
+    if (response.status === 401) {
+      // Attempt token refresh
+      await $fetch("/api/auth/refresh", { method: "POST" });
+      // Retry original request — ofetch handles this automatically
+    }
+  },
+});
+```
+
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The biggest confusion switching from React to Nuxt: using $fetch inside
+  onMounted instead of useFetch. The data never shows on first load because
+  onMounted only runs on the client. Always use useFetch for page-level data
+  that needs to be in the HTML on first render. Use $fetch only inside event
+  handlers and actions.
+</MyNotes>
+
+<MyNotes>
+  $fetch automatically throws on non-2xx responses — this is different from
+  native fetch. At first I kept wrapping $fetch in if (!res.ok) checks that
+  never ran. Now I just use try/catch and access error.data for the Laravel
+  error body. Much cleaner.
+</MyNotes>
+
+<MyNotes>
+  The server route file naming convention in Nuxt is important: `index.get.ts`,
+  `index.post.ts`, `[id].patch.ts`, `[id].delete.ts`. Nuxt automatically maps
+  the HTTP method from the filename. No need to check the method inside the
+  handler.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### nuxt.config.ts — Runtime Config for API URLs
+
+```ts
+// nuxt.config.ts
+export default defineNuxtConfig({
+  runtimeConfig: {
+    // Server-side only
+    laravelApiUrl: process.env.LARAVEL_API_URL,
+
+    public: {
+      // Exposed to client — only for public Laravel endpoints
+      laravelUrl: process.env.NUXT_PUBLIC_LARAVEL_URL,
+    },
+  },
+});
+```
+
+```env
+# .env
+LARAVEL_API_URL=http://localhost:8000/api     # server-side only
+NUXT_PUBLIC_LARAVEL_URL=http://localhost:8000 # client-safe — public endpoints only
+```
+
+---
+
+### Global $fetch Interceptor — Handle 401 Everywhere
+
+```ts
+// plugins/fetch.client.ts
+export default defineNuxtPlugin(() => {
+  const auth = useAuthStore();
+
+  const apiFetch = $fetch.create({
+    onResponseError({ response }) {
+      if (response.status === 401) {
+        auth.clearUser();
+        navigateTo("/login");
+      }
+    },
+  });
+
+  return {
+    provide: { apiFetch },
+  };
+});
+
+// Usage in components:
+// const { $apiFetch } = useNuxtApp()
+// const data = await $apiFetch<Post[]>('/api/posts')
+```
+
+---
+
+_Tags: `nuxt` `vue` `fetch` `ofetch` `useFetch` `api` `crud` `laravel` `server-routes` `typescript` `intermediate`_

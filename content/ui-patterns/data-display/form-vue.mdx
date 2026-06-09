@@ -1,0 +1,525 @@
+---
+title: "Form UI with Vue + Tailwind CSS"
+description: "How to build reusable, accessible form components in Vue 3 — inputs, selects, checkboxes, radio buttons, and switches — without validation logic, using Tailwind CSS"
+category: ui-patterns
+tools: [vue, tailwind]
+tags: [form, input, select, checkbox, radio, switch, accessible]
+difficulty: beginner
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - ui-patterns/form-nextjs
+  - ui-patterns/modal-vue
+---
+
+## Concept explanation
+
+Form UI components are the building blocks for collecting user input — text fields, selects, checkboxes, radio buttons, and toggles. This page covers the **visual and structural** side only. Validation logic (Zod, VeeValidate) is covered separately in the `forms-validation` category. In Vue 3 all form inputs use `v-model` for two-way binding.
+
+<Callout type="note">
+  **Vue vs Nuxt difference:** Code is identical in both. Nuxt auto-imports `ref` and `reactive` so you can skip those imports.
+</Callout>
+
+## Why it's used
+
+- Every app needs to collect user input at some point
+- Consistent form styling improves UX and looks professional
+- Reusable input components reduce duplication across pages
+- Accessible forms work for keyboard and screen reader users
+
+## Real-world use cases
+
+- Login and register pages
+- User profile edit form
+- Create / edit resource forms (product, post, user)
+- Settings and preferences pages
+- Contact and feedback forms
+
+## Code example
+
+### Form field wrapper component
+
+```vue
+<!-- components/form/FormField.vue -->
+<script setup lang="ts">
+defineProps<{
+  label: string
+  hint?: string
+  error?: string
+  required?: boolean
+}>()
+</script>
+
+<template>
+  <div class="space-y-1.5">
+    <!-- Label -->
+    <label class="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+      {{ label }}
+      <span v-if="required" class="text-red-500 ml-0.5">*</span>
+    </label>
+
+    <!-- Input slot -->
+    <slot />
+
+    <!-- Hint -->
+    <p v-if="hint && !error" class="text-xs text-neutral-400">
+      {{ hint }}
+    </p>
+
+    <!-- Error -->
+    <p v-if="error" class="text-xs text-red-500 flex items-center gap-1">
+      <span>⚠</span> {{ error }}
+    </p>
+  </div>
+</template>
+```
+
+### Text input
+
+```vue
+<!-- components/form/AppInput.vue -->
+<script setup lang="ts">
+defineProps<{
+  modelValue: string
+  type?: string
+  placeholder?: string
+  disabled?: boolean
+  error?: boolean
+}>()
+
+defineEmits<{ 'update:modelValue': [value: string] }>()
+</script>
+
+<template>
+  <input
+    :value="modelValue"
+    @input="$emit('update:modelValue', ($event.target as HTMLInputElement).value)"
+    :type="type ?? 'text'"
+    :placeholder="placeholder"
+    :disabled="disabled"
+    :class="[
+      'w-full px-3 py-2 text-sm rounded-lg border transition-colors',
+      'bg-white dark:bg-neutral-900',
+      'text-neutral-900 dark:text-neutral-100',
+      'placeholder:text-neutral-400',
+      'focus:outline-none focus:ring-2',
+      'disabled:opacity-50 disabled:cursor-not-allowed',
+      error
+        ? 'border-red-400 focus:ring-red-400'
+        : 'border-neutral-200 dark:border-neutral-700 focus:ring-blue-500 focus:border-blue-500'
+    ]"
+  />
+</template>
+```
+
+### Textarea
+
+```vue
+<!-- components/form/AppTextarea.vue -->
+<script setup lang="ts">
+defineProps<{
+  modelValue: string
+  placeholder?: string
+  rows?: number
+  disabled?: boolean
+  error?: boolean
+}>()
+
+defineEmits<{ 'update:modelValue': [value: string] }>()
+</script>
+
+<template>
+  <textarea
+    :value="modelValue"
+    @input="$emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
+    :placeholder="placeholder"
+    :rows="rows ?? 4"
+    :disabled="disabled"
+    :class="[
+      'w-full px-3 py-2 text-sm rounded-lg border transition-colors resize-y',
+      'bg-white dark:bg-neutral-900',
+      'text-neutral-900 dark:text-neutral-100',
+      'placeholder:text-neutral-400',
+      'focus:outline-none focus:ring-2',
+      'disabled:opacity-50 disabled:cursor-not-allowed',
+      error
+        ? 'border-red-400 focus:ring-red-400'
+        : 'border-neutral-200 dark:border-neutral-700 focus:ring-blue-500 focus:border-blue-500'
+    ]"
+  />
+</template>
+```
+
+### Select
+
+```vue
+<!-- components/form/AppSelect.vue -->
+<script setup lang="ts">
+defineProps<{
+  modelValue: string
+  options: { value: string; label: string }[]
+  placeholder?: string
+  disabled?: boolean
+  error?: boolean
+}>()
+
+defineEmits<{ 'update:modelValue': [value: string] }>()
+</script>
+
+<template>
+  <select
+    :value="modelValue"
+    @change="$emit('update:modelValue', ($event.target as HTMLSelectElement).value)"
+    :disabled="disabled"
+    :class="[
+      'w-full px-3 py-2 text-sm rounded-lg border transition-colors',
+      'bg-white dark:bg-neutral-900',
+      'text-neutral-900 dark:text-neutral-100',
+      'focus:outline-none focus:ring-2',
+      'disabled:opacity-50 disabled:cursor-not-allowed',
+      error
+        ? 'border-red-400 focus:ring-red-400'
+        : 'border-neutral-200 dark:border-neutral-700 focus:ring-blue-500 focus:border-blue-500'
+    ]"
+  >
+    <option v-if="placeholder" value="" disabled>{{ placeholder }}</option>
+    <option
+      v-for="opt in options"
+      :key="opt.value"
+      :value="opt.value"
+    >
+      {{ opt.label }}
+    </option>
+  </select>
+</template>
+```
+
+### Checkbox
+
+```vue
+<!-- components/form/AppCheckbox.vue -->
+<script setup lang="ts">
+defineProps<{
+  modelValue: boolean
+  label: string
+  disabled?: boolean
+}>()
+
+defineEmits<{ 'update:modelValue': [value: boolean] }>()
+</script>
+
+<template>
+  <label class="flex items-center gap-3 cursor-pointer group">
+    <input
+      type="checkbox"
+      :checked="modelValue"
+      @change="$emit('update:modelValue', ($event.target as HTMLInputElement).checked)"
+      :disabled="disabled"
+      class="w-4 h-4 rounded border-neutral-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+    />
+    <span class="text-sm text-neutral-700 dark:text-neutral-300 group-hover:text-neutral-900 dark:group-hover:text-neutral-100 transition-colors">
+      {{ label }}
+    </span>
+  </label>
+</template>
+```
+
+### Radio group
+
+```vue
+<!-- components/form/AppRadioGroup.vue -->
+<script setup lang="ts">
+defineProps<{
+  modelValue: string
+  options: { value: string; label: string; description?: string }[]
+  name: string
+  disabled?: boolean
+}>()
+
+defineEmits<{ 'update:modelValue': [value: string] }>()
+</script>
+
+<template>
+  <div class="space-y-2">
+    <label
+      v-for="opt in options"
+      :key="opt.value"
+      :class="[
+        'flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
+        modelValue === opt.value
+          ? 'border-blue-500 bg-blue-50 dark:bg-blue-950'
+          : 'border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600'
+      ]"
+    >
+      <input
+        type="radio"
+        :name="name"
+        :value="opt.value"
+        :checked="modelValue === opt.value"
+        @change="$emit('update:modelValue', opt.value)"
+        :disabled="disabled"
+        class="mt-0.5 w-4 h-4 text-blue-600 border-neutral-300 focus:ring-blue-500"
+      />
+      <div>
+        <p class="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+          {{ opt.label }}
+        </p>
+        <p v-if="opt.description" class="text-xs text-neutral-400 mt-0.5">
+          {{ opt.description }}
+        </p>
+      </div>
+    </label>
+  </div>
+</template>
+```
+
+### Toggle switch
+
+```vue
+<!-- components/form/AppSwitch.vue -->
+<script setup lang="ts">
+defineProps<{
+  modelValue: boolean
+  label?: string
+  description?: string
+  disabled?: boolean
+}>()
+
+defineEmits<{ 'update:modelValue': [value: boolean] }>()
+</script>
+
+<template>
+  <div class="flex items-center justify-between gap-4">
+    <div v-if="label">
+      <p class="text-sm font-medium text-neutral-700 dark:text-neutral-300">{{ label }}</p>
+      <p v-if="description" class="text-xs text-neutral-400">{{ description }}</p>
+    </div>
+
+    <button
+      type="button"
+      role="switch"
+      :aria-checked="modelValue"
+      :disabled="disabled"
+      @click="$emit('update:modelValue', !modelValue)"
+      :class="[
+        'relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent',
+        'transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2',
+        'disabled:opacity-50 disabled:cursor-not-allowed',
+        modelValue
+          ? 'bg-blue-600'
+          : 'bg-neutral-200 dark:bg-neutral-700'
+      ]"
+    >
+      <span
+        :class="[
+          'pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-sm',
+          'transform transition-transform duration-200',
+          modelValue ? 'translate-x-5' : 'translate-x-0'
+        ]"
+      />
+    </button>
+  </div>
+</template>
+```
+
+### Full form example using all components
+
+```vue
+<!-- pages/create-user.vue -->
+<script setup lang="ts">
+import { ref } from 'vue'
+import FormField from '@/components/form/FormField.vue'
+import AppInput from '@/components/form/AppInput.vue'
+import AppTextarea from '@/components/form/AppTextarea.vue'
+import AppSelect from '@/components/form/AppSelect.vue'
+import AppCheckbox from '@/components/form/AppCheckbox.vue'
+import AppRadioGroup from '@/components/form/AppRadioGroup.vue'
+import AppSwitch from '@/components/form/AppSwitch.vue'
+import { useToast } from '@/composables/useToast'
+
+const { success } = useToast()
+
+const form = ref({
+  name:          '',
+  email:         '',
+  bio:           '',
+  role:          '',
+  plan:          'free',
+  notifications: true,
+  agreeToTerms:  false,
+})
+
+const roleOptions = [
+  { value: 'admin',  label: 'Admin' },
+  { value: 'editor', label: 'Editor' },
+  { value: 'viewer', label: 'Viewer' },
+]
+
+const planOptions = [
+  { value: 'free', label: 'Free',       description: 'Up to 3 projects' },
+  { value: 'pro',  label: 'Pro',        description: 'Unlimited projects + priority support' },
+  { value: 'team', label: 'Team',       description: 'Everything in Pro + team features' },
+]
+
+const handleSubmit = () => {
+  console.log(form.value)
+  success('User created successfully!')
+}
+</script>
+
+<template>
+  <form @submit.prevent="handleSubmit" class="max-w-lg space-y-6">
+
+    <FormField label="Full name" required>
+      <AppInput v-model="form.name" placeholder="Omar Hassan" />
+    </FormField>
+
+    <FormField label="Email" hint="We'll never share your email." required>
+      <AppInput v-model="form.email" type="email" placeholder="omar@example.com" />
+    </FormField>
+
+    <FormField label="Bio" hint="Max 200 characters">
+      <AppTextarea v-model="form.bio" placeholder="Tell us about yourself..." :rows="3" />
+    </FormField>
+
+    <FormField label="Role" required>
+      <AppSelect
+        v-model="form.role"
+        :options="roleOptions"
+        placeholder="Select a role"
+      />
+    </FormField>
+
+    <FormField label="Plan">
+      <AppRadioGroup
+        v-model="form.plan"
+        :options="planOptions"
+        name="plan"
+      />
+    </FormField>
+
+    <AppSwitch
+      v-model="form.notifications"
+      label="Email notifications"
+      description="Receive updates about your account activity"
+    />
+
+    <AppCheckbox
+      v-model="form.agreeToTerms"
+      label="I agree to the Terms of Service and Privacy Policy"
+    />
+
+    <div class="flex items-center gap-3 pt-2">
+      <button
+        type="button"
+        class="px-4 py-2 text-sm font-medium text-neutral-600 border border-neutral-200 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
+      >
+        Cancel
+      </button>
+      <button
+        type="submit"
+        class="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+      >
+        Create User
+      </button>
+    </div>
+
+  </form>
+</template>
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Not using label element properly
+     clicking the label text doesn't focus the input -->
+<div>
+  <span class="text-sm">Email</span> <!-- ❌ span not linked to input -->
+  <input type="email" v-model="email" />
+</div>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Always use label element — clicking it focuses the input
+     also required for screen readers -->
+<div>
+  <label for="email" class="text-sm">Email</label> <!-- ✅ -->
+  <input id="email" type="email" v-model="email" />
+</div>
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Not preventing default on form submit
+     page reloads and all form state is lost -->
+<form @submit="handleSubmit"> <!-- ❌ no prevent -->
+  ...
+</form>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Always use @submit.prevent on forms -->
+<form @submit.prevent="handleSubmit"> <!-- ✅ -->
+  ...
+</form>
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always use `<label>` elements linked to inputs — never plain `<span>` or `<div>`
+- Use `@submit.prevent` on forms to stop page reload
+- Show `required` indicator (`*`) in the label — not just browser-native validation
+- Add `disabled` state to all inputs — forms often need to disable during submission
+- Group label, input, hint, and error in a `FormField` wrapper component
+- Use `type="email"`, `type="password"`, `type="number"` correctly — helps mobile keyboards
+- Add `focus:ring` styles so keyboard users can see which input is focused
+
+<Callout type="tip">
+  Add a loading state to your submit button to prevent double submissions:
+```vue
+  const loading = ref(false)
+  const handleSubmit = async () => {
+    loading.value = true
+    await createUser(form.value)
+    loading.value = false
+  }
+```
+```vue
+  <button :disabled="loading" type="submit">
+    {{ loading ? 'Saving...' : 'Save' }}
+  </button>
+```
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between controlled and uncontrolled inputs in Vue?" difficulty="mid">
+  A controlled input uses `v-model` — Vue owns the value and the input always reflects the reactive state. An uncontrolled input uses a `ref` on the element and reads the value directly from the DOM. In Vue, controlled inputs with `v-model` are always preferred — they make the form state predictable, easy to reset, and simple to submit. Uncontrolled inputs are rarely used in Vue except for file inputs which can't be controlled.
+</InterviewQ>
+
+<InterviewQ question="Why should you always use a label element instead of a span for form labels?" difficulty="easy">
+  A `<label>` element linked to an input via `for`/`id` or wrapping the input gives two benefits: clicking the label focuses the input (better UX), and screen readers announce the label text when the input is focused (accessibility). A `<span>` provides neither — it's just styled text with no semantic connection to the input.
+</InterviewQ>
+
+<InterviewQ question="How do you handle file input with v-model in Vue?" difficulty="mid">
+  File inputs cannot be controlled with `v-model` because their value is read-only — the browser controls it for security reasons. Instead use a `ref` on the input element and read `inputRef.value.files` on change. To clear a file input programmatically, set `inputRef.value.value = ''`. For styling, hide the native input and trigger it with a custom button using `inputRef.value.click()`.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The `FormField` wrapper component is the most reusable piece here. It handles label, hint, and error display in one place — every input just slots inside it. I copy this pattern into every project.
+
+  The `AppSwitch` toggle using `role="switch"` and `aria-checked` is important for accessibility — without it, screen readers announce it as a plain button with no state.
+
+  For Nuxt — `ref` and `reactive` are auto-imported. Skip imports. Also in Nuxt you can put your form components in `components/form/` and they get auto-imported as `FormField`, `AppInput`, etc. — no import statements needed in pages.
+</MyNotes>

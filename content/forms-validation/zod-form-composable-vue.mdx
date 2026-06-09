@@ -1,0 +1,1008 @@
+---
+title: "Forms & Validation with Zod + Custom Composable"
+description: "How to build a reusable useForm composable with Zod validation in Vue 3 and Nuxt 3, submitting through Nuxt Server Routes to a Laravel API with httpOnly cookie Bearer token authentication."
+category: forms-validation
+tools: [vue, nuxt]
+tags:
+  [
+    zod,
+    forms,
+    validation,
+    composable,
+    vue3,
+    nuxt3,
+    laravel,
+    server-routes,
+    typescript,
+  ]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+Instead of relying on a form library like VeeValidate, we build a clean reusable `useForm` composable using Zod for schema validation and Vue 3 refs for state. You own every line of code, understand exactly what it does, and can extend it however you need.
+
+Zod is a TypeScript-first schema validation library. You define the shape and rules of your data once as a schema, infer TypeScript types from it automatically, and reuse that same schema on both the client and the Nuxt server route.
+
+**Your architecture in this file:**
+
+```text
+[Vue Form]
+│  useForm composable handles input state + errors
+│  Zod validates on submit (client-side)
+▼
+[Nuxt Server Route] /server/api/...
+│  Reads httpOnly cookie → extracts Bearer token
+│  Validates request body again with Zod (server-side)
+│  Calls Laravel API with Authorization header
+▼
+[Laravel API]
+│  Returns response
+▼
+[Back to Client]
+│  useForm composable handles success / server errors
+```
+
+<Callout type="note">
+  **Why validate twice?** Client-side validation gives instant feedback without
+  a network request. Server-side validation in the Nuxt server route protects
+  your Laravel API even if someone bypasses the form and calls your route
+  directly. Same Zod schema — zero duplication.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **No extra library:** Just Zod + Vue refs — nothing new to learn beyond what you already know.
+- **Fully reusable:** One `useForm` composable works for every form in your app.
+- **Type-safe:** Zod infers TypeScript types automatically — define once, get types for free.
+- **You own the code:** No black box — you can extend, debug, and customize every part.
+- **Same pattern everywhere:** Client validation, server validation, Laravel error mapping — all consistent.
+
+---
+
+## Real-World Use Cases
+
+- **Login / Register forms:** Validate credentials client-side, submit to Nuxt server route, call Laravel Sanctum.
+- **Profile update form:** Pre-fill with existing data, validate changes, PATCH to Laravel.
+- **Multi-step wizard:** Each step has its own Zod schema, final step submits everything.
+- **Contact / support form:** Simple form with server-side rate limiting in the server route.
+- **Settings forms:** Multiple small forms on one page, each with its own composable instance.
+
+---
+
+## When NOT to Use It
+
+- **Very complex forms** with 20+ fields, dynamic field arrays, or drag-and-drop ordering — VeeValidate or a dedicated library handles these edge cases better.
+- **Single field inputs** with no validation — plain `ref()` is simpler.
+- **Search inputs** — use `useRoute` and query params instead.
+
+---
+
+## Code Examples
+
+### Install
+
+```bash
+npm install zod
+```
+
+---
+
+### The useForm Composable — Build Once, Use Everywhere
+
+```ts
+// composables/useForm.ts
+import { ref, reactive } from "vue";
+import type { ZodSchema, ZodError } from "zod";
+
+interface UseFormOptions<T extends Record<string, unknown>> {
+  schema: ZodSchema<T>;
+  initialValues: T;
+  onSubmit: (data: T) => Promise<void>;
+}
+
+export function useForm<T extends Record<string, unknown>>({
+  schema,
+  initialValues,
+  onSubmit,
+}: UseFormOptions<T>) {
+  // Form values
+  const values = reactive<T>({ ...initialValues });
+
+  // Field-level errors from Zod
+  const errors = reactive<Partial<Record<keyof T, string>>>({});
+
+  // Server-level error (non-field specific)
+  const serverError = ref<string | null>(null);
+
+  // Success state
+  const isSuccess = ref(false);
+
+  // Loading state
+  const isSubmitting = ref(false);
+
+  // Clear all errors
+  function clearErrors() {
+    Object.keys(errors).forEach((key) => {
+      delete errors[key as keyof T];
+    });
+    serverError.value = null;
+  }
+
+  // Set errors from Laravel 422 response
+  function setServerFieldErrors(laravelErrors: Record<string, string[]>) {
+    Object.entries(laravelErrors).forEach(([field, messages]) => {
+      errors[field as keyof T] = messages[0];
+    });
+  }
+
+  // Handle form submit
+  async function handleSubmit() {
+    clearErrors();
+    isSuccess.value = false;
+
+    // Client-side Zod validation
+    const parsed = schema.safeParse(values);
+
+    if (!parsed.success) {
+      const fieldErrors = parsed.error.flatten().fieldErrors;
+      Object.entries(fieldErrors).forEach(([field, messages]) => {
+        if (messages?.[0]) {
+          errors[field as keyof T] = messages[0];
+        }
+      });
+      return;
+    }
+
+    isSubmitting.value = true;
+
+    try {
+      await onSubmit(parsed.data);
+      isSuccess.value = true;
+    } catch (error) {
+      if (error instanceof FormSubmitError) {
+        if (error.fieldErrors) {
+          setServerFieldErrors(error.fieldErrors);
+        } else {
+          serverError.value = error.message;
+        }
+      } else {
+        serverError.value = "Something went wrong. Please try again.";
+      }
+    } finally {
+      isSubmitting.value = false;
+    }
+  }
+
+  // Reset form to initial values
+  function reset() {
+    Object.assign(values, initialValues);
+    clearErrors();
+    isSuccess.value = false;
+  }
+
+  return {
+    values,
+    errors,
+    serverError,
+    isSubmitting,
+    isSuccess,
+    handleSubmit,
+    reset,
+    setServerFieldErrors,
+  };
+}
+
+// Custom error class to carry field errors from server
+export class FormSubmitError extends Error {
+  fieldErrors?: Record<string, string[]>;
+
+  constructor(message: string, fieldErrors?: Record<string, string[]>) {
+    super(message);
+    this.fieldErrors = fieldErrors;
+  }
+}
+```
+
+---
+
+### Zod Schema — Define Once, Use Everywhere
+
+```ts
+// lib/schemas/auth.ts
+import { z } from "zod";
+
+export const loginSchema = z.object({
+  email: z.string().min(1, "Email is required").email("Invalid email address"),
+  password: z
+    .string()
+    .min(1, "Password is required")
+    .min(8, "Password must be at least 8 characters"),
+});
+
+export type LoginFormData = z.infer<typeof loginSchema>;
+```
+
+---
+
+### Basic Login Form
+
+```vue
+<!-- components/forms/LoginForm.vue -->
+<script setup lang="ts">
+import { useForm, FormSubmitError } from "@/composables/useForm";
+import { loginSchema, type LoginFormData } from "@/lib/schemas/auth";
+
+const router = useRouter();
+
+const { values, errors, serverError, isSubmitting, handleSubmit } =
+  useForm<LoginFormData>({
+    schema: loginSchema,
+    initialValues: { email: "", password: "" },
+    onSubmit: async (data) => {
+      const res = await $fetch("/api/auth/login", {
+        method: "POST",
+        body: data,
+      }).catch((error) => {
+        // $fetch throws on non-2xx responses
+        const status = error.response?.status;
+        const body = error.response?._data;
+
+        if (status === 422 && body?.errors) {
+          throw new FormSubmitError("Validation failed", body.errors);
+        }
+
+        throw new FormSubmitError(body?.message ?? "Login failed");
+      });
+
+      await router.push("/dashboard");
+    },
+  });
+</script>
+
+<template>
+  <form @submit.prevent="handleSubmit" novalidate>
+    <div>
+      <label for="email">Email</label>
+      <input
+        id="email"
+        v-model="values.email"
+        type="email"
+        autocomplete="email"
+      />
+      <p v-if="errors.email">{{ errors.email }}</p>
+    </div>
+
+    <div>
+      <label for="password">Password</label>
+      <input
+        id="password"
+        v-model="values.password"
+        type="password"
+        autocomplete="current-password"
+      />
+      <p v-if="errors.password">{{ errors.password }}</p>
+    </div>
+
+    <p v-if="serverError">{{ serverError }}</p>
+
+    <button type="submit" :disabled="isSubmitting">
+      {{ isSubmitting ? "Signing in..." : "Sign in" }}
+    </button>
+  </form>
+</template>
+```
+
+---
+
+### Nuxt Server Route — Login
+
+```ts
+// server/api/auth/login.post.ts
+import { loginSchema } from "~/lib/schemas/auth";
+
+const LARAVEL_API = process.env.LARAVEL_API_URL;
+
+export default defineEventHandler(async (event) => {
+  const body = await readBody(event);
+
+  // Server-side validation with same Zod schema
+  const parsed = loginSchema.safeParse(body);
+  if (!parsed.success) {
+    throw createError({
+      statusCode: 422,
+      data: { errors: parsed.error.flatten().fieldErrors },
+    });
+  }
+
+  // Call Laravel API
+  const data = await $fetch<{ token: string }>(`${LARAVEL_API}/auth/login`, {
+    method: "POST",
+    body: parsed.data,
+  }).catch((error) => {
+    throw createError({
+      statusCode: error.response?.status ?? 500,
+      message: error.response?._data?.message ?? "Login failed",
+    });
+  });
+
+  // Store Bearer token in httpOnly cookie — never readable by client JS
+  setCookie(event, "auth_token", data.token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 7, // 7 days
+  });
+
+  return { success: true };
+});
+```
+
+---
+
+### Nuxt Server Route Helper — Read Token from Cookie
+
+```ts
+// server/utils/laravelFetch.ts
+// Reusable helper for all server routes that call Laravel
+import { H3Event } from "h3";
+
+export async function laravelFetch(
+  event: H3Event,
+  endpoint: string,
+  options: RequestInit = {},
+) {
+  const token = getCookie(event, "auth_token");
+
+  if (!token) {
+    throw createError({ statusCode: 401, message: "Unauthorized" });
+  }
+
+  return $fetch(`${process.env.LARAVEL_API_URL}${endpoint}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      ...(options.headers as Record<string, string>),
+    },
+  });
+}
+```
+
+---
+
+### Profile Update Form — Pre-filled + PATCH
+
+```ts
+// lib/schemas/profile.ts
+import { z } from "zod";
+
+export const updateProfileSchema = z.object({
+  name: z.string().min(1, "Name is required").max(100),
+  email: z.string().email("Invalid email address"),
+  bio: z.string().max(500, "Bio must be under 500 characters").optional(),
+  phone: z
+    .string()
+    .regex(/^\+?[0-9]{7,15}$/, "Invalid phone number")
+    .optional()
+    .or(z.literal("")),
+});
+
+export type UpdateProfileFormData = z.infer<typeof updateProfileSchema>;
+```
+
+```vue
+<!-- components/forms/UpdateProfileForm.vue -->
+<script setup lang="ts">
+import { useForm, FormSubmitError } from "@/composables/useForm";
+import {
+  updateProfileSchema,
+  type UpdateProfileFormData,
+} from "@/lib/schemas/profile";
+
+const props = defineProps<{
+  defaultValues: UpdateProfileFormData;
+}>();
+
+const { values, errors, serverError, isSubmitting, isSuccess, handleSubmit } =
+  useForm<UpdateProfileFormData>({
+    schema: updateProfileSchema,
+    initialValues: { ...props.defaultValues },
+    onSubmit: async (data) => {
+      await $fetch("/api/profile", {
+        method: "PATCH",
+        body: data,
+      }).catch((error) => {
+        const status = error.response?.status;
+        const body = error.response?._data;
+
+        if (status === 422 && body?.errors) {
+          throw new FormSubmitError("Validation failed", body.errors);
+        }
+
+        throw new FormSubmitError(body?.message ?? "Update failed");
+      });
+    },
+  });
+</script>
+
+<template>
+  <form @submit.prevent="handleSubmit" novalidate>
+    <div>
+      <label>Name</label>
+      <input v-model="values.name" type="text" />
+      <p v-if="errors.name">{{ errors.name }}</p>
+    </div>
+
+    <div>
+      <label>Email</label>
+      <input v-model="values.email" type="email" />
+      <p v-if="errors.email">{{ errors.email }}</p>
+    </div>
+
+    <div>
+      <label>Bio</label>
+      <textarea v-model="values.bio" />
+      <p v-if="errors.bio">{{ errors.bio }}</p>
+    </div>
+
+    <div>
+      <label>Phone</label>
+      <input v-model="values.phone" type="tel" />
+      <p v-if="errors.phone">{{ errors.phone }}</p>
+    </div>
+
+    <p v-if="serverError">{{ serverError }}</p>
+    <p v-if="isSuccess">Profile updated successfully!</p>
+
+    <button type="submit" :disabled="isSubmitting">
+      {{ isSubmitting ? "Saving..." : "Save Changes" }}
+    </button>
+  </form>
+</template>
+```
+
+---
+
+### Nuxt Server Route — Profile PATCH
+
+```ts
+// server/api/profile.patch.ts
+import { updateProfileSchema } from "~/lib/schemas/profile";
+import { laravelFetch } from "~/server/utils/laravelFetch";
+
+export default defineEventHandler(async (event) => {
+  const body = await readBody(event);
+
+  const parsed = updateProfileSchema.safeParse(body);
+  if (!parsed.success) {
+    throw createError({
+      statusCode: 422,
+      data: { errors: parsed.error.flatten().fieldErrors },
+    });
+  }
+
+  const data = await laravelFetch(event, "/profile", {
+    method: "PATCH",
+    body: JSON.stringify(parsed.data),
+  }).catch((error) => {
+    throw createError({
+      statusCode: error.response?.status ?? 500,
+      message: error.response?._data?.message ?? "Update failed",
+      data: { errors: error.response?._data?.errors },
+    });
+  });
+
+  return data;
+});
+```
+
+---
+
+### Multi-Step Form
+
+```ts
+// lib/schemas/register.ts
+import { z } from "zod";
+
+export const stepOneSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  email: z.string().email("Invalid email"),
+});
+
+export const stepTwoSchema = z
+  .object({
+    password: z.string().min(8, "Minimum 8 characters"),
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+
+export const stepThreeSchema = z.object({
+  role: z.enum(["developer", "designer", "manager"], {
+    required_error: "Please select a role",
+  }),
+  company: z.string().optional(),
+});
+
+export const registerSchema = stepOneSchema
+  .merge(stepTwoSchema)
+  .merge(stepThreeSchema);
+
+export type RegisterFormData = z.infer<typeof registerSchema>;
+```
+
+```vue
+<!-- components/forms/RegisterWizard.vue -->
+<script setup lang="ts">
+import { ref, reactive } from "vue";
+import {
+  stepOneSchema,
+  stepTwoSchema,
+  stepThreeSchema,
+  registerSchema,
+  type RegisterFormData,
+} from "@/lib/schemas/register";
+import { FormSubmitError } from "@/composables/useForm";
+
+const stepSchemas = [stepOneSchema, stepTwoSchema, stepThreeSchema];
+const step = ref(0);
+const isSubmitting = ref(false);
+const serverError = ref<string | null>(null);
+
+// Single reactive object holds all steps data
+const values = reactive<RegisterFormData>({
+  name: "",
+  email: "",
+  password: "",
+  confirmPassword: "",
+  role: "developer",
+  company: "",
+});
+
+const errors = reactive<Partial<Record<keyof RegisterFormData, string>>>({});
+
+function clearErrors() {
+  Object.keys(errors).forEach(
+    (key) => delete errors[key as keyof RegisterFormData],
+  );
+}
+
+// Validate current step fields only before moving forward
+function validateStep(): boolean {
+  clearErrors();
+  const parsed = stepSchemas[step.value].safeParse(values);
+
+  if (!parsed.success) {
+    const fieldErrors = parsed.error.flatten().fieldErrors;
+    Object.entries(fieldErrors).forEach(([field, messages]) => {
+      if (messages?.[0]) errors[field as keyof RegisterFormData] = messages[0];
+    });
+    return false;
+  }
+
+  return true;
+}
+
+function nextStep() {
+  if (validateStep()) step.value++;
+}
+
+async function handleSubmit() {
+  if (!validateStep()) return;
+
+  // Final full schema validation before submitting
+  const parsed = registerSchema.safeParse(values);
+  if (!parsed.success) return;
+
+  isSubmitting.value = true;
+  serverError.value = null;
+
+  try {
+    await $fetch("/api/auth/register", {
+      method: "POST",
+      body: parsed.data,
+    });
+
+    await navigateTo("/dashboard");
+  } catch (error: any) {
+    const status = error.response?.status;
+    const body = error.response?._data;
+
+    if (status === 422 && body?.errors) {
+      Object.entries(body.errors).forEach(([field, messages]) => {
+        errors[field as keyof RegisterFormData] = (messages as string[])[0];
+      });
+    } else {
+      serverError.value = body?.message ?? "Registration failed";
+    }
+  } finally {
+    isSubmitting.value = false;
+  }
+}
+</script>
+
+<template>
+  <form @submit.prevent="handleSubmit" novalidate>
+    <p>Step {{ step + 1 }} of 3</p>
+
+    <!-- Step 1 -->
+    <template v-if="step === 0">
+      <div>
+        <label>Name</label>
+        <input v-model="values.name" type="text" />
+        <p v-if="errors.name">{{ errors.name }}</p>
+      </div>
+      <div>
+        <label>Email</label>
+        <input v-model="values.email" type="email" />
+        <p v-if="errors.email">{{ errors.email }}</p>
+      </div>
+    </template>
+
+    <!-- Step 2 -->
+    <template v-if="step === 1">
+      <div>
+        <label>Password</label>
+        <input v-model="values.password" type="password" />
+        <p v-if="errors.password">{{ errors.password }}</p>
+      </div>
+      <div>
+        <label>Confirm Password</label>
+        <input v-model="values.confirmPassword" type="password" />
+        <p v-if="errors.confirmPassword">{{ errors.confirmPassword }}</p>
+      </div>
+    </template>
+
+    <!-- Step 3 -->
+    <template v-if="step === 2">
+      <div>
+        <label>Role</label>
+        <select v-model="values.role">
+          <option value="developer">Developer</option>
+          <option value="designer">Designer</option>
+          <option value="manager">Manager</option>
+        </select>
+        <p v-if="errors.role">{{ errors.role }}</p>
+      </div>
+      <div>
+        <label>Company (optional)</label>
+        <input v-model="values.company" type="text" />
+      </div>
+    </template>
+
+    <p v-if="serverError">{{ serverError }}</p>
+
+    <div>
+      <button v-if="step > 0" type="button" @click="step--">Back</button>
+      <button v-if="step < 2" type="button" @click="nextStep">Next</button>
+      <button v-if="step === 2" type="submit" :disabled="isSubmitting">
+        {{ isSubmitting ? "Creating account..." : "Create Account" }}
+      </button>
+    </div>
+  </form>
+</template>
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```ts
+// Manual validation per field — no schema, hard to maintain
+function validate() {
+  if (!form.value.email) errors.value.email = 'Required'
+  else if (!form.value.email.includes('@')) errors.value.email = 'Invalid email'
+  if (!form.value.password) errors.value.password = 'Required'
+  else if (form.value.password.length < 8) errors.value.password = 'Too short'
+  // grows forever as fields are added...
+}
+```
+</Wrong>
+<Right>
+```ts
+// Zod handles all rules — add fields to schema, validation just works
+const loginSchema = z.object({
+  email: z.string().min(1, 'Required').email('Invalid email'),
+  password: z.string().min(1, 'Required').min(8, 'Too short'),
+})
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Defining schema inside the composable call — recreated on every render
+const { values } = useForm({
+  schema: z.object({ email: z.string().email() }), // ❌ inline
+  initialValues: { email: '' },
+  onSubmit: async (data) => {},
+})
+```
+</Wrong>
+<Right>
+```ts
+// Define schema in lib/schemas/ and import it
+import { loginSchema } from '@/lib/schemas/auth'
+
+const { values } = useForm({
+schema: loginSchema, // ✅ imported constant
+initialValues: { email: '' },
+onSubmit: async (data) => {},
+})
+
+````
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```ts
+// Not handling Laravel 422 errors — field errors silently disappear
+await $fetch('/api/profile', { method: 'PATCH', body: data })
+  .catch(() => {
+    serverError.value = 'Something went wrong' // loses field-specific errors
+  })
+````
+
+</Wrong>
+<Right>
+```ts
+// Map Laravel field errors back to form fields
+.catch((error) => {
+  const status = error.response?.status
+  const body = error.response?._data
+
+if (status === 422 && body?.errors) {
+throw new FormSubmitError('Validation failed', body.errors)
+}
+
+throw new FormSubmitError(body?.message ?? 'Update failed')
+})
+
+````
+</Right>
+</WrongRight>
+
+**Gotcha from production:** Always add `novalidate` to your `<form>` tag in Vue. Without it, the browser runs its own native HTML5 validation before your Zod validation fires, showing inconsistent browser-styled error tooltips that conflict with your custom error UI.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Keep all Zod schemas in `lib/schemas/` — one file per domain (`auth.ts`, `profile.ts`, `posts.ts`)
+- Export both the schema and its inferred type from the same file
+- Keep `useForm` composable in `composables/useForm.ts` — import it everywhere, never copy it
+
+**Performance tips**
+```ts
+// Validate on blur for better UX — not on every keystroke
+// Add a touched tracker to useForm if needed:
+const touched = reactive<Partial<Record<keyof T, boolean>>>({})
+
+function handleBlur(field: keyof T) {
+  touched[field] = true
+  // validate only this field on blur
+  const fieldSchema = schema.shape[field as string]
+  if (fieldSchema) {
+    const result = fieldSchema.safeParse(values[field])
+    if (!result.success) {
+      errors[field] = result.error.errors[0].message
+    } else {
+      delete errors[field]
+    }
+  }
+}
+````
+
+**Security considerations**
+
+- Always validate in the Nuxt server route with Zod — never trust client input
+- Never log `parsed.data` in production if it contains passwords
+- Set `httpOnly: true`, `secure: true`, `sameSite: 'lax'` on auth cookie — all three matter
+- The Bearer token never touches the client — it lives only in the httpOnly cookie and the server route memory
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="Why would you build a custom useForm composable instead of using VeeValidate?"
+  difficulty="easy"
+>
+  A custom composable gives you full control — you understand every line, you
+  can extend it exactly as needed, and you have zero extra dependencies.
+  VeeValidate adds abstraction that is useful for very complex forms but adds
+  learning overhead and a larger bundle. For most real-world forms a composable
+  with Zod is simpler, faster to write, and easier to debug.
+</InterviewQ>
+
+<InterviewQ
+  question="Why validate the form data again in the Nuxt server route if you already validated it on the client?"
+  difficulty="easy"
+>
+  Client-side validation is only for user experience — instant feedback without
+  a network request. Anyone can bypass the form and send a raw HTTP request
+  directly to your server route. Server-side validation in the Nuxt route
+  protects your Laravel API even if someone calls it directly. Always validate
+  on both sides — use the same Zod schema to avoid duplication.
+</InterviewQ>
+
+<InterviewQ
+  question="How does the FormSubmitError class help connect server errors back to form fields?"
+  difficulty="mid"
+>
+  `FormSubmitError` is a custom Error subclass that carries both a message and
+  an optional `fieldErrors` object matching Laravel's 422 error format. When the
+  `onSubmit` function throws a `FormSubmitError` with field errors, the
+  `useForm` composable catches it, checks `instanceof FormSubmitError`, and maps
+  each field error into the reactive `errors` object so they appear under the
+  correct input automatically.
+</InterviewQ>
+
+<InterviewQ
+  question="How do you validate only the current step's fields in a multi-step form without a form library?"
+  difficulty="mid"
+>
+  Define a separate Zod schema for each step containing only that step's fields.
+  On the Next button, call `stepSchema.safeParse(values)` where values is the
+  shared reactive object holding all steps data. If validation fails, map errors
+  to the fields and stay on the current step. If it passes, advance to the next
+  step. On final submit, validate with the full merged schema before sending to
+  the server.
+</InterviewQ>
+
+<InterviewQ
+  question="Why is storing the Bearer token in an httpOnly cookie safer than in Pinia or localStorage?"
+  difficulty="hard"
+>
+  Pinia state and localStorage are both accessible by JavaScript on the page. If
+  your app has an XSS vulnerability, an attacker can read the token with one
+  line of JS and send it to their server. An httpOnly cookie cannot be read by
+  JavaScript at all — only the browser attaches it automatically to same-origin
+  requests. Combined with `secure: true` (HTTPS only) and `sameSite: lax` (CSRF
+  protection), the token is never exposed in client code, React state, network
+  requests from the browser to Laravel, or error reports.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The `FormSubmitError` pattern took me a while to land on. Before it I was
+  handling server errors inconsistently — sometimes setting serverError,
+  sometimes manually mapping field errors in each form component. Centralizing
+  it in the composable with a typed custom error class made every form
+  consistent and cut a lot of repeated code.
+</MyNotes>
+
+<MyNotes>
+  Always add `novalidate` to the form tag — I forget this every time on new
+  projects and spend 10 minutes wondering why a browser tooltip is appearing
+  over my custom error message.
+</MyNotes>
+
+<MyNotes>
+  In Nuxt server routes, `getCookie(event, 'auth_token')` is all you need to
+  read the httpOnly cookie. The browser sends it automatically with every
+  same-origin request — you never touch it from the client side at all. This is
+  the cleanest part of the whole architecture.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Zod Common Patterns
+
+```ts
+// lib/schemas/common.ts
+
+import { z } from "zod";
+
+// Password with strength rules
+export const passwordSchema = z
+  .string()
+  .min(8, "Minimum 8 characters")
+  .regex(/[A-Z]/, "Must contain an uppercase letter")
+  .regex(/[0-9]/, "Must contain a number");
+
+// Password confirmation
+export const passwordConfirmSchema = z
+  .object({
+    password: passwordSchema,
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+
+// Optional URL
+export const optionalUrlSchema = z
+  .string()
+  .url("Invalid URL")
+  .optional()
+  .or(z.literal(""));
+
+// Phone number
+export const phoneSchema = z
+  .string()
+  .regex(/^\+?[0-9]{7,15}$/, "Invalid phone number")
+  .optional()
+  .or(z.literal(""));
+
+// Pagination query params
+export const paginationSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  per_page: z.coerce.number().int().min(1).max(100).default(15),
+});
+```
+
+---
+
+### Logout Server Route — Clear httpOnly Cookie
+
+```ts
+// server/api/auth/logout.post.ts
+import { laravelFetch } from "~/server/utils/laravelFetch";
+
+export default defineEventHandler(async (event) => {
+  try {
+    // Tell Laravel to invalidate the token
+    await laravelFetch(event, "/auth/logout", { method: "POST" });
+  } catch {
+    // Continue even if Laravel call fails — still clear the cookie
+  }
+
+  deleteCookie(event, "auth_token");
+
+  return { success: true };
+});
+```
+
+---
+
+### Reusable FormField Component
+
+```vue
+<!-- components/ui/FormField.vue -->
+<script setup lang="ts">
+defineProps<{
+  label: string;
+  error?: string;
+  id: string;
+}>();
+</script>
+
+<template>
+  <div>
+    <label :for="id">{{ label }}</label>
+    <slot />
+    <p v-if="error" class="text-red-500 text-sm">{{ error }}</p>
+  </div>
+</template>
+
+<!-- Usage in any form: -->
+<!--
+<FormField id="email" label="Email" :error="errors.email">
+  <input id="email" v-model="values.email" type="email" />
+</FormField>
+-->
+```
+
+---
+
+_Tags: `vue` `nuxt` `zod` `forms` `validation` `composable` `laravel` `bearer-token` `intermediate`_

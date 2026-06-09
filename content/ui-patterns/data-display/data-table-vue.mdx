@@ -1,0 +1,407 @@
+---
+title: "Data Table with Vue + Tailwind CSS"
+description: "How to build a reusable, sortable, and searchable data table in Vue 3 with pagination, loading state, empty state, and row actions using Tailwind CSS"
+category: ui-patterns
+subcategory: data-display
+tools: [vue, tailwind]
+tags: [table, data-table, sortable, searchable, pagination]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+---
+
+## Concept explanation
+
+A data table displays structured data in rows and columns with interactive features — sorting, searching, and pagination. In Vue 3 we use `computed()` to derive filtered and sorted data from the original array reactively. No external library needed for basic tables — just Vue reactivity and Tailwind CSS.
+
+<Callout type="note">
+  **Vue vs Nuxt difference:** Code is identical in both. Nuxt auto-imports `ref`, `computed`, and `watch` so you can skip those imports.
+</Callout>
+
+## Why it's used
+
+- Displays large datasets in a scannable, organized format
+- Sorting lets users find the highest/lowest values instantly
+- Search filters rows without a server round-trip
+- Pagination keeps the UI fast by showing a subset of data at a time
+
+## Real-world use cases
+
+- Users list in an admin dashboard
+- Orders table in an e-commerce backend
+- Products inventory management
+- Transaction history in a finance app
+- Logs viewer in a DevOps dashboard
+
+## Code example
+
+### Basic sortable and searchable table
+
+```vue
+<!-- components/DataTable.vue -->
+<script setup lang="ts">
+import { ref, computed } from 'vue'
+
+type SortDirection = 'asc' | 'desc' | null
+
+type Column<T> = {
+  key: keyof T
+  label: string
+  sortable?: boolean
+}
+
+type Props<T> = {
+  columns: Column<T>[]
+  data: T[]
+  loading?: boolean
+  emptyMessage?: string
+}
+
+const props = withDefaults(defineProps<Props<any>>(), {
+  loading: false,
+  emptyMessage: 'No data found',
+})
+
+const search = ref('')
+const sortKey = ref<string | null>(null)
+const sortDir = ref<SortDirection>(null)
+const currentPage = ref(1)
+const perPage = ref(10)
+
+// Filter by search
+const filtered = computed(() => {
+  if (!search.value.trim()) return props.data
+  const q = search.value.toLowerCase()
+  return props.data.filter((row) =>
+    Object.values(row).some((val) =>
+      String(val).toLowerCase().includes(q)
+    )
+  )
+})
+
+// Sort filtered data
+const sorted = computed(() => {
+  if (!sortKey.value || !sortDir.value) return filtered.value
+  return [...filtered.value].sort((a, b) => {
+    const aVal = a[sortKey.value!]
+    const bVal = b[sortKey.value!]
+    const result = String(aVal).localeCompare(String(bVal), undefined, { numeric: true })
+    return sortDir.value === 'asc' ? result : -result
+  })
+})
+
+// Paginate sorted data
+const totalPages = computed(() => Math.ceil(sorted.value.length / perPage.value))
+
+const paginated = computed(() => {
+  const start = (currentPage.value - 1) * perPage.value
+  return sorted.value.slice(start, start + perPage.value)
+})
+
+// Reset to page 1 when search changes
+const handleSearch = () => { currentPage.value = 1 }
+
+const toggleSort = (key: string) => {
+  if (sortKey.value !== key) {
+    sortKey.value = key
+    sortDir.value = 'asc'
+  } else if (sortDir.value === 'asc') {
+    sortDir.value = 'desc'
+  } else {
+    sortKey.value = null
+    sortDir.value = null
+  }
+  currentPage.value = 1
+}
+
+const getSortIcon = (key: string) => {
+  if (sortKey.value !== key) return '↕'
+  return sortDir.value === 'asc' ? '↑' : '↓'
+}
+</script>
+
+<template>
+  <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden">
+
+    <!-- Toolbar -->
+    <div class="flex items-center justify-between gap-4 px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
+      <input
+        v-model="search"
+        @input="handleSearch"
+        type="text"
+        placeholder="Search..."
+        class="w-64 px-3 py-1.5 text-sm border border-neutral-200 dark:border-neutral-700 rounded-lg bg-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+      />
+      <p class="text-xs text-neutral-400">
+        {{ sorted.length }} result{{ sorted.length !== 1 ? 's' : '' }}
+      </p>
+    </div>
+
+    <!-- Table -->
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+
+        <!-- Head -->
+        <thead class="bg-neutral-50 dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
+          <tr>
+            <th
+              v-for="col in columns"
+              :key="String(col.key)"
+              @click="col.sortable ? toggleSort(String(col.key)) : null"
+              :class="[
+                'px-4 py-3 text-left text-xs font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider',
+                col.sortable ? 'cursor-pointer hover:text-neutral-900 dark:hover:text-neutral-100 select-none' : ''
+              ]"
+            >
+              <span class="flex items-center gap-1.5">
+                {{ col.label }}
+                <span v-if="col.sortable" class="text-neutral-400">
+                  {{ getSortIcon(String(col.key)) }}
+                </span>
+              </span>
+            </th>
+          </tr>
+        </thead>
+
+        <!-- Body -->
+        <tbody class="divide-y divide-neutral-100 dark:divide-neutral-800">
+
+          <!-- Loading state -->
+          <template v-if="loading">
+            <tr v-for="i in perPage" :key="i">
+              <td v-for="col in columns" :key="String(col.key)" class="px-4 py-3">
+                <div class="h-4 bg-neutral-100 dark:bg-neutral-800 rounded animate-pulse" />
+              </td>
+            </tr>
+          </template>
+
+          <!-- Empty state -->
+          <tr v-else-if="paginated.length === 0">
+            <td :colspan="columns.length" class="px-4 py-12 text-center">
+              <p class="text-2xl mb-2">📭</p>
+              <p class="text-sm text-neutral-400">{{ emptyMessage }}</p>
+            </td>
+          </tr>
+
+          <!-- Data rows -->
+          <template v-else>
+            <tr
+              v-for="(row, i) in paginated"
+              :key="i"
+              class="hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
+            >
+              <td
+                v-for="col in columns"
+                :key="String(col.key)"
+                class="px-4 py-3 text-neutral-700 dark:text-neutral-300"
+              >
+                <slot :name="String(col.key)" :row="row" :value="row[col.key]">
+                  {{ row[col.key] }}
+                </slot>
+              </td>
+            </tr>
+          </template>
+
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Pagination -->
+    <div
+      v-if="totalPages > 1"
+      class="flex items-center justify-between px-4 py-3 border-t border-neutral-200 dark:border-neutral-800"
+    >
+      <p class="text-xs text-neutral-400">
+        Page {{ currentPage }} of {{ totalPages }}
+      </p>
+      <div class="flex items-center gap-1">
+        <button
+          @click="currentPage--"
+          :disabled="currentPage === 1"
+          class="px-3 py-1.5 text-xs rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          ← Prev
+        </button>
+        <button
+          @click="currentPage++"
+          :disabled="currentPage === totalPages"
+          class="px-3 py-1.5 text-xs rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          Next →
+        </button>
+      </div>
+    </div>
+
+  </div>
+</template>
+```
+
+### How to use it in any page
+
+```vue
+<!-- pages/users.vue -->
+<script setup lang="ts">
+import { ref } from 'vue'
+import DataTable from '@/components/DataTable.vue'
+
+type User = {
+  id: number
+  name: string
+  email: string
+  role: string
+  status: 'active' | 'inactive'
+}
+
+const loading = ref(false)
+
+const columns = [
+  { key: 'id',     label: '#',      sortable: true },
+  { key: 'name',   label: 'Name',   sortable: true },
+  { key: 'email',  label: 'Email',  sortable: true },
+  { key: 'role',   label: 'Role',   sortable: true },
+  { key: 'status', label: 'Status', sortable: false },
+  { key: 'actions',label: 'Actions',sortable: false },
+]
+
+const users = ref<User[]>([
+  { id: 1, name: 'Omar Hassan',  email: 'omar@example.com',  role: 'Admin',  status: 'active' },
+  { id: 2, name: 'Ahmed Ali',   email: 'ahmed@example.com', role: 'Editor', status: 'active' },
+  { id: 3, name: 'Sara Mohamed',email: 'sara@example.com',  role: 'Viewer', status: 'inactive' },
+])
+
+const handleDelete = (id: number) => {
+  users.value = users.value.filter(u => u.id !== id)
+}
+</script>
+
+<template>
+  <DataTable
+    :columns="columns"
+    :data="users"
+    :loading="loading"
+    empty-message="No users found"
+  >
+    <!-- Custom status column -->
+    <template #status="{ value }">
+      <span :class="[
+        'inline-flex px-2 py-0.5 rounded-full text-xs font-medium',
+        value === 'active'
+          ? 'bg-green-100 text-green-700'
+          : 'bg-neutral-100 text-neutral-500'
+      ]">
+        {{ value }}
+      </span>
+    </template>
+
+    <!-- Custom actions column -->
+    <template #actions="{ row }">
+      <div class="flex items-center gap-2">
+        <button class="text-xs text-blue-600 hover:underline">Edit</button>
+        <button
+          @click="handleDelete(row.id)"
+          class="text-xs text-red-600 hover:underline"
+        >
+          Delete
+        </button>
+      </div>
+    </template>
+  </DataTable>
+</template>
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Sorting the original data array directly — mutates props
+     and breaks reactivity -->
+<script setup>
+const toggleSort = (key) => {
+  props.data.sort((a, b) => ...) // ❌ mutates prop directly
+}
+</script>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Always sort a copy using computed() — never mutate props -->
+<script setup>
+const sorted = computed(() => {
+  return [...props.data].sort((a, b) => ...) // ✅ spread to copy first
+})
+</script>
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Not resetting page on search — user searches and stays
+     on page 5 which might now be empty -->
+<script setup>
+const search = ref('')
+// no page reset on search ❌
+</script>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Always reset to page 1 when search or sort changes -->
+<script setup>
+const handleSearch = () => {
+  currentPage.value = 1 // ✅
+}
+const toggleSort = (key) => {
+  currentPage.value = 1 // ✅
+  // ...sort logic
+}
+</script>
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always spread `[...data]` before sorting — never mutate the original array or props
+- Reset `currentPage` to 1 whenever search query or sort column changes
+- Use `computed()` for filtering, sorting, and pagination — they update automatically
+- Show a loading skeleton instead of a spinner — it prevents layout shift
+- Show an empty state with a helpful message when no results match the search
+- Use named slots for custom cell rendering — keeps the table component reusable
+- Add `select-none` to sortable headers so text doesn't get selected on click
+
+<Callout type="tip">
+  For server-side sorting and pagination, emit events instead of computing locally:
+```vue
+  const toggleSort = (key) => {
+    emit('sort', { key, direction: sortDir.value })
+  }
+```
+  Then fetch new data from the server with the sort params.
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between client-side and server-side pagination?" difficulty="mid">
+  Client-side pagination loads all data at once and slices it in the browser — simple to implement but slow for large datasets since all rows are fetched upfront. Server-side pagination fetches only the current page from the API — faster initial load and works for millions of rows, but requires the server to support `page` and `perPage` query params and a total count in the response.
+</InterviewQ>
+
+<InterviewQ question="Why should you never sort or mutate props directly in Vue?" difficulty="easy">
+  Props flow down from parent to child — mutating them directly breaks the one-way data flow and causes unpredictable bugs. Vue will warn you about this. Instead, create a local copy using `computed(() => [...props.data].sort(...))` or a local `ref` initialized from the prop. This keeps the parent's data intact and makes the component's behavior predictable.
+</InterviewQ>
+
+<InterviewQ question="How would you make this table work with server-side data?" difficulty="hard">
+  Instead of computing filtered/sorted/paginated data locally, emit events to the parent on search, sort, and page change. The parent calls the API with the new params and passes fresh data back as a prop. The table shows a loading state while the request is in flight. This pattern keeps the table component dumb and reusable — it doesn't care where data comes from.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The slot pattern for custom cells is the most powerful part of this table. Instead of passing render functions or complex configs, just use named slots — `#status`, `#actions`, `#name` — and render whatever you want inside. This makes the table work for any dataset without changing the component.
+
+  For Nuxt — `ref` and `computed` are auto-imported. Skip the import line at the top.
+
+  If the table has more than 1000 rows on the client, consider virtual scrolling with `vue-virtual-scroller` — it only renders visible rows and keeps performance smooth.
+</MyNotes>

@@ -1,0 +1,449 @@
+---
+title: "Authentication & Sessions at Scale"
+description: "How authentication works under the hood — sessions vs tokens, JWT, Laravel Sanctum, and how to handle auth when you have multiple servers or a separate API."
+category: system-design
+tools: [laravel, redis, mysql]
+tags: [authentication, sessions, jwt, sanctum, tokens, system-design]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## Concept Explanation
+
+Authentication answers: **who is this user?**
+
+There are two main approaches:
+
+```
+Session-based (traditional):
+  1. User logs in → server creates a session → stores it in DB/Redis
+  2. Server sends session_id in a cookie
+  3. Every request → browser sends cookie → server looks up session → finds user
+
+Token-based (modern APIs):
+  1. User logs in → server creates a token → stores it (or signs it as JWT)
+  2. Server sends token to client
+  3. Every request → client sends token in Authorization header → server validates
+```
+
+```
+Sessions → Good for: traditional web apps (Blade, same domain)
+Tokens   → Good for: APIs consumed by Vue/React SPA or mobile apps
+JWT      → Tokens that are self-contained (no DB lookup needed to validate)
+```
+
+---
+
+## Why It's Used
+
+- **Sessions:** Simple, secure by default (cookie is HttpOnly, CSRF protected).
+- **Tokens (Sanctum):** Perfect for SPAs and mobile apps consuming a Laravel API.
+- **JWT:** Stateless — great for microservices, or when you can't share a session store.
+
+---
+
+## Real-World Use Cases
+
+- Traditional Laravel app with Blade → session-based auth.
+- Vue/Nuxt SPA + Laravel API (same domain) → Sanctum cookie auth.
+- React/Next.js + Laravel API (different domain) → Sanctum token auth.
+- Mobile app + Laravel API → Sanctum token auth.
+- Microservices that need to verify tokens without DB calls → JWT.
+
+---
+
+## Code Examples
+
+### Laravel Sanctum Setup (Most Common for Your Stack)
+
+```bash
+composer require laravel/sanctum
+php artisan vendor:publish --provider="Laravel\Sanctum\SanctumServiceProvider"
+php artisan migrate
+```
+
+```php
+// app/Models/User.php
+use Laravel\Sanctum\HasApiTokens;
+
+class User extends Authenticatable
+{
+    use HasApiTokens, HasFactory, Notifiable;
+}
+```
+
+### Token Authentication (Vue/React + Laravel API)
+
+```php
+// app/Http/Controllers/Api/AuthController.php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\User;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
+
+class AuthController extends Controller
+{
+    public function register(Request $request)
+    {
+        $validated = $request->validate([
+            'name'     => 'required|string|max:100',
+            'email'    => 'required|email|unique:users',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        $user = User::create([
+            'name'     => $validated['name'],
+            'email'    => $validated['email'],
+            'password' => Hash::make($validated['password']),
+        ]);
+
+        $token = $user->createToken('auth_token')->plainTextToken;
+
+        return response()->json([
+            'user'  => $user,
+            'token' => $token,
+        ], 201);
+    }
+
+    public function login(Request $request)
+    {
+        $request->validate([
+            'email'    => 'required|email',
+            'password' => 'required',
+        ]);
+
+        $user = User::where('email', $request->email)->first();
+
+        if (! $user || ! Hash::check($request->password, $user->password)) {
+            throw ValidationException::withMessages([
+                'email' => ['The provided credentials are incorrect.'],
+            ]);
+        }
+
+        // Delete old tokens (optional — single device login)
+        // $user->tokens()->delete();
+
+        $token = $user->createToken('auth_token')->plainTextToken;
+
+        return response()->json([
+            'user'  => $user,
+            'token' => $token,
+        ]);
+    }
+
+    public function logout(Request $request)
+    {
+        // Revoke the token that was used for this request
+        $request->user()->currentAccessToken()->delete();
+
+        return response()->json(['message' => 'Logged out successfully']);
+    }
+
+    public function me(Request $request)
+    {
+        return response()->json($request->user());
+    }
+}
+```
+
+```php
+// routes/api.php
+Route::prefix('v1')->group(function () {
+    // Public routes
+    Route::post('/auth/register', [AuthController::class, 'register']);
+    Route::post('/auth/login', [AuthController::class, 'login']);
+
+    // Protected routes
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::post('/auth/logout', [AuthController::class, 'logout']);
+        Route::get('/auth/me', [AuthController::class, 'me']);
+        Route::apiResource('products', ProductController::class);
+    });
+});
+```
+
+### Consuming the API from Vue/Nuxt
+
+```javascript
+// stores/auth.js (Pinia)
+import { defineStore } from 'pinia'
+import axios from 'axios'
+
+export const useAuthStore = defineStore('auth', {
+  state: () => ({
+    user: null,
+    token: localStorage.getItem('token') || null,
+  }),
+
+  getters: {
+    isAuthenticated: (state) => !!state.token,
+  },
+
+  actions: {
+    async login(credentials) {
+      const { data } = await axios.post('/api/v1/auth/login', credentials)
+      this.token = data.token
+      this.user  = data.user
+      localStorage.setItem('token', data.token)
+      axios.defaults.headers.common['Authorization'] = `Bearer ${data.token}`
+    },
+
+    async logout() {
+      await axios.post('/api/v1/auth/logout')
+      this.token = null
+      this.user  = null
+      localStorage.removeItem('token')
+      delete axios.defaults.headers.common['Authorization']
+    },
+  },
+})
+```
+
+### Token Abilities (Scopes)
+
+```php
+// Create token with specific abilities (permissions)
+$token = $user->createToken('mobile-app', ['products:read', 'orders:create'])->plainTextToken;
+
+// Check ability in controller
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/products', function (Request $request) {
+        if (! $request->user()->tokenCan('products:read')) {
+            abort(403, 'Insufficient permissions');
+        }
+        // ...
+    });
+});
+```
+
+### Multi-Device Login Management
+
+```php
+// Allow users to see and revoke their active sessions
+class TokenController extends Controller
+{
+    // List all active tokens (devices)
+    public function index(Request $request)
+    {
+        return $request->user()->tokens()->select('id', 'name', 'created_at', 'last_used_at')->get();
+    }
+
+    // Revoke a specific token (log out device)
+    public function destroy(Request $request, int $tokenId)
+    {
+        $request->user()->tokens()->where('id', $tokenId)->delete();
+        return response()->json(['message' => 'Device logged out']);
+    }
+
+    // Revoke all tokens (log out everywhere)
+    public function destroyAll(Request $request)
+    {
+        $request->user()->tokens()->delete();
+        return response()->json(['message' => 'Logged out from all devices']);
+    }
+}
+```
+
+### Sessions in Redis (For Web Apps at Scale)
+
+```env
+SESSION_DRIVER=redis
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+```
+
+```php
+// config/session.php
+'driver'     => env('SESSION_DRIVER', 'redis'),
+'lifetime'   => 120,          // minutes before session expires
+'expire_on_close' => false,   // keep session after browser closes
+'encrypt'    => true,         // encrypt session data
+'secure'     => true,         // only send cookie over HTTPS
+'http_only'  => true,         // no JS access to cookie
+'same_site'  => 'lax',        // CSRF protection
+```
+
+### Password Reset Flow
+
+```php
+// Routes
+Route::post('/auth/forgot-password', [PasswordController::class, 'forgot']);
+Route::post('/auth/reset-password',  [PasswordController::class, 'reset']);
+
+// Controller
+use Illuminate\Support\Facades\Password;
+
+class PasswordController extends Controller
+{
+    public function forgot(Request $request)
+    {
+        $request->validate(['email' => 'required|email']);
+
+        $status = Password::sendResetLink($request->only('email'));
+
+        return $status === Password::RESET_LINK_SENT
+            ? response()->json(['message' => 'Reset link sent to your email'])
+            : response()->json(['message' => 'Email not found'], 404);
+    }
+
+    public function reset(Request $request)
+    {
+        $request->validate([
+            'token'    => 'required',
+            'email'    => 'required|email',
+            'password' => 'required|min:8|confirmed',
+        ]);
+
+        $status = Password::reset(
+            $request->only('email', 'password', 'password_confirmation', 'token'),
+            function ($user, $password) {
+                $user->update(['password' => Hash::make($password)]);
+                // Revoke all existing tokens
+                $user->tokens()->delete();
+            }
+        );
+
+        return $status === Password::PASSWORD_RESET
+            ? response()->json(['message' => 'Password reset successfully'])
+            : response()->json(['message' => 'Invalid or expired token'], 400);
+    }
+}
+```
+
+### JWT Overview (When to Use It)
+
+```
+JWT (JSON Web Token) is a self-contained token:
+  Header.Payload.Signature
+  eyJhbGc...  .eyJ1c2VyX2...  .SflKxwRJSMeKKF2Q
+
+  Payload contains: user_id, email, role, expiry — all encoded inside the token
+
+  To validate: server just checks the signature (math) — no DB lookup needed!
+
+When to use JWT over Sanctum tokens:
+  ✅ Microservices — multiple services validate tokens without sharing a DB
+  ✅ Short-lived tokens (15 min access + refresh token pattern)
+  ✅ Cross-domain auth (token in header, not cookie)
+
+When Sanctum is better:
+  ✅ Single Laravel app
+  ✅ You need to revoke tokens instantly (JWT can't be revoked before expiry)
+  ✅ Simpler setup
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```javascript
+// Storing tokens in localStorage — vulnerable to XSS attacks
+localStorage.setItem('token', data.token)  // ❌
+// If any JS on your page is compromised, attacker steals all tokens
+```
+</Wrong>
+<Right>
+```javascript
+// For SPAs on same domain: use HttpOnly cookies (Sanctum handles this)
+// For mobile apps: use secure device storage (Keychain on iOS, Keystore on Android)
+// If you must use localStorage: understand the XSS risk and mitigate it
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Creating a new token on every request
+public function getData(Request $request)
+{
+    $newToken = $request->user()->createToken('token')->plainTextToken; // ❌
+    // Now user has hundreds of tokens in DB — token table grows forever
+}
+```
+</Wrong>
+<Right>
+```php
+// Create token once at login, reuse it for all requests
+// The token is sent in the Authorization header on every request — not recreated
+```
+</Right>
+</WrongRight>
+
+---
+
+## Best Practices
+
+- Always hash passwords with `Hash::make()` — never store plain text.
+- Set token expiration: `createToken('name', ['*'], now()->addDays(30))`.
+- Revoke all tokens when user changes their password.
+- Use HTTPS everywhere — tokens in transit must be encrypted.
+- Implement rate limiting on login endpoints to prevent brute force.
+- Store sessions in Redis when scaling horizontally (see Scaling file).
+- Use HttpOnly cookies for web apps, Authorization headers for APIs.
+
+```php
+// Rate limit login attempts
+RateLimiter::for('login', function (Request $request) {
+    return Limit::perMinute(5)->by($request->ip());
+});
+
+// In AuthController
+if (RateLimiter::tooManyAttempts('login:' . $request->ip(), 5)) {
+    return response()->json(['message' => 'Too many login attempts. Try again later.'], 429);
+}
+RateLimiter::hit('login:' . $request->ip(), 60);
+```
+
+---
+
+## Interview Questions
+
+<InterviewQ question="What is the difference between session-based and token-based authentication?" difficulty="easy">
+  Session-based auth stores user state on the server — a session ID in a cookie maps to
+  session data stored in DB or Redis. Token-based auth is stateless — the server issues a
+  token the client stores and sends with every request. Sessions are simpler and CSRF-protected
+  by default but require shared storage when scaling. Tokens are stateless (scalable) but
+  require secure storage on the client and careful CORS handling.
+</InterviewQ>
+
+<InterviewQ question="What is a JWT and what are its advantages and disadvantages?" difficulty="mid">
+  JWT (JSON Web Token) is a self-contained signed token containing the user's claims (id, role,
+  expiry). Advantages: stateless validation (no DB lookup), works across services and domains,
+  fast to verify. Disadvantages: cannot be revoked before expiry (a stolen token is valid until
+  it expires), larger payload than a simple token ID, secret key management complexity.
+  For most web apps, Sanctum tokens with DB storage are simpler and more flexible.
+</InterviewQ>
+
+<InterviewQ question="How do you prevent brute force attacks on login?" difficulty="mid">
+  Rate limiting — allow only N login attempts per IP/email per time window, then return 429
+  with a retry-after delay. Laravel's RateLimiter facade makes this simple. Additional measures:
+  account lockout after repeated failures, CAPTCHA after 3 failed attempts, monitoring for
+  distributed attacks (many IPs targeting one account), and alerting users of failed login
+  attempts via email.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  For every project with a separate Vue/Nuxt or React frontend hitting a Laravel API, I use
+  Sanctum token auth. It's simple, revocable, supports abilities/scopes, and integrates
+  perfectly with Eloquent. I only reach for a full JWT package when I have microservices
+  that need to validate tokens independently.
+</MyNotes>
+
+<MyNotes>
+  Always revoke all tokens when the user changes or resets their password. Forgetting this
+  means an attacker who stole a token can keep using it even after the victim changes their
+  password. It's a one-liner: `$user->tokens()->delete()` — no excuse to skip it.
+</MyNotes>

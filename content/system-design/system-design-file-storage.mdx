@@ -1,0 +1,429 @@
+---
+title: "File Storage & CDN"
+description: "How to handle file uploads, storage, and delivery in Laravel — local storage, S3-compatible services, image processing, and CDN for fast global delivery."
+category: system-design
+tools: [laravel, mysql]
+tags: [file-storage, s3, cdn, uploads, images, laravel, system-design]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## Concept Explanation
+
+File storage is about where and how you store uploaded files (images, PDFs, videos), and how you serve them to users fast.
+
+```
+Without CDN (slow for global users):
+  User in London uploads an image → stored on server in Egypt
+  User in USA requests that image → goes all the way to Egypt server → slow 🐢
+
+With CDN (fast everywhere):
+  User in London uploads an image → stored on server in Egypt → CDN copies to servers worldwide
+  User in USA requests that image → served from nearest CDN server (New York) → fast ⚡
+```
+
+**Storage types:**
+
+```
+Local storage    → Files on your server's disk (simple, breaks with multiple servers)
+S3 / S3-compatible → Files on cloud object storage (scalable, works with multiple servers)
+CDN              → Copies your files to servers worldwide for fast delivery
+```
+
+---
+
+## Why It's Used
+
+- **S3:** Files survive server restarts, work across multiple servers, nearly unlimited storage.
+- **CDN:** Delivers files from the nearest server to the user — images load 10x faster globally.
+- **Separation:** Your app servers stay small, storage scales independently.
+
+---
+
+## Real-World Use Cases
+
+- User uploads a profile picture → resize it, store on S3, serve via CDN.
+- Admin uploads product images → stored on S3, delivered worldwide via Cloudflare.
+- User downloads an invoice PDF → generated on the fly, stored temporarily, served securely.
+- Video platform → videos stored on S3, streamed via CDN.
+
+---
+
+## Code Examples
+
+### Laravel Filesystem Setup
+
+```bash
+# For S3 support
+composer require league/flysystem-aws-s3-v3
+```
+
+```env
+# .env
+FILESYSTEM_DISK=s3
+
+AWS_ACCESS_KEY_ID=your_key
+AWS_SECRET_ACCESS_KEY=your_secret
+AWS_DEFAULT_REGION=us-east-1
+AWS_BUCKET=your-bucket-name
+AWS_URL=https://your-bucket.s3.amazonaws.com  # or your CDN URL
+```
+
+```php
+// config/filesystems.php
+'disks' => [
+    'local' => [
+        'driver' => 'local',
+        'root'   => storage_path('app/private'),  // not publicly accessible
+    ],
+
+    'public' => [
+        'driver'     => 'local',
+        'root'       => storage_path('app/public'),
+        'url'        => env('APP_URL') . '/storage',
+        'visibility' => 'public',
+    ],
+
+    's3' => [
+        'driver'     => 's3',
+        'key'        => env('AWS_ACCESS_KEY_ID'),
+        'secret'     => env('AWS_SECRET_ACCESS_KEY'),
+        'region'     => env('AWS_DEFAULT_REGION'),
+        'bucket'     => env('AWS_BUCKET'),
+        'url'        => env('AWS_URL'),       // CDN URL if applicable
+        'visibility' => 'public',
+    ],
+
+    // Cloudflare R2 (S3-compatible, cheaper than AWS)
+    'r2' => [
+        'driver'   => 's3',
+        'key'      => env('R2_ACCESS_KEY_ID'),
+        'secret'   => env('R2_SECRET_ACCESS_KEY'),
+        'region'   => 'auto',
+        'bucket'   => env('R2_BUCKET'),
+        'url'      => env('R2_URL'),          // your r2.dev or custom domain
+        'endpoint' => env('R2_ENDPOINT'),     // https://account.r2.cloudflarestorage.com
+        'use_path_style_endpoint' => true,
+    ],
+],
+```
+
+### Handling File Uploads
+
+```php
+// app/Http/Controllers/UploadController.php
+
+// Basic upload
+public function uploadAvatar(Request $request)
+{
+    $request->validate([
+        'avatar' => 'required|image|mimes:jpeg,png,webp|max:2048', // max 2MB
+    ]);
+
+    $file = $request->file('avatar');
+
+    // Store with auto-generated unique name
+    $path = $file->store('avatars', 's3');
+    // Stored as: avatars/random-uuid.jpg
+
+    // Store with custom name
+    $path = $file->storeAs('avatars', $request->user()->id . '.jpg', 's3');
+
+    // Save path in DB
+    $request->user()->update(['avatar' => $path]);
+
+    return response()->json([
+        'avatar_url' => Storage::disk('s3')->url($path),
+    ]);
+}
+
+// Get the URL
+$url = Storage::disk('s3')->url('avatars/user-1.jpg');
+// Returns: https://your-cdn.com/avatars/user-1.jpg
+```
+
+### Image Processing — Resize Before Storing
+
+```bash
+# Install Intervention Image
+composer require intervention/image-laravel
+```
+
+```php
+use Intervention\Image\Laravel\Facades\Image;
+use Illuminate\Support\Facades\Storage;
+
+public function uploadProductImage(Request $request)
+{
+    $request->validate([
+        'image' => 'required|image|mimes:jpeg,png,webp|max:5120', // 5MB
+    ]);
+
+    $file = $request->file('image');
+    $filename = uniqid() . '.webp';  // convert everything to webp (smaller)
+
+    // Resize and convert to WebP
+    $image = Image::read($file)
+        ->scale(width: 1200)         // resize to max 1200px wide, keep ratio
+        ->toWebp(quality: 85);       // convert to webp, 85% quality
+
+    // Store on S3
+    Storage::disk('s3')->put("products/{$filename}", $image);
+
+    // Also create a thumbnail
+    $thumbnail = Image::read($file)
+        ->cover(width: 400, height: 400)  // crop to exact square
+        ->toWebp(quality: 80);
+
+    Storage::disk('s3')->put("products/thumbnails/{$filename}", $thumbnail);
+
+    return response()->json([
+        'image_url'     => Storage::disk('s3')->url("products/{$filename}"),
+        'thumbnail_url' => Storage::disk('s3')->url("products/thumbnails/{$filename}"),
+    ]);
+}
+```
+
+### Process Images in Background Queue
+
+```php
+// For large images — don't process in the request cycle
+// Store raw, queue the processing
+
+public function uploadProductImage(Request $request)
+{
+    $request->validate(['image' => 'required|image|max:10240']);
+
+    // Store the original immediately
+    $path = $request->file('image')->store('products/originals', 's3');
+
+    // Queue the processing
+    ProcessProductImage::dispatch($path, $request->product_id);
+
+    return response()->json(['message' => 'Image uploaded, processing...']);
+}
+
+// app/Jobs/ProcessProductImage.php
+class ProcessProductImage implements ShouldQueue
+{
+    public function __construct(
+        public string $originalPath,
+        public int $productId
+    ) {}
+
+    public function handle(): void
+    {
+        $original = Storage::disk('s3')->get($this->originalPath);
+
+        // Create multiple sizes
+        $sizes = [
+            'large'     => [1200, null],
+            'medium'    => [600, null],
+            'thumbnail' => [300, 300],
+        ];
+
+        $filename = basename($this->originalPath, '.' . pathinfo($this->originalPath, PATHINFO_EXTENSION));
+
+        $urls = [];
+        foreach ($sizes as $size => [$width, $height]) {
+            $image = Image::read($original);
+
+            if ($height) {
+                $image->cover($width, $height);
+            } else {
+                $image->scale(width: $width);
+            }
+
+            $path = "products/{$size}/{$filename}.webp";
+            Storage::disk('s3')->put($path, $image->toWebp(85));
+            $urls[$size] = Storage::disk('s3')->url($path);
+        }
+
+        Product::find($this->productId)->update(['images' => $urls]);
+    }
+}
+```
+
+### Private Files — Temporary Signed URLs
+
+```php
+// For files that shouldn't be publicly accessible (invoices, user documents)
+
+// Store as private
+Storage::disk('s3')->put('invoices/invoice-123.pdf', $pdf, 'private');
+
+// Generate a temporary URL (expires in 10 minutes)
+$url = Storage::disk('s3')->temporaryUrl(
+    'invoices/invoice-123.pdf',
+    now()->addMinutes(10)
+);
+
+// User can access the file for 10 minutes, then the URL expires
+return response()->json(['download_url' => $url]);
+```
+
+### Deleting Files
+
+```php
+// Delete when model is deleted
+// app/Models/Product.php
+protected static function booted(): void
+{
+    static::deleting(function (Product $product) {
+        if ($product->cover_image) {
+            Storage::disk('s3')->delete($product->cover_image);
+        }
+    });
+}
+
+// Delete old file when replaced
+public function updateAvatar(Request $request)
+{
+    $user = $request->user();
+
+    // Delete old avatar
+    if ($user->avatar) {
+        Storage::disk('s3')->delete($user->avatar);
+    }
+
+    // Store new one
+    $path = $request->file('avatar')->store('avatars', 's3');
+    $user->update(['avatar' => $path]);
+}
+```
+
+### File Upload from Vue/Nuxt Frontend
+
+```vue
+<!-- components/ImageUpload.vue -->
+<template>
+  <div>
+    <input type="file" @change="handleUpload" accept="image/*" />
+    <img v-if="previewUrl" :src="previewUrl" alt="Preview" />
+  </div>
+</template>
+
+<script setup>
+import { ref } from 'vue'
+import axios from 'axios'
+
+const previewUrl = ref(null)
+
+async function handleUpload(event) {
+  const file = event.target.files[0]
+  if (!file) return
+
+  // Show preview immediately
+  previewUrl.value = URL.createObjectURL(file)
+
+  // Upload to Laravel API
+  const formData = new FormData()
+  formData.append('image', file)
+
+  const { data } = await axios.post('/api/v1/upload/image', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (progressEvent) => {
+      const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+      console.log(`${percent}%`)  // Show progress bar
+    },
+  })
+
+  console.log(data.image_url)  // The stored URL
+}
+</script>
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Storing files in the public folder directly
+move_uploaded_file($_FILES['image']['tmp_name'], public_path('uploads/' . $name)); // ❌
+// No validation, no unique names, stored in version control path
+```
+</Wrong>
+<Right>
+```php
+$path = $request->file('image')->store('uploads', 's3'); // ✅
+// Validated, unique name, stored on S3
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Trusting the original filename from user
+$filename = $request->file('image')->getClientOriginalName(); // ❌ "../../etc/passwd.php"
+Storage::put($filename, $file);
+```
+</Wrong>
+<Right>
+```php
+// Always generate your own filename
+$filename = uniqid() . '.' . $request->file('image')->extension(); // ✅ safe
+// Or let Laravel generate it: $request->file('image')->store('uploads', 's3');
+```
+</Right>
+</WrongRight>
+
+---
+
+## Best Practices
+
+- Always validate file type and size before processing.
+- Generate your own filenames — never trust the client's original filename.
+- Store the path in the database, not the full URL (URLs change if you switch CDN).
+- Process images in queued jobs for large files — don't block the request.
+- Convert images to WebP — it's 25-35% smaller than JPEG at same quality.
+- Use signed temporary URLs for private files — never expose private S3 bucket publicly.
+- Delete files when the associated model is deleted — don't leave orphaned files.
+- Use Cloudflare R2 as a cheaper S3-compatible alternative.
+
+---
+
+## Interview Questions
+
+<InterviewQ question="Why shouldn't you store uploaded files on your application server's local disk?" difficulty="easy">
+  Three reasons: First, if you have multiple servers (horizontal scaling), Server B can't access
+  files uploaded to Server A's disk. Second, files are lost if the server is replaced or
+  destroyed. Third, your app server's disk fills up and affects the application's performance.
+  Instead, use cloud object storage like S3 — files are stored independently, accessible from
+  any server, and scale infinitely.
+</InterviewQ>
+
+<InterviewQ question="What is a CDN and how does it improve performance?" difficulty="easy">
+  A CDN (Content Delivery Network) is a global network of servers that caches your static
+  files (images, CSS, JS) in locations close to your users. When a user in the USA requests
+  an image, it's served from a nearby US server instead of your server in Egypt — reducing
+  latency from 200ms to 5ms. Cloudflare is a popular CDN that you can put in front of S3
+  or your own servers.
+</InterviewQ>
+
+<InterviewQ question="How do you securely serve private files (like user invoices) without making them publicly accessible?" difficulty="mid">
+  Store the files as private in S3 (no public access). When a user requests their invoice,
+  verify they own it (check in DB), then generate a pre-signed temporary URL that expires
+  in a few minutes. The user gets a time-limited URL to download their specific file.
+  This way files are never publicly accessible but legitimate users can download their own data.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  Cloudflare R2 changed the game for me — it's S3-compatible (same API, same Laravel config)
+  but has zero egress fees (downloading files from S3 costs money per GB; R2 is free for egress).
+  For image-heavy apps the cost difference is significant. I use R2 by default now for new projects.
+</MyNotes>
+
+<MyNotes>
+  Always store the relative path (`products/image.webp`) in the database, not the full URL
+  (`https://cdn.myapp.com/products/image.webp`). If you ever change your CDN domain,
+  storage provider, or bucket, you update the URL generation in one place instead of
+  running a migration to update millions of rows.
+</MyNotes>

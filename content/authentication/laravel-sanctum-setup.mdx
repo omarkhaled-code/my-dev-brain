@@ -1,0 +1,730 @@
+---
+title: "Laravel Sanctum Setup & API Token Authentication"
+description: "How to install and configure Laravel Sanctum for API token authentication, protect routes, issue and revoke Bearer tokens, and structure your Laravel API for consumption by Next.js and Nuxt frontends."
+category: authentication
+tools: [laravel, mysql, sqlite]
+tags: [sanctum, laravel, bearer-token, api, authentication, tokens, middleware]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-07
+---
+
+## Concept Explanation
+
+Laravel Sanctum provides a lightweight authentication system for SPAs and mobile applications using API tokens. Unlike Passport (which is OAuth2 and very heavy), Sanctum is simple — it issues plain Bearer tokens stored in your database that your frontend sends with every request in the `Authorization` header.
+
+**Your architecture:**
+```tsx
+[Next.js / Nuxt Server Route]
+│  POST /api/auth/login
+│  body: { email, password }
+▼
+[Laravel Sanctum]
+│  validates credentials
+│  creates token in personal_access_tokens table
+│  returns { token: "1|abc123..." }
+▼
+[Next.js / Nuxt Server Route]
+│  stores token in httpOnly cookie
+│  never sent to browser JS
+▼
+[Every protected request]
+│  Route Handler reads cookie → Authorization: Bearer 1|abc123...
+▼
+[Laravel protected route]
+│  auth:sanctum middleware validates token
+│  returns data
+```
+<Callout type="note">
+  **Token format:** Sanctum tokens look like `1|abc123...`. The number before
+  the pipe is the token ID in the database. The part after is the actual secret.
+  Laravel hashes the secret before storing it — so even if your database is
+  compromised, the raw token cannot be recovered.
+</Callout>
+
+---
+
+## Why It's Used
+
+- **Simple:** No OAuth2 complexity — just issue a token, send it, validate it.
+- **Stateless:** No sessions on the server — every request carries its own token.
+- **Multiple tokens per user:** Each device or app can have its own token with its own name and abilities.
+- **Token abilities:** Scope tokens to specific actions (`create-posts`, `delete-account`).
+- **Easy revocation:** Delete a token from the database to instantly log out a device.
+
+---
+
+## Real-World Use Cases
+
+- **SPA authentication:** Next.js or Nuxt app logs in, gets a token, sends it with every API request.
+- **Mobile app:** Same API, same tokens — works identically for React Native or Flutter.
+- **Multiple devices:** Issue one token per device, revoke individual devices from a "sessions" page.
+- **API clients:** Give a token to Postman or a third-party service to access your API.
+
+---
+
+## When NOT to Use It
+
+- **Full OAuth2 / social login:** Use Laravel Passport or Socialite instead.
+- **Session-based SSR:** If your Laravel app serves Blade views directly, use web session auth instead of Sanctum tokens.
+- **Microservices:** If multiple Laravel services need to trust each other, use a proper JWT solution.
+
+---
+
+## Code Examples
+
+### Install Sanctum
+
+```bash
+composer require laravel/sanctum
+php artisan vendor:publish --provider="Laravel\Sanctum\SanctumServiceProvider"
+php artisan migrate
+```
+
+This creates the `personal_access_tokens` table.
+
+---
+
+### Configure Sanctum
+
+```php
+// config/sanctum.php — key settings to know
+
+return [
+  // Token expiration — null means tokens never expire
+  // Set to minutes: 60 * 24 * 7 = 1 week
+  'expiration' => null,
+
+  // Prefix for token abilities
+  'prefix' => env('SANCTUM_TOKEN_PREFIX', ''),
+
+  'middleware' => [
+    'authenticate_session' => Laravel\Sanctum\Http\Middleware\AuthenticateSession::class,
+    'encrypt_cookies' => Illuminate\Cookie\Middleware\EncryptCookies::class,
+    'validate_csrf_token' => Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class,
+  ],
+];
+```
+
+```php
+// config/auth.php — make sure API guard uses sanctum
+'guards' => [
+    'web' => [
+        'driver' => 'session',
+        'provider' => 'users',
+    ],
+
+    'api' => [
+        'driver' => 'sanctum', // ← this
+        'provider' => 'users',
+    ],
+],
+```
+
+---
+
+### Register & Login Controller
+
+```php
+// app/Http/Controllers/Api/AuthController.php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\User;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
+
+class AuthController extends Controller
+{
+    public function register(Request $request)
+    {
+        $validated = $request->validate([
+            'name'     => 'required|string|max:255',
+            'email'    => 'required|string|email|max:255|unique:users',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        $user = User::create([
+            'name'     => $validated['name'],
+            'email'    => $validated['email'],
+            'password' => Hash::make($validated['password']),
+        ]);
+
+        // Issue token with a device name
+        $token = $user->createToken('web')->plainTextToken;
+
+        return response()->json([
+            'user'  => $user,
+            'token' => $token,
+        ], 201);
+    }
+
+    public function login(Request $request)
+    {
+        $request->validate([
+            'email'    => 'required|email',
+            'password' => 'required',
+        ]);
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user || !Hash::check($request->password, $user->password)) {
+            throw ValidationException::withMessages([
+                'email' => ['The provided credentials are incorrect.'],
+            ]);
+        }
+
+        // Delete old tokens for this device name (optional — prevents token buildup)
+        $user->tokens()->where('name', 'web')->delete();
+
+        // Issue new token
+        $token = $user->createToken('web')->plainTextToken;
+
+        return response()->json([
+            'user'  => $user,
+            'token' => $token,
+        ]);
+    }
+
+    public function logout(Request $request)
+    {
+        // Revoke only the current token
+        $request->user()->currentAccessToken()->delete();
+
+        return response()->json(['message' => 'Logged out successfully']);
+    }
+
+    public function me(Request $request)
+    {
+        return response()->json($request->user());
+    }
+}
+```
+
+---
+
+### API Routes
+
+```php
+// routes/api.php
+<?php
+
+use App\Http\Controllers\Api\AuthController;
+use Illuminate\Support\Facades\Route;
+
+// Public routes — no token required
+Route::prefix('auth')->group(function () {
+    Route::post('/register', [AuthController::class, 'register']);
+    Route::post('/login',    [AuthController::class, 'login']);
+});
+
+// Protected routes — Bearer token required
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/auth/logout', [AuthController::class, 'logout']);
+    Route::get('/auth/me',      [AuthController::class, 'me']);
+
+    // Your app routes
+    Route::apiResource('posts', PostController::class);
+    Route::apiResource('profile', ProfileController::class);
+});
+```
+
+---
+
+### Token Abilities — Scoped Tokens
+
+```php
+// Issue a token with specific abilities
+$token = $user->createToken('mobile-app', ['read-posts', 'create-comments'])->plainTextToken;
+
+// Check ability in controller
+public function store(Request $request)
+{
+    if (!$request->user()->tokenCan('create-comments')) {
+        abort(403, 'Token does not have permission to create comments');
+    }
+
+    // proceed...
+}
+
+// Or use middleware on routes
+Route::middleware(['auth:sanctum', 'ability:create-posts'])->group(function () {
+    Route::post('/posts', [PostController::class, 'store']);
+});
+```
+
+---
+
+### Token Expiration
+
+```php
+// config/sanctum.php
+// Set expiration in minutes — tokens older than this are invalid
+'expiration' => 60 * 24 * 7, // 7 days
+
+// Prune expired tokens (run this in a scheduled command)
+// app/Console/Kernel.php
+protected function schedule(Schedule $schedule)
+{
+    $schedule->command('sanctum:prune-expired --hours=24')->daily();
+}
+```
+
+---
+
+### User Model — Required Setup
+
+```php
+// app/Models/User.php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Laravel\Sanctum\HasApiTokens; // ← must add this trait
+
+class User extends Authenticatable
+{
+    use HasApiTokens; // ← must use this trait
+
+    protected $fillable = [
+        'name',
+        'email',
+        'password',
+    ];
+
+    protected $hidden = [
+        'password',
+        'remember_token',
+    ];
+
+    protected $casts = [
+        'email_verified_at' => 'datetime',
+        'password'          => 'hashed',
+    ];
+}
+```
+
+---
+
+### API Resource — Format User Response
+
+```php
+// app/Http/Resources/UserResource.php
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class UserResource extends JsonResource
+{
+    public function toArray($request): array
+    {
+        return [
+            'id'         => $this->id,
+            'name'       => $this->name,
+            'email'      => $this->email,
+            'role'       => $this->role,
+            'created_at' => $this->created_at->toDateString(),
+        ];
+    }
+}
+
+// Use in controller
+return response()->json([
+    'user'  => new UserResource($user),
+    'token' => $token,
+]);
+```
+
+---
+
+### CORS Configuration
+
+```php
+// config/cors.php
+// Must configure this or your Next.js/Nuxt server routes cannot call Laravel
+
+return [
+    'paths'                    => ['api/*'],
+    'allowed_methods'          => ['*'],
+
+    // Only allow requests from your Next.js / Nuxt server
+    // In production: your actual domain
+    'allowed_origins'          => [
+        env('FRONTEND_URL', 'http://localhost:3000'),
+    ],
+
+    'allowed_origins_patterns' => [],
+    'allowed_headers'          => ['*'],
+    'exposed_headers'          => [],
+    'max_age'                  => 0,
+
+    // false because your frontend server talks to Laravel server-to-server
+    // cookies are not involved in this layer
+    'supports_credentials'     => false,
+];
+```
+
+```env
+# .env
+FRONTEND_URL=http://localhost:3000
+SANCTUM_STATEFUL_DOMAINS=localhost:3000
+```
+
+---
+
+### Postman Setup — Testing Your API
+```tsx
+1. Login
+POST http://localhost:8000/api/auth/login
+Content-Type: application/json
+{
+"email": "test@example.com",
+"password": "password"
+}
+Response:
+{
+"user": { "id": 1, "name": "Ahmed", "email": "test@example.com" },
+"token": "1|abc123xyz..."
+}
+2. Use token in protected requests
+GET http://localhost:8000/api/auth/me
+Authorization: Bearer 1|abc123xyz...
+3. Logout
+POST http://localhost:8000/api/auth/logout
+Authorization: Bearer 1|abc123xyz...
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Forgetting HasApiTokens trait — createToken() won't exist
+class User extends Authenticatable
+{
+    // missing: use HasApiTokens;
+}
+
+$user->createToken('web'); // ❌ Method not found
+```
+</Wrong>
+<Right>
+```php
+use Laravel\Sanctum\HasApiTokens;
+
+class User extends Authenticatable
+{
+    use HasApiTokens; // ✅
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Returning plainTextToken after storing user — token is hashed in DB after creation
+$token = $user->createToken('web');
+$user->save();
+return $token->plainTextToken; // might work but risky pattern
+```
+</Wrong>
+<Right>
+```php
+// Always get plainTextToken immediately after createToken()
+$token = $user->createToken('web')->plainTextToken;
+// plainTextToken is only available at creation time — not retrievable later
+return response()->json(['token' => $token]);
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Using wrong middleware name
+Route::middleware('sanctum')->group(function () { // ❌ wrong
+    Route::get('/me', ...);
+});
+```
+</Wrong>
+<Right>
+```php
+Route::middleware('auth:sanctum')->group(function () { // ✅ correct
+    Route::get('/me', ...);
+});
+```
+</Right>
+</WrongRight>
+
+**Gotcha from production:** The `plainTextToken` is only available immediately after calling `createToken()`. Laravel stores a hashed version in the database — you cannot retrieve the raw token later. Always return it to the client in the same request where you create it.
+
+---
+
+## Best Practices
+
+**Community conventions**
+- Always name your tokens by device or client: `'web'`, `'mobile'`, `'postman'` — makes it easy to revoke specific clients
+- Delete old tokens for the same device name before issuing a new one — prevents token buildup in the database
+- Use API Resources for all responses — never return raw Eloquent models
+
+**Performance tips**
+```php
+// Index the tokenable columns for faster token lookup
+// Already done by Sanctum migration — but verify in production
+
+// Prune expired tokens regularly to keep the table small
+$schedule->command('sanctum:prune-expired --hours=24')->daily();
+
+// Eager load user with token if you need user data frequently
+// Sanctum caches the token lookup per request automatically
+```
+
+**Security considerations**
+- Set `'expiration'` in `sanctum.php` — never leave tokens alive forever in production
+- Use HTTPS in production — Bearer tokens in headers are plaintext over HTTP
+- Never log request headers in production — the Authorization header contains the raw token
+- Scope tokens with abilities for third-party or mobile clients
+- Run `sanctum:prune-expired` on a schedule — do not let the tokens table grow unbounded
+
+---
+
+## Interview Questions
+
+<InterviewQ
+  question="What is the difference between Laravel Sanctum and Laravel Passport?"
+  difficulty="easy"
+>
+  Sanctum is lightweight and designed for first-party SPAs and mobile apps
+  using simple API tokens or cookie-based session auth. Passport is a full
+  OAuth2 server implementation — it supports authorization codes, refresh
+  tokens, client credentials, and third-party app authorization. Use Sanctum
+  when your frontend is your own app. Use Passport when you need to build an
+  OAuth2 provider that other developers will integrate with.
+</InterviewQ>
+
+<InterviewQ
+  question="Where does Laravel store Sanctum tokens and why can't you retrieve them after creation?"
+  difficulty="easy"
+>
+  Sanctum stores tokens in the `personal_access_tokens` table. When you call
+  `createToken()`, Laravel generates a random token, hashes it with SHA-256,
+  and stores only the hash. The `plainTextToken` property on the returned
+  `NewAccessToken` object is the only time the raw token is available. After
+  that it is gone — even from the database. This means if a user loses their
+  token, you must issue a new one.
+</InterviewQ>
+
+<InterviewQ
+  question="How do token abilities work in Sanctum and when would you use them?"
+  difficulty="mid"
+>
+  Token abilities are an array of strings you assign when creating a token —
+  for example `['read-posts', 'create-comments']`. In your controller or
+  middleware you check `$request->user()->tokenCan('create-comments')`. Use
+  abilities when different clients need different permission levels — a
+  read-only API key for analytics, a full-access token for your main app,
+  a scoped token for a mobile app that should not be able to delete accounts.
+</InterviewQ>
+
+<InterviewQ
+  question="How would you implement per-device logout (revoke one device without logging out others)?"
+  difficulty="mid"
+>
+  Name each token by device when creating it — `createToken('iphone-14')`,
+  `createToken('web')`. Store the device name in the token request. To revoke
+  a specific device, find the token by name and delete it:
+  `$user->tokens()->where('name', 'iphone-14')->delete()`. To logout the
+  current device only, use `$request->user()->currentAccessToken()->delete()`.
+  To logout all devices: `$request->user()->tokens()->delete()`.
+</InterviewQ>
+
+<InterviewQ
+  question="What happens if you don't set an expiration on Sanctum tokens and why is that a problem?"
+  difficulty="hard"
+>
+  Without expiration, tokens are valid forever unless explicitly revoked. This
+  means a stolen token gives permanent access — there is no automatic recovery.
+  It also means the `personal_access_tokens` table grows unbounded over time
+  as users log in repeatedly without the old tokens being cleaned up. In
+  production always set `'expiration'` in `sanctum.php` and run
+  `sanctum:prune-expired` on a schedule. A 7-day or 30-day expiration with
+  token refresh on activity is a reasonable default for most apps.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The most common mistake I make on new Laravel projects: forgetting to add
+  `use HasApiTokens` to the User model. The error you get is a method not
+  found exception on `createToken` — takes a minute to remember why every
+  single time.
+</MyNotes>
+
+<MyNotes>
+  Always delete old tokens for the same device name before issuing a new one
+  on login. Without this, every login creates a new row in
+  `personal_access_tokens` and they pile up forever. One line fixes it:
+  `$user->tokens()->where('name', 'web')->delete()` before `createToken()`.
+</MyNotes>
+
+<MyNotes>
+  For local development with Next.js on port 3000 and Laravel on port 8000:
+  set `FRONTEND_URL=http://localhost:3000` in Laravel `.env` and make sure
+  `config/cors.php` has `'paths' => ['api/*']`. CORS issues between the two
+  servers are the number one time waster on new projects.
+</MyNotes>
+
+<MyNotes>
+  In Postman: create a Collection Variable called `token` and set it after
+  login with a test script:
+  `pm.collectionVariables.set('token', pm.response.json().token)`
+  Then use `Bearer {{token}}` in all protected requests. Never manually
+  copy-paste tokens in Postman.
+</MyNotes>
+
+---
+
+## Reusable Code Snippets
+
+### Auth Controller — Full Version with Refresh
+
+```php
+// app/Http/Controllers/Api/AuthController.php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Http\Resources\UserResource;
+use App\Models\User;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
+
+class AuthController extends Controller
+{
+    public function register(Request $request)
+    {
+        $validated = $request->validate([
+            'name'                  => 'required|string|max:255',
+            'email'                 => 'required|string|email|max:255|unique:users',
+            'password'              => 'required|string|min:8|confirmed',
+        ]);
+
+        $user = User::create([
+            'name'     => $validated['name'],
+            'email'    => $validated['email'],
+            'password' => Hash::make($validated['password']),
+        ]);
+
+        $user->tokens()->where('name', 'web')->delete();
+        $token = $user->createToken('web')->plainTextToken;
+
+        return response()->json([
+            'user'  => new UserResource($user),
+            'token' => $token,
+        ], 201);
+    }
+
+    public function login(Request $request)
+    {
+        $request->validate([
+            'email'    => 'required|email',
+            'password' => 'required',
+        ]);
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user || !Hash::check($request->password, $user->password)) {
+            throw ValidationException::withMessages([
+                'email' => ['The provided credentials are incorrect.'],
+            ]);
+        }
+
+        $user->tokens()->where('name', 'web')->delete();
+        $token = $user->createToken('web')->plainTextToken;
+
+        return response()->json([
+            'user'  => new UserResource($user),
+            'token' => $token,
+        ]);
+    }
+
+    public function logout(Request $request)
+    {
+        $request->user()->currentAccessToken()->delete();
+        return response()->json(['message' => 'Logged out successfully']);
+    }
+
+    public function logoutAll(Request $request)
+    {
+        $request->user()->tokens()->delete();
+        return response()->json(['message' => 'All devices logged out']);
+    }
+
+    public function me(Request $request)
+    {
+        return new UserResource($request->user());
+    }
+}
+```
+
+---
+
+### Postman Collection Test Script — Auto-save Token
+
+```js
+// Add this to the login request Tests tab in Postman
+const response = pm.response.json()
+
+if (response.token) {
+    pm.collectionVariables.set('auth_token', response.token)
+    console.log('Token saved:', response.token.substring(0, 10) + '...')
+}
+
+// Then in all protected requests set Authorization header to:
+// Bearer {{auth_token}}
+```
+
+---
+
+### Sanctum Token Cleanup Command
+
+```php
+// app/Console/Commands/PruneTokens.php
+<?php
+
+namespace App\Console\Commands;
+
+use Illuminate\Console\Command;
+use Laravel\Sanctum\PersonalAccessToken;
+
+class PruneTokens extends Command
+{
+    protected $signature = 'tokens:prune';
+    protected $description = 'Delete expired and old duplicate tokens';
+
+    public function handle()
+    {
+        // Delete tokens expired more than 7 days ago
+        $deleted = PersonalAccessToken::where('expires_at', '<', now()->subDays(7))->delete()
+
+        $this->info("Deleted {$deleted} expired tokens.");
+    }
+}
+```
+
+---
+
+*Tags: `laravel` `sanctum` `bearer-token` `authentication` `api` `tokens` `intermediate`*

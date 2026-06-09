@@ -1,0 +1,424 @@
+---
+title: "Pagination with Vue + Tailwind CSS"
+description: "How to build a reusable pagination component in Vue 3 with page numbers, prev/next buttons, ellipsis for large page counts, and per-page selector using Tailwind CSS"
+category: ui-patterns
+tools: [vue, tailwind]
+tags: [pagination, table, data, navigation]
+difficulty: beginner
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - ui-patterns/pagination-nextjs
+  - ui-patterns/data-table-vue
+---
+
+## Concept explanation
+
+Pagination breaks a large dataset into smaller pages so the UI stays fast and readable. In Vue 3 we build a reusable component that takes `currentPage`, `totalPages`, and emits a `change` event when the user navigates. The parent controls the actual data slicing — the pagination component only handles the UI and emits which page was selected.
+
+<Callout type="note">
+  **Vue vs Nuxt difference:** Code is identical in both. Nuxt auto-imports `ref` and `computed` so you can skip those imports.
+</Callout>
+
+## Why it's used
+
+- Prevents loading thousands of rows at once which kills performance
+- Gives users a sense of how much data exists
+- Standard UX pattern users already understand
+- Works for both client-side and server-side data fetching
+
+## Real-world use cases
+
+- Users list in an admin dashboard
+- Product catalog in an e-commerce site
+- Blog posts archive page
+- Search results page
+- Orders history table
+
+## Code example
+
+### Basic pagination component
+
+```vue
+<!-- components/AppPagination.vue -->
+<script setup lang="ts">
+import { computed } from 'vue'
+
+const props = defineProps<{
+  currentPage: number
+  totalPages: number
+  maxVisible?: number
+}>()
+
+const emit = defineEmits<{
+  change: [page: number]
+}>()
+
+const maxVisible = props.maxVisible ?? 5
+
+// Generate the page numbers to show including ellipsis
+const pages = computed(() => {
+  const items: (number | '...')[] = []
+
+  if (props.totalPages <= maxVisible) {
+    // Show all pages if total fits
+    for (let i = 1; i <= props.totalPages; i++) items.push(i)
+    return items
+  }
+
+  // Always show first page
+  items.push(1)
+
+  const left = Math.max(2, props.currentPage - 1)
+  const right = Math.min(props.totalPages - 1, props.currentPage + 1)
+
+  if (left > 2) items.push('...')
+
+  for (let i = left; i <= right; i++) items.push(i)
+
+  if (right < props.totalPages - 1) items.push('...')
+
+  // Always show last page
+  items.push(props.totalPages)
+
+  return items
+})
+
+const goTo = (page: number) => {
+  if (page < 1 || page > props.totalPages || page === props.currentPage) return
+  emit('change', page)
+}
+</script>
+
+<template>
+  <div class="flex items-center justify-center gap-1">
+
+    <!-- Prev button -->
+    <button
+      @click="goTo(currentPage - 1)"
+      :disabled="currentPage === 1"
+      class="flex items-center gap-1 px-3 py-2 text-sm rounded-lg border border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+    >
+      ← Prev
+    </button>
+
+    <!-- Page numbers -->
+    <template v-for="page in pages" :key="page">
+
+      <!-- Ellipsis -->
+      <span
+        v-if="page === '...'"
+        class="px-3 py-2 text-sm text-neutral-400"
+      >
+        ...
+      </span>
+
+      <!-- Page button -->
+      <button
+        v-else
+        @click="goTo(page)"
+        :class="[
+          'px-3 py-2 text-sm rounded-lg border transition-colors',
+          page === currentPage
+            ? 'bg-blue-600 text-white border-blue-600'
+            : 'border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800'
+        ]"
+      >
+        {{ page }}
+      </button>
+
+    </template>
+
+    <!-- Next button -->
+    <button
+      @click="goTo(currentPage + 1)"
+      :disabled="currentPage === totalPages"
+      class="flex items-center gap-1 px-3 py-2 text-sm rounded-lg border border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+    >
+      Next →
+    </button>
+
+  </div>
+</template>
+```
+
+### With per-page selector and result count
+
+```vue
+<!-- components/AppPaginationFull.vue -->
+<script setup lang="ts">
+import { computed } from 'vue'
+
+const props = defineProps<{
+  currentPage: number
+  totalItems: number
+  perPage: number
+}>()
+
+const emit = defineEmits<{
+  change: [page: number]
+  perPageChange: [perPage: number]
+}>()
+
+const totalPages = computed(() =>
+  Math.ceil(props.totalItems / props.perPage)
+)
+
+const from = computed(() =>
+  Math.min((props.currentPage - 1) * props.perPage + 1, props.totalItems)
+)
+
+const to = computed(() =>
+  Math.min(props.currentPage * props.perPage, props.totalItems)
+)
+
+const pages = computed(() => {
+  const items: (number | '...')[] = []
+  if (totalPages.value <= 7) {
+    for (let i = 1; i <= totalPages.value; i++) items.push(i)
+    return items
+  }
+  items.push(1)
+  const left = Math.max(2, props.currentPage - 1)
+  const right = Math.min(totalPages.value - 1, props.currentPage + 1)
+  if (left > 2) items.push('...')
+  for (let i = left; i <= right; i++) items.push(i)
+  if (right < totalPages.value - 1) items.push('...')
+  items.push(totalPages.value)
+  return items
+})
+
+const goTo = (page: number) => {
+  if (page < 1 || page > totalPages.value || page === props.currentPage) return
+  emit('change', page)
+}
+</script>
+
+<template>
+  <div class="flex items-center justify-between gap-4 flex-wrap">
+
+    <!-- Result info -->
+    <p class="text-sm text-neutral-500 dark:text-neutral-400">
+      Showing <span class="font-medium text-neutral-900 dark:text-neutral-100">{{ from }}–{{ to }}</span>
+      of <span class="font-medium text-neutral-900 dark:text-neutral-100">{{ totalItems }}</span> results
+    </p>
+
+    <!-- Pages + per-page -->
+    <div class="flex items-center gap-3">
+
+      <!-- Per-page selector -->
+      <select
+        :value="perPage"
+        @change="emit('perPageChange', Number(($event.target as HTMLSelectElement).value))"
+        class="text-sm border border-neutral-200 dark:border-neutral-700 rounded-lg px-2 py-1.5 bg-transparent dark:text-neutral-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
+      >
+        <option value="5">5 / page</option>
+        <option value="10">10 / page</option>
+        <option value="25">25 / page</option>
+        <option value="50">50 / page</option>
+      </select>
+
+      <!-- Page buttons -->
+      <div class="flex items-center gap-1">
+        <button
+          @click="goTo(currentPage - 1)"
+          :disabled="currentPage === 1"
+          class="px-3 py-1.5 text-sm rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          ←
+        </button>
+
+        <template v-for="page in pages" :key="page">
+          <span v-if="page === '...'" class="px-2 text-sm text-neutral-400">...</span>
+          <button
+            v-else
+            @click="goTo(page)"
+            :class="[
+              'px-3 py-1.5 text-sm rounded-lg border transition-colors',
+              page === currentPage
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800'
+            ]"
+          >
+            {{ page }}
+          </button>
+        </template>
+
+        <button
+          @click="goTo(currentPage + 1)"
+          :disabled="currentPage === totalPages"
+          class="px-3 py-1.5 text-sm rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          →
+        </button>
+      </div>
+
+    </div>
+  </div>
+</template>
+```
+
+### How to use it in any page
+
+```vue
+<!-- pages/users.vue -->
+<script setup lang="ts">
+import { ref, computed } from 'vue'
+import AppPaginationFull from '@/components/AppPaginationFull.vue'
+
+const allUsers = ref([
+  { id: 1,  name: 'Omar Hassan',   role: 'Admin' },
+  { id: 2,  name: 'Ahmed Ali',     role: 'Editor' },
+  { id: 3,  name: 'Sara Mohamed',  role: 'Viewer' },
+  // ...more users
+])
+
+const currentPage = ref(1)
+const perPage = ref(10)
+
+const totalItems = computed(() => allUsers.value.length)
+
+const paginatedUsers = computed(() => {
+  const start = (currentPage.value - 1) * perPage.value
+  return allUsers.value.slice(start, start + perPage.value)
+})
+
+const handlePageChange = (page: number) => {
+  currentPage.value = page
+  // scroll to top on page change
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+const handlePerPageChange = (val: number) => {
+  perPage.value = val
+  currentPage.value = 1
+}
+</script>
+
+<template>
+  <div class="space-y-4">
+
+    <!-- Your table or list here -->
+    <div v-for="user in paginatedUsers" :key="user.id"
+      class="p-4 border border-neutral-200 rounded-xl">
+      <p class="font-medium">{{ user.name }}</p>
+      <p class="text-sm text-neutral-500">{{ user.role }}</p>
+    </div>
+
+    <!-- Pagination -->
+    <AppPaginationFull
+      :current-page="currentPage"
+      :total-items="totalItems"
+      :per-page="perPage"
+      @change="handlePageChange"
+      @per-page-change="handlePerPageChange"
+    />
+
+  </div>
+</template>
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Putting pagination logic inside the pagination component
+     — makes it impossible to reuse with different data sources -->
+<script setup>
+const users = ref([...]) // ❌ data inside pagination component
+const currentPage = ref(1)
+const paginated = computed(() => users.value.slice(...))
+</script>
+```
+</Wrong>
+<Right>
+```vue
+<!-- Keep pagination component dumb — it only emits events
+     Parent controls all data logic -->
+
+<!-- Parent component ✅ -->
+<script setup>
+const currentPage = ref(1)
+const paginated = computed(() => data.slice(...))
+</script>
+
+<!-- Pagination component just emits which page was clicked -->
+<AppPagination
+  :current-page="currentPage"
+  :total-pages="totalPages"
+  @change="page => currentPage = page"
+/>
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```vue
+<!-- Forgetting to reset page when per-page changes
+     User is on page 5 with 10/page, switches to 50/page
+     page 5 might not exist anymore -->
+const handlePerPageChange = (val) => {
+  perPage.value = val
+  // ❌ no page reset
+}
+```
+</Wrong>
+<Right>
+```vue
+<!-- Always reset to page 1 when per-page changes -->
+const handlePerPageChange = (val) => {
+  perPage.value = val
+  currentPage.value = 1 // ✅
+}
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Keep the pagination component stateless — it receives `currentPage` and emits `change`, parent owns state
+- Always reset to page 1 when per-page selector changes
+- Scroll to top on page change with `window.scrollTo({ top: 0, behavior: 'smooth' })`
+- Show result count ("Showing 1–10 of 143 results") so users know where they are
+- Disable prev/next buttons instead of hiding them — hiding causes layout shift
+- For server-side pagination, emit the page number and let the parent fetch new data
+
+<Callout type="tip">
+  For URL-based pagination (shareable links), use Vue Router query params instead of a local ref:
+```ts
+  const route = useRoute()
+  const router = useRouter()
+  const currentPage = computed(() => Number(route.query.page) || 1)
+  const goTo = (page: number) => router.push({ query: { ...route.query, page } })
+```
+  Now the current page is in the URL — users can bookmark and share page 5 directly.
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between client-side and server-side pagination?" difficulty="mid">
+  Client-side pagination loads all data upfront and slices it in the browser using computed properties. Simple to implement but slow for large datasets since all rows are fetched at once. Server-side pagination fetches only the current page from the API — much faster for large datasets but requires the server to support `page` and `perPage` query params and return a total count so the component knows how many pages exist.
+</InterviewQ>
+
+<InterviewQ question="Why should the pagination component be stateless?" difficulty="easy">
+  A stateless pagination component that only receives props and emits events is reusable anywhere — users list, orders table, blog posts, search results. If it owns the data and page state internally, you can only use it in one specific context. Keeping it dumb makes it a universal UI building block.
+</InterviewQ>
+
+<InterviewQ question="How do you make pagination state shareable via URL?" difficulty="mid">
+  Store the current page in the URL as a query param (`?page=3`) using Vue Router. Read it with `route.query.page` and update it with `router.push({ query: { page } })` instead of a local `ref`. This makes the state bookmarkable, shareable, and preserved on browser refresh — and it works with the browser back button for free.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The ellipsis logic is always the tricky part. The rule is:
+  - Always show page 1 and the last page
+  - Show the current page and one page on each side
+  - Add `...` wherever there's a gap
+
+  For Nuxt — `ref` and `computed` are auto-imported. Skip the import line.
+
+  The URL-based pagination tip is gold for any page that users might want to bookmark or share — like a filtered search results page or a specific page of orders. I use it in almost every admin dashboard now.
+</MyNotes>

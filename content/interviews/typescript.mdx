@@ -1,0 +1,604 @@
+---
+title: "TypeScript Interview Questions"
+description: "The most common TypeScript interview questions with short, clear answers — covering types, generics, utility types, and real-world patterns."
+category: interviews
+tags: [typescript, interview, frontend]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## Core Types
+
+<InterviewQ question="What is the difference between `type` and `interface`?" difficulty="easy">
+  Both define the shape of an object. `interface` is extendable with `extends` and can be
+  merged by declaring it twice (declaration merging). `type` is more flexible — it can define
+  unions, intersections, primitives, and tuples. Use `interface` for objects and class contracts,
+  `type` for everything else.
+
+  ```ts
+  interface User { name: string }
+  interface User { age: number }   // ✅ merges — User now has name + age
+
+  type User = { name: string }
+  type User = { age: number }      // ❌ Error: duplicate identifier
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is the difference between `any`, `unknown`, and `never`?" difficulty="easy">
+  - `any` — disables type checking entirely. Avoid it.
+  - `unknown` — like `any` but safe. You must narrow the type before using it.
+  - `never` — a value that never exists (unreachable code, exhaustive checks, functions that always throw).
+
+  ```ts
+  let a: any     = 'hello'; a.foo()       // ✅ no error (unsafe)
+  let b: unknown = 'hello'; b.foo()       // ❌ Error — must check type first
+  if (typeof b === 'string') b.toUpperCase() // ✅ narrowed
+
+  function fail(msg: string): never { throw new Error(msg) }
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is `void` and when do you use it?" difficulty="easy">
+  `void` means a function returns nothing (or `undefined`). Use it as the return type
+  for functions that perform side effects and don't return a meaningful value.
+
+  ```ts
+  function logMessage(msg: string): void {
+    console.log(msg)
+    // no return statement needed
+  }
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is the difference between `null` and `undefined` in TypeScript?" difficulty="easy">
+  `undefined` means a variable was declared but not assigned. `null` is an intentional
+  absence of value — you explicitly set it. With `strictNullChecks` enabled (recommended),
+  TypeScript treats them as distinct types and forces you to handle both explicitly.
+
+  ```ts
+  let a: string | undefined  // might not exist yet
+  let b: string | null       // intentionally empty
+  ```
+</InterviewQ>
+
+---
+
+## Type Narrowing
+
+<InterviewQ question="What is type narrowing?" difficulty="easy">
+  Type narrowing is when TypeScript figures out a more specific type inside a conditional block.
+  You use `typeof`, `instanceof`, `in`, or custom type guards to narrow a union type.
+
+  ```ts
+  function format(value: string | number) {
+    if (typeof value === 'string') {
+      return value.toUpperCase()   // TypeScript knows it's string here
+    }
+    return value.toFixed(2)        // TypeScript knows it's number here
+  }
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is a type guard?" difficulty="mid">
+  A function that returns a type predicate (`value is Type`), telling TypeScript that
+  if the function returns `true`, the value is of the specified type.
+
+  ```ts
+  function isUser(value: unknown): value is User {
+    return typeof value === 'object' && value !== null && 'name' in value
+  }
+
+  if (isUser(data)) {
+    console.log(data.name)  // ✅ TypeScript knows it's User here
+  }
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is a discriminated union?" difficulty="mid">
+  A union of types where each member has a common literal property (the discriminant)
+  that TypeScript uses to narrow the type.
+
+  ```ts
+  type Success = { status: 'success'; data: string }
+  type Error   = { status: 'error';   message: string }
+  type Result  = Success | Error
+
+  function handle(result: Result) {
+    if (result.status === 'success') {
+      console.log(result.data)     // TypeScript knows it's Success
+    } else {
+      console.log(result.message)  // TypeScript knows it's Error
+    }
+  }
+  ```
+</InterviewQ>
+
+---
+
+## Generics
+
+<InterviewQ question="What are generics and why are they useful?" difficulty="mid">
+  Generics let you write reusable code that works with any type while still being type-safe.
+  Instead of using `any`, you use a type parameter that gets filled in at call time.
+
+  ```ts
+  // Without generics — loses type info
+  function first(arr: any[]): any { return arr[0] }
+
+  // With generics — type-safe and reusable
+  function first<T>(arr: T[]): T { return arr[0] }
+
+  const n = first([1, 2, 3])        // n is number ✅
+  const s = first(['a', 'b', 'c'])  // s is string ✅
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is a generic constraint?" difficulty="mid">
+  `extends` limits what types a generic can accept. Useful when you need to guarantee
+  the type has certain properties.
+
+  ```ts
+  function getLength<T extends { length: number }>(value: T): number {
+    return value.length
+  }
+
+  getLength('hello')    // ✅ string has .length
+  getLength([1, 2, 3])  // ✅ array has .length
+  getLength(42)         // ❌ number has no .length
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is the difference between `T extends string` and `T = string`?" difficulty="mid">
+  `T extends string` is a constraint — T must be a subtype of string (enforced).
+  `T = string` is a default — T defaults to string if not provided, but can be anything.
+
+  ```ts
+  function a<T extends string>(v: T): T { return v }
+  a(42)  // ❌ 42 is not a string
+
+  function b<T = string>(v: T): T { return v }
+  b(42)  // ✅ T defaults to string but 42 is inferred as number
+  ```
+</InterviewQ>
+
+---
+
+## Utility Types
+
+<InterviewQ question="What are utility types? Name the most important ones." difficulty="mid">
+  Built-in generic types that transform other types. The most important:
+
+  ```ts
+  Partial<T>          // all properties optional
+  Required<T>         // all properties required
+  Readonly<T>         // all properties readonly
+  Pick<T, K>          // keep only listed keys
+  Omit<T, K>          // remove listed keys
+  Record<K, V>        // object with keys K and values V
+  Exclude<T, U>       // remove U from union T
+  Extract<T, U>       // keep only U from union T
+  ReturnType<T>       // get return type of a function
+  Parameters<T>       // get parameter types of a function as tuple
+  NonNullable<T>      // remove null and undefined from T
+  ```
+</InterviewQ>
+
+<InterviewQ question="When would you use `Pick` vs `Omit`?" difficulty="mid">
+  Use `Pick` when you want a few fields from a large type (whitelist).
+  Use `Omit` when you want everything except a few fields (blacklist).
+
+  ```ts
+  type User = { id: number; name: string; password: string; role: string }
+
+  type PublicUser = Omit<User, 'password'>
+  // { id, name, role } — easier when omitting 1-2 sensitive fields
+
+  type UserPreview = Pick<User, 'id' | 'name'>
+  // { id, name } — easier when you only need a few fields from a big type
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is `ReturnType` and when is it useful?" difficulty="mid">
+  `ReturnType<T>` extracts the return type of a function type. Useful when you want to
+  type a variable to match what a function returns without duplicating the type definition.
+
+  ```ts
+  function getUser() {
+    return { id: 1, name: 'Ahmed', role: 'admin' }
+  }
+
+  type User = ReturnType<typeof getUser>
+  // { id: number; name: string; role: string }
+  // No need to define User separately — stays in sync automatically
+  ```
+</InterviewQ>
+
+---
+
+## Classes & OOP
+
+<InterviewQ question="What are access modifiers in TypeScript?" difficulty="easy">
+  `public` (default) — accessible everywhere.
+  `private` — only inside the class.
+  `protected` — inside the class and subclasses.
+  `readonly` — can only be set in the constructor.
+
+  ```ts
+  class User {
+    public    name: string
+    private   password: string
+    protected role: string
+    readonly  id: number
+
+    constructor(id: number, name: string, password: string, role: string) {
+      this.id       = id
+      this.name     = name
+      this.password = password
+      this.role     = role
+    }
+  }
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is the difference between `abstract class` and `interface`?" difficulty="mid">
+  An `abstract class` can have implemented methods (with actual logic) and abstract methods
+  (that subclasses must implement). It can also have a constructor. An `interface` only
+  defines the shape — no implementation, no constructor. Use abstract classes when you want
+  to share code between related classes. Use interfaces for defining contracts.
+
+  ```ts
+  abstract class Animal {
+    abstract speak(): string      // must implement
+    move(): void { console.log('moving') }  // shared implementation
+  }
+
+  interface Flyable {
+    fly(): void                   // contract only, no implementation
+  }
+  ```
+</InterviewQ>
+
+---
+
+## Advanced Types
+
+<InterviewQ question="What are mapped types?" difficulty="hard">
+  Mapped types create a new type by iterating over the keys of an existing type.
+  All built-in utility types like `Partial` and `Readonly` are built with mapped types.
+
+  ```ts
+  // How Partial<T> works internally:
+  type MyPartial<T> = {
+    [K in keyof T]?: T[K]
+  }
+
+  // Make all properties nullable:
+  type Nullable<T> = {
+    [K in keyof T]: T[K] | null
+  }
+
+  type User = { name: string; age: number }
+  type NullableUser = Nullable<User>
+  // { name: string | null; age: number | null }
+  ```
+</InterviewQ>
+
+<InterviewQ question="What are conditional types?" difficulty="hard">
+  Types that choose between two types based on a condition — like a ternary for types.
+
+  ```ts
+  type IsString<T> = T extends string ? 'yes' : 'no'
+
+  type A = IsString<string>   // 'yes'
+  type B = IsString<number>   // 'no'
+
+  // Real use case: unwrap a Promise type
+  type Unwrap<T> = T extends Promise<infer U> ? U : T
+
+  type A = Unwrap<Promise<string>>  // string
+  type B = Unwrap<number>           // number
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is `infer` and how does it work?" difficulty="hard">
+  `infer` is used inside conditional types to capture and name a type that TypeScript
+  figures out. It's how you extract inner types from complex types.
+
+  ```ts
+  // Extract the resolved type of a Promise
+  type UnwrapPromise<T> = T extends Promise<infer U> ? U : T
+  type Result = UnwrapPromise<Promise<string>>  // string
+
+  // Extract array element type
+  type ArrayItem<T> = T extends (infer U)[] ? U : never
+  type Item = ArrayItem<string[]>  // string
+
+  // Extract function return type (same as ReturnType<T>)
+  type MyReturnType<T> = T extends (...args: any[]) => infer R ? R : never
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is `keyof` and `typeof`?" difficulty="mid">
+  `keyof T` gives you a union of all the keys of type T.
+  `typeof value` gets the TypeScript type of a JavaScript value.
+
+  ```ts
+  type User = { id: number; name: string; role: string }
+  type UserKeys = keyof User   // 'id' | 'name' | 'role'
+
+  // Useful for safe property access:
+  function getProperty<T, K extends keyof T>(obj: T, key: K): T[K] {
+    return obj[key]
+  }
+  getProperty(user, 'name')   // ✅ 'name' is a valid key
+  getProperty(user, 'email')  // ❌ 'email' doesn't exist on User
+
+  // typeof on a value:
+  const config = { host: 'localhost', port: 3000 }
+  type Config = typeof config   // { host: string; port: number }
+  ```
+</InterviewQ>
+
+---
+
+## Real-World Patterns
+
+<InterviewQ question="How do you type a React component's props in TypeScript?" difficulty="easy">
+  ```ts
+  // Define props type and pass to FC or directly inline
+  type ButtonProps = {
+    label: string
+    onClick: () => void
+    variant?: 'primary' | 'secondary'  // optional with default
+    disabled?: boolean
+  }
+
+  // Functional component
+  function Button({ label, onClick, variant = 'primary', disabled = false }: ButtonProps) {
+    return <button onClick={onClick} disabled={disabled}>{label}</button>
+  }
+
+  // With children
+  type CardProps = {
+    title: string
+    children: React.ReactNode
+  }
+  ```
+</InterviewQ>
+
+<InterviewQ question="How do you type an API response in TypeScript?" difficulty="mid">
+  ```ts
+  // Define the shape of the response
+  type ApiResponse<T> = {
+    success: boolean
+    data: T
+    message: string
+  }
+
+  type Product = {
+    id: number
+    name: string
+    price: number
+  }
+
+  // Type the fetch call
+  async function getProduct(id: number): Promise<ApiResponse<Product>> {
+    const res = await fetch(`/api/products/${id}`)
+    return res.json()
+  }
+
+  const response = await getProduct(1)
+  response.data.name   // ✅ TypeScript knows this is a string
+  ```
+</InterviewQ>
+
+<InterviewQ question="What is the `as const` assertion and when do you use it?" difficulty="mid">
+  `as const` makes TypeScript infer the most specific (literal) type instead of a general one,
+  and marks everything as readonly. Useful for defining constant values like route names,
+  status enums, or config objects.
+
+  ```ts
+  const status = ['active', 'inactive', 'pending'] as const
+  // type is readonly ['active', 'inactive', 'pending']
+  // without as const: string[]
+
+  type Status = typeof status[number]
+  // 'active' | 'inactive' | 'pending'  — a union from the array!
+
+  const ROUTES = {
+    HOME:    '/',
+    ABOUT:   '/about',
+    PROFILE: '/profile',
+  } as const
+
+  type Route = typeof ROUTES[keyof typeof ROUTES]
+  // '/' | '/about' | '/profile'
+  ```
+</InterviewQ>
+
+<InterviewQ question="How do you handle optional chaining and nullish coalescing with TypeScript?" difficulty="easy">
+  These are JavaScript operators that TypeScript fully supports and types correctly.
+
+  ```ts
+  type User = {
+    name: string
+    address?: {
+      city?: string
+    }
+  }
+
+  const user: User = { name: 'Ahmed' }
+
+  // Optional chaining — returns undefined instead of throwing
+  const city = user.address?.city   // string | undefined
+
+  // Nullish coalescing — fallback only for null/undefined (not 0 or '')
+  const displayCity = user.address?.city ?? 'Unknown'   // string
+
+  // Combined
+  const label = user?.address?.city?.toUpperCase() ?? 'NO CITY'
+  ```
+</InterviewQ>
+
+---
+
+## tsconfig
+
+<InterviewQ question="What are the most important `tsconfig.json` options to know?" difficulty="mid">
+  ```json
+  {
+    "compilerOptions": {
+      "strict": true,              // enables all strict checks — always enable this
+      "strictNullChecks": true,    // null and undefined are not assignable to other types
+      "noImplicitAny": true,       // error when TypeScript infers 'any'
+      "target": "ES2020",          // JavaScript version to compile to
+      "module": "ESNext",          // module system
+      "moduleResolution": "bundler", // how to resolve imports (use 'bundler' for Vite/Next)
+      "baseUrl": ".",              // base for non-relative imports
+      "paths": {                   // path aliases — "@/components" → "src/components"
+        "@/*": ["./src/*"]
+      },
+      "lib": ["ES2020", "DOM"],   // type definitions to include
+      "noUnusedLocals": true,      // error on unused variables
+      "noUnusedParameters": true   // error on unused function parameters
+    }
+  }
+  ```
+</InterviewQ>
+
+## Core TypeScript
+
+<InterviewQ question="What is TypeScript and what problem does it solve?" difficulty="easy">
+  TypeScript is a statically typed superset of JavaScript that compiles to plain JavaScript. It solves the problem of runtime type errors — bugs caused by passing the wrong type of value to a function, accessing properties that don't exist, or misunderstanding an API's shape. TypeScript catches these errors at compile time while you write code, not when users click a button in production. It also enables powerful editor tooling — autocomplete, inline documentation, and safe refactoring.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between type and interface?" difficulty="mid">
+  Both define object shapes and are largely interchangeable. Key differences: interfaces support declaration merging — you can define the same interface twice and TypeScript merges them. Types support union syntax: `type ID = string | number`. Interfaces cannot express union types directly. In practice: use `interface` for object shapes and class contracts, use `type` for unions, tuples, and utility type transformations. When in doubt, use `interface` for objects — it gives better error messages.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between any and unknown?" difficulty="mid">
+  `any` completely disables type checking — you can call any method, access any property, and TypeScript stays silent. `unknown` is type-safe — TypeScript forces you to narrow the type before using it. Use `unknown` for data from external sources (API responses, user input, parsed JSON) — it forces you to validate before use. Use `any` only as a last resort when migrating JavaScript to TypeScript, and treat it as technical debt.
+</InterviewQ>
+
+<InterviewQ question="What is a union type and what is an intersection type?" difficulty="easy">
+  Union type `A | B` means a value can be type A OR type B. Use the pipe: `string | number`, `'draft' | 'published'`. Intersection type `A & B` means a value must satisfy BOTH types — it has ALL properties from A AND B. Use the ampersand: `User & Admin` has every property of both. Union = OR. Intersection = AND.
+</InterviewQ>
+
+<InterviewQ question="What is type narrowing?" difficulty="mid">
+  Type narrowing is TypeScript figuring out a more specific type within a conditional block. Inside `if (typeof value === 'string')`, TypeScript knows `value` is a string and enables string methods. Narrowing techniques: `typeof` for primitives, `instanceof` for classes, `in` operator for property checks, discriminant property checks for union types, and custom type guards (`value is Type`). TypeScript performs control flow analysis automatically.
+</InterviewQ>
+
+<InterviewQ question="What is a discriminated union and when would you use it?" difficulty="mid">
+  A discriminated union is a union of types that all share one common literal property — the discriminant. In a switch on the discriminant, TypeScript knows exactly which variant you are in. Example: `type State = { status: 'loading' } | { status: 'success'; data: User[] } | { status: 'error'; message: string }`. In the `'success'` case, TypeScript knows `data` exists. In `'error'`, it knows `message` exists. Use for loading states, API states, form steps, or any scenario with mutually exclusive states.
+</InterviewQ>
+
+<InterviewQ question="What are enums and what is the alternative?" difficulty="mid">
+  Enums define named constants. String enums: `enum Status { Draft = 'draft', Published = 'published' }`. Many teams prefer `const` objects with `as const` — `const STATUS = { Draft: 'draft' } as const` — because they compile away entirely (no runtime code), work better with type inference, and are plain JavaScript. `type Status = typeof STATUS[keyof typeof STATUS]` gives you the union type. Both approaches work — `as const` is generally preferred in modern TypeScript.
+</InterviewQ>
+
+---
+
+## Generics
+
+<InterviewQ question="What are generics and why are they useful?" difficulty="mid">
+  Generics are type parameters — placeholders replaced with actual types at usage. `function identity<T>(value: T): T` works for any type while remaining fully typed. Without generics you either use `any` (loses type safety) or write duplicate functions for each type. Generics let you write reusable, type-safe code — one `ApiResponse<T>` type works for users, posts, orders, anything. TypeScript infers the type parameter automatically in most cases.
+</InterviewQ>
+
+<InterviewQ question="What is the extends keyword in generics?" difficulty="mid">
+  `T extends X` constrains a type parameter — T must be assignable to X. `function getLength<T extends { length: number }>(value: T)` — T can be anything with a `length` property. `K extends keyof T` constrains K to only be valid keys of T. Without constraints, generics accept any type — you can't access any properties on T. Constraints let you write generic code that still uses specific properties or methods.
+</InterviewQ>
+
+<InterviewQ question="What is keyof and how do you use it with generics?" difficulty="hard">
+  `keyof T` produces a union of all keys of type T. `keyof User` is `'id' | 'name' | 'email'`. Combined with generics: `function get<T, K extends keyof T>(obj: T, key: K): T[K]` — accepts any object and any of its valid keys, returns the exact type of that property. TypeScript enforces at compile time that the key exists. This pattern is used in many utility types and generic helpers.
+</InterviewQ>
+
+---
+
+## Utility Types
+
+<InterviewQ question="What is Partial<T> and when do you use it?" difficulty="easy">
+  `Partial<T>` makes all properties of T optional. Use it for update operations where any subset of fields can be changed — `function updateUser(id: string, data: Partial<User>)`. Useful when you want to accept an incomplete version of a type. The opposite is `Required<T>` which makes all properties required.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Pick and Omit?" difficulty="easy">
+  `Pick<T, Keys>` selects specific properties — `Pick<User, 'id' | 'name'>` creates a type with only id and name. `Omit<T, Keys>` removes specific properties — `Omit<User, 'password'>` creates a type with everything except password. Use `Pick` when you want a small subset. Use `Omit` when you want most properties but need to remove a few — it is more maintainable as the type grows because new properties are included automatically.
+</InterviewQ>
+
+<InterviewQ question="What is Record<K, V> and when do you use it?" difficulty="mid">
+  `Record<K, V>` creates an object type with keys of type K and values of type V. `Record<string, User>` is `{ [key: string]: User }`. `Record<'draft' | 'published', number>` creates an object that must have exactly those two keys, both with number values. Use for dictionaries, lookup maps, and when you need to enforce specific keys on an object. Laravel validation errors are typed as `Record<string, string[]>`.
+</InterviewQ>
+
+<InterviewQ question="What is ReturnType and when is it useful?" difficulty="mid">
+  `ReturnType<typeof fn>` extracts the return type of a function. Useful when you want a type to stay in sync with a function's actual return without writing it manually. `type UserResponse = Awaited<ReturnType<typeof fetchUser>>` — if `fetchUser` changes its return type, `UserResponse` updates automatically. Especially valuable for composables and hooks where the return type is complex.
+</InterviewQ>
+
+---
+
+## TypeScript in Practice
+
+<InterviewQ question="What is the difference between type assertions (as) and type guards?" difficulty="hard">
+  Type assertions `value as User` tell TypeScript "trust me, I know this is a User" — no runtime check happens, TypeScript just accepts it. Type guards are runtime checks that also inform TypeScript — `if (isUser(value)) { ... }` runs actual code to verify the type. Type assertions are dangerous — if you are wrong, the bug appears at runtime. Type guards are safe — the check happens at runtime and TypeScript narrows the type based on the result. Prefer type guards for untrusted data (API responses, user input).
+</InterviewQ>
+
+<InterviewQ question="What is the satisfies operator in TypeScript?" difficulty="hard">
+  `satisfies` validates that a value matches a type without widening the type. `const config = { ... } satisfies Config` — TypeScript validates the shape is correct but infers the most specific type (literal types). Without `satisfies`, `const config: Config = { ... }` widens string literals to `string`. With `satisfies`, `config.color` keeps its literal type `'red'` instead of being widened to `string`. Use for configuration objects where you want validation but also need to retain specific inferred types.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between type-only imports and regular imports?" difficulty="mid">
+  `import type { User } from './types'` imports only the type — it is completely erased at compile time and adds zero to the bundle. Regular `import { User } from './types'` might keep the import if there is a runtime value. Type-only imports are enforced by TypeScript when `isolatedModules` is true (required by many bundlers). Always use `import type` for types and interfaces — it is explicit, always safe, and slightly faster to compile.
+</InterviewQ>
+
+---
+
+## Common Gotchas
+
+<InterviewQ question="Why doesn't TypeScript catch errors from external API responses?" difficulty="mid">
+  TypeScript types are compile-time only — they are erased when compiled to JavaScript. At runtime, a Laravel API can return anything regardless of what your TypeScript types say. If Laravel returns `{ user_name: string }` but your type says `{ name: string }`, TypeScript has no idea — it trusts your type. Always validate external data at runtime with Zod or a similar library. TypeScript types describe what you expect — Zod validates what you actually received.
+</InterviewQ>
+
+<InterviewQ question="What is the never type and when does it appear?" difficulty="hard">
+  `never` represents a type that can never occur — a value that never exists. It appears in: functions that always throw (`function fail(): never { throw new Error() }`), exhaustive checks in switch statements (the default case when all union members are handled), and intersections of incompatible types (`string & number` is `never`). It is useful in discriminated unions — the `never` type in a default case tells TypeScript you have handled all cases and alerts you when a new case is added.
+</InterviewQ>
+
+<InterviewQ question="Why does Object.keys() return string[] instead of (keyof T)[]?" difficulty="hard">
+  TypeScript intentionally returns `string[]` from `Object.keys()` because an object can have more properties at runtime than its type declares — TypeScript types are structural and a subtype can have extra properties. If `Object.keys()` returned `(keyof User)[]` and you passed a subtype with extra keys, the array would contain keys not in the `User` type. This is a deliberate safety decision. If you are certain about the shape, use `Object.keys(obj) as (keyof typeof obj)[]` with a type assertion.
+</InterviewQ>
+
+---
+
+
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  The three utility types I use in literally every project: `Partial<T>` for update payloads
+  (you don't always update all fields), `Omit<T, 'password'>` for safe public types, and
+  `Record<string, T>` for typed dictionaries. Know these cold.
+</MyNotes>
+
+<MyNotes>
+  When an interviewer asks "why TypeScript over JavaScript?" — the answer isn't just "types".
+  It's: catch bugs at compile time not runtime, better IDE autocomplete, refactoring confidence
+  (rename a property and TypeScript shows every place that breaks), and self-documenting code
+  (function signatures tell you exactly what goes in and comes out).
+</MyNotes>
+
+<MyNotes>
+  `as const` + `typeof arr[number]` is a pattern I use instead of enums now. Enums compile
+  to weird JavaScript. `as const` arrays are plain JS arrays that TypeScript understands as
+  literal union types — cleaner, no runtime overhead.
+</MyNotes>
+
+
+<MyNotes>
+  The `type` vs `interface` question is in every TypeScript interview. Short answer: both work for objects, use `interface` for objects and `type` for unions/utilities. The practical difference most interviewers want to hear: interfaces support declaration merging (can be extended across files), types support union syntax. In daily work — pick one and be consistent.
+
+  Generics always trip people up. The mental model that helped me: T is just a variable, but for types instead of values. You pass in a type when you call the function, just like you pass in a value. Once that clicked, generics felt natural.
+
+  The "TypeScript doesn't catch API errors" question separates people who use TypeScript superficially from those who understand it deeply. Always pair TypeScript with runtime validation (Zod) for external data — TypeScript handles compile-time safety, Zod handles runtime safety.
+
+  Know your utility types cold: `Partial`, `Required`, `Readonly`, `Pick`, `Omit`, `Record`, `ReturnType`, `Parameters`, `NonNullable`. Interviewers ask about these constantly because they show real-world TypeScript usage.
+</MyNotes>

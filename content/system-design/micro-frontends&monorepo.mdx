@@ -1,0 +1,510 @@
+---
+title: "Micro-frontends & Monorepo"
+description: "What micro-frontends and monorepos are, when you actually need them, how they work, and how to set up a basic monorepo with shared packages for Vue/Nuxt and React/Next.js projects."
+category: system-design
+tools: [vue, nuxt, react, next, typescript]
+tags: [micro-frontends, monorepo, turborepo, architecture, frontend, system-design]
+difficulty: advanced
+status: complete
+lastUpdated: 2026-06-08
+---
+
+## Concept Explanation
+
+### Monorepo
+
+A monorepo is a single Git repository that contains multiple projects — your frontend app,
+admin dashboard, shared UI components, shared utilities — all in one place.
+
+```
+Without monorepo (polyrepo — separate repos):
+  github.com/me/my-app-frontend     → main app
+  github.com/me/my-app-admin        → admin dashboard
+  github.com/me/my-app-ui-lib       → shared components
+  github.com/me/my-app-utils        → shared utilities
+
+  Problem: updating a shared Button component means:
+  1. Update my-app-ui-lib, publish new version
+  2. Update my-app-frontend to use new version
+  3. Update my-app-admin to use new version
+  → 3 PRs, 3 deployments, version mismatch bugs 😩
+
+With monorepo:
+  my-monorepo/
+  ├── apps/
+  │   ├── web/        → main app (Nuxt/Next)
+  │   └── admin/      → admin dashboard
+  └── packages/
+      ├── ui/         → shared components
+      └── utils/      → shared utilities
+
+  Updating Button: change once → all apps use it immediately ✅
+  One PR, one place to review, no version mismatch
+```
+
+### Micro-frontends
+
+Micro-frontends take the microservices idea and apply it to the frontend. Instead of one large
+frontend app, you have multiple small apps that are **independently deployed** and combined
+at runtime.
+
+```
+Traditional (Monolithic Frontend):
+  One big Vue/React app → one team → one deployment → one codebase
+
+Micro-frontend:
+  Shell App (host)
+    ├── Product Team → products.myapp.com (their own Vue app)
+    ├── Cart Team    → cart.myapp.com    (their own React app)
+    └── Auth Team    → auth.myapp.com    (their own app)
+
+  Each team:
+  → deploys independently
+  → chooses their own tech stack
+  → owns their domain end-to-end
+```
+
+<Callout type="note">
+  **Micro-frontends are NOT for most projects.** They solve team-scale problems (10+ frontend developers,
+  multiple independent teams). For solo developers or small teams, the complexity far outweighs the benefits.
+  A well-structured monorepo is what you actually need.
+</Callout>
+
+---
+
+## Why It's Used
+
+**Monorepo:**
+- Share code between apps without publishing npm packages.
+- One place to run tests, linting, and CI.
+- Atomic commits — change shared code and app code in one PR.
+- Easier refactoring — rename a type, update all usages at once.
+
+**Micro-frontends:**
+- Independent team deployments — Team A deploys without waiting for Team B.
+- Technology diversity — one team uses Vue, another uses React (rare but possible).
+- Fault isolation — a crash in the cart micro-frontend doesn't crash the product listing.
+- Scale organization — Conway's Law: system architecture mirrors team structure.
+
+---
+
+## Real-World Use Cases
+
+**Monorepo (what you'll actually use):**
+- Main customer app + admin dashboard sharing the same UI components and TypeScript types.
+- Multiple Nuxt apps sharing a design system (Button, Input, Modal).
+- A company with a web app + marketing site sharing utilities and auth logic.
+
+**Micro-frontends (large scale only):**
+- Amazon — different teams own the header, product page, cart, checkout.
+- IKEA — product catalog, store finder, checkout are separate deployable units.
+- Large enterprise — 5 teams shipping features to different sections independently.
+
+---
+
+## Code Examples
+
+### Monorepo with Turborepo (Recommended Setup)
+
+```bash
+# Create a new monorepo with Turborepo
+npx create-turbo@latest my-monorepo
+
+# Or set up manually
+mkdir my-monorepo && cd my-monorepo
+npm init -y
+```
+
+```
+my-monorepo/
+├── apps/
+│   ├── web/              ← Nuxt app (main site)
+│   │   ├── nuxt.config.ts
+│   │   └── package.json
+│   └── admin/            ← Next.js admin dashboard
+│       ├── next.config.ts
+│       └── package.json
+│
+├── packages/
+│   ├── ui/               ← Shared component library
+│   │   ├── src/
+│   │   │   ├── Button.vue
+│   │   │   ├── Input.vue
+│   │   │   └── index.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── utils/            ← Shared utility functions
+│   │   ├── src/
+│   │   │   ├── format.ts
+│   │   │   ├── validate.ts
+│   │   │   └── index.ts
+│   │   └── package.json
+│   │
+│   └── types/            ← Shared TypeScript types
+│       ├── src/
+│       │   ├── user.ts
+│       │   ├── product.ts
+│       │   └── index.ts
+│       └── package.json
+│
+├── turbo.json
+└── package.json          ← root package.json (workspace config)
+```
+
+### Root package.json — Workspaces Config
+
+```json
+// package.json (root)
+{
+  "name": "my-monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "devDependencies": {
+    "turbo": "latest",
+    "typescript": "^5"
+  },
+  "scripts": {
+    "dev":   "turbo run dev",
+    "build": "turbo run build",
+    "lint":  "turbo run lint",
+    "test":  "turbo run test"
+  }
+}
+```
+
+### turbo.json — Pipeline Config
+
+```json
+// turbo.json
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],    // build packages before apps that depend on them
+      "outputs": [".next/**", ".nuxt/**", "dist/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "lint": {
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": ["coverage/**"]
+    }
+  }
+}
+```
+
+### Shared Package — UI Components
+
+```json
+// packages/ui/package.json
+{
+  "name": "@myapp/ui",
+  "version": "0.0.1",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
+```
+
+```typescript
+// packages/ui/src/index.ts
+export { default as AppButton } from './AppButton.vue'
+export { default as AppInput  } from './AppInput.vue'
+export { default as AppModal  } from './AppModal.vue'
+export { default as AppCard   } from './AppCard.vue'
+```
+
+```vue
+<!-- packages/ui/src/AppButton.vue -->
+<script setup lang="ts">
+defineProps<{
+  variant?: 'primary' | 'secondary' | 'danger'
+  size?:    'sm' | 'md' | 'lg'
+  loading?: boolean
+  disabled?: boolean
+}>()
+
+defineEmits<{ click: [event: MouseEvent] }>()
+</script>
+
+<template>
+  <button
+    :class="['btn', `btn-${variant ?? 'primary'}`, `btn-${size ?? 'md'}`]"
+    :disabled="disabled || loading"
+    @click="$emit('click', $event)"
+  >
+    <span v-if="loading">Loading...</span>
+    <slot v-else />
+  </button>
+</template>
+```
+
+### Shared Package — TypeScript Types
+
+```typescript
+// packages/types/src/user.ts
+export type User = {
+  id:         number
+  name:       string
+  email:      string
+  role:       'admin' | 'user' | 'moderator'
+  created_at: string
+}
+
+export type AuthResponse = {
+  user:  User
+  token: string
+}
+```
+
+```typescript
+// packages/types/src/product.ts
+export type Product = {
+  id:          number
+  name:        string
+  slug:        string
+  price:       number
+  stock:       number
+  is_active:   boolean
+  category_id: number
+}
+```
+
+```typescript
+// packages/types/src/index.ts
+export type { User, AuthResponse } from './user'
+export type { Product }           from './product'
+export type { Order, OrderItem }  from './order'
+```
+
+### Using Shared Packages in Apps
+
+```json
+// apps/web/package.json
+{
+  "name": "@myapp/web",
+  "dependencies": {
+    "@myapp/ui":    "*",     // use local package (workspace)
+    "@myapp/utils": "*",
+    "@myapp/types": "*",
+    "nuxt": "^3"
+  }
+}
+```
+
+```vue
+<!-- apps/web/pages/products/index.vue -->
+<script setup lang="ts">
+import { AppButton, AppCard } from '@myapp/ui'   // shared components ✅
+import { formatPrice }        from '@myapp/utils' // shared utility ✅
+import type { Product }       from '@myapp/types' // shared types ✅
+
+const products = ref<Product[]>([])
+</script>
+
+<template>
+  <AppCard v-for="p in products" :key="p.id">
+    <h3>{{ p.name }}</h3>
+    <p>{{ formatPrice(p.price) }}</p>
+    <AppButton @click="addToCart(p)">Add to Cart</AppButton>
+  </AppCard>
+</template>
+```
+
+### Running the Monorepo
+
+```bash
+# Run all apps in dev mode (Turborepo runs them in parallel)
+npm run dev
+
+# Run only the web app
+cd apps/web && npm run dev
+
+# Build everything (packages first, then apps)
+npm run build
+
+# Add a dependency to a specific app
+npm install axios --workspace=apps/web
+
+# Add a dependency to a shared package
+npm install date-fns --workspace=packages/utils
+```
+
+### Micro-frontend with Module Federation (Advanced)
+
+```javascript
+// webpack.config.js in the Shell (host) app
+const { ModuleFederationPlugin } = require('webpack').container
+
+module.exports = {
+  plugins: [
+    new ModuleFederationPlugin({
+      name: 'shell',
+      remotes: {
+        // Load these apps at runtime from their deployed URLs
+        products: 'products@https://products.myapp.com/remoteEntry.js',
+        cart:     'cart@https://cart.myapp.com/remoteEntry.js',
+      },
+      shared: { vue: { singleton: true } },  // share Vue instance
+    }),
+  ],
+}
+
+// webpack.config.js in the Products micro-frontend
+module.exports = {
+  plugins: [
+    new ModuleFederationPlugin({
+      name: 'products',
+      filename: 'remoteEntry.js',       // the entry point the shell loads
+      exposes: {
+        './ProductsApp': './src/App.vue',   // expose this component
+      },
+      shared: { vue: { singleton: true } },
+    }),
+  ],
+}
+```
+
+```javascript
+// In shell app — dynamically load the products micro-frontend
+const ProductsApp = defineAsyncComponent(() => import('products/ProductsApp'))
+```
+
+---
+
+## When to Use What
+
+```
+Solo developer or small team (< 5 devs):
+  → Single repo, single app, good folder structure
+  → Maybe a monorepo if you have 2+ apps sharing code
+
+Medium team (5-15 devs), multiple apps:
+  → Monorepo with Turborepo ✅
+  → Shared packages for UI and utilities
+  → Still one frontend app per product
+
+Large organization (15+ devs, multiple independent teams):
+  → Monorepo + micro-frontends consideration
+  → Each team owns their own deployable frontend section
+  → Module Federation or iframes for integration
+
+Rule: Start simple. Add complexity only when you feel the pain of not having it.
+```
+
+---
+
+## Common Mistakes
+
+<WrongRight>
+<Wrong>
+```
+// Adopting micro-frontends too early
+"We have 3 developers, let's use micro-frontends!"
+❌ Massive operational overhead (3 CI/CD pipelines, 3 deployments,
+   cross-app communication complexity) for a team too small to benefit.
+```
+</Wrong>
+<Right>
+```
+// Right tool for the right scale
+3 developers  → single app, good architecture
+3 apps        → monorepo with shared packages
+3 large teams → consider micro-frontends
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```bash
+# Not using Turborepo — running tasks sequentially
+npm run build --workspace=packages/ui
+npm run build --workspace=packages/utils
+npm run build --workspace=apps/web
+npm run build --workspace=apps/admin
+# ❌ sequential, no caching, rebuilds even if nothing changed
+```
+</Wrong>
+<Right>
+```bash
+# Turborepo — parallel, cached, smart dependency ordering
+turbo run build
+# ✅ packages build first, apps build in parallel after,
+#    unchanged packages are served from cache instantly
+```
+</Right>
+</WrongRight>
+
+---
+
+## Best Practices
+
+- Use Turborepo — it handles caching, parallel execution, and dependency ordering automatically.
+- Keep shared packages minimal — only put things in packages that are genuinely shared.
+- Use `@myapp/` scope for internal packages — clearly distinguishes them from npm packages.
+- Don't publish internal monorepo packages to npm — use workspace references (`"*"`).
+- Each app should have its own `.env` — don't share environment variables across apps.
+- Micro-frontends only when teams need independent deployment. Don't adopt for technical reasons alone.
+- Keep shared types in a `packages/types` package — the single source of truth for all data shapes.
+
+---
+
+## Interview Questions
+
+<InterviewQ question="What is a monorepo and what are its advantages over separate repositories?" difficulty="mid">
+  A monorepo is a single Git repository containing multiple related projects. Advantages:
+  sharing code without publishing packages, atomic commits across projects, a single CI/CD
+  pipeline, easier refactoring (rename a type and update all usages at once), and no version
+  mismatch between shared packages. Disadvantages: repository grows large, CI must be smart
+  about only rebuilding what changed (Turborepo handles this), and initial setup is more complex
+  than a single-project repo.
+</InterviewQ>
+
+<InterviewQ question="What are micro-frontends and when should you use them?" difficulty="mid">
+  Micro-frontends apply microservice thinking to the frontend — splitting a large app into
+  independently deployable pieces owned by separate teams. Use them when you have multiple
+  large teams that need to deploy independently without coordinating releases, when different
+  sections of your app have very different technical requirements, or when a section needs
+  to be incrementally migrated to a new framework. Don't use them for small teams — the
+  operational overhead (multiple CI/CD pipelines, cross-app communication, shared state
+  complexity) far outweighs the benefits.
+</InterviewQ>
+
+<InterviewQ question="What is Module Federation in Webpack?" difficulty="hard">
+  Module Federation lets separately built and deployed JavaScript applications share code
+  and components at runtime — not build time. A shell (host) application can load components
+  from remote applications (micro-frontends) that are deployed independently. For example,
+  a products app exposes a `ProductsPage` component that the shell loads from
+  `https://products.myapp.com/remoteEntry.js` at runtime. Vite has its own federation
+  plugin with similar capabilities.
+</InterviewQ>
+
+---
+
+## My Personal Notes
+
+<MyNotes>
+  I used to keep my main app and admin dashboard in separate repos. Updating a shared
+  component meant two PRs, two CI runs, and inevitably some version mismatch bug. Moving
+  to a Turborepo monorepo was one of the best decisions — shared changes take one PR and
+  `turbo build` handles everything. Setup takes an afternoon, saves hours every week.
+</MyNotes>
+
+<MyNotes>
+  Micro-frontends are genuinely impressive architecture at scale — but I've seen teams of
+  5 people adopt them and spend 80% of their time on infrastructure instead of features.
+  The honest answer to "should we use micro-frontends?" is almost always "no, not yet."
+  A monorepo with good folder structure solves 90% of the same problems with 10% of the complexity.
+</MyNotes>

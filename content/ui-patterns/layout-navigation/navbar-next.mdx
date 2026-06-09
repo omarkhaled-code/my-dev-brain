@@ -1,0 +1,375 @@
+---
+title: "Responsive Navbar with Next.js + Tailwind CSS"
+description: "How to build a fully responsive navigation bar in Next.js using the App Router, with mobile hamburger menu, active link highlighting, and dropdown support using Tailwind CSS"
+category: ui-patterns
+subcategory: layout-navigation
+tools: [nextjs, tailwind]
+tags: [navbar, navigation, responsive, hamburger, dropdown, app-router]
+difficulty: beginner
+status: complete
+lastUpdated: 2026-06-06
+
+---
+
+## Concept explanation
+
+A responsive navbar in Next.js uses the `useState` hook to manage the mobile menu open/closed state, `usePathname()` from `next/navigation` to detect the active route, and `Link` from `next/link` for client-side navigation. Tailwind CSS handles the responsive breakpoints — `hidden md:flex` hides the desktop nav on mobile and shows it on medium screens and above.
+
+<Callout type="note">
+  If you are using plain React (Vite or CRA) without Next.js — the only difference is you replace `usePathname()` with `useLocation()` from `react-router-dom` and `Link` from `next/link` with `Link` from `react-router-dom`. Everything else is identical.
+</Callout>
+
+## Why it's used
+
+- Every web app needs navigation — getting it right from the start saves refactoring later
+- Next.js `Link` component prefetches pages on hover — instant navigation feel
+- `usePathname()` gives you the current URL without any extra setup
+
+## Real-world use cases
+
+- SaaS dashboards with top navigation bar
+- Marketing sites with links and a CTA button
+- Portfolio sites with smooth scroll or page links
+- Admin panels with user avatar and dropdown menu
+
+## Code example
+
+### Basic responsive navbar
+
+```tsx
+// components/AppNavbar.tsx
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useState } from "react";
+
+const links = [
+  { label: "Home",     href: "/" },
+  { label: "About",    href: "/about" },
+  { label: "Projects", href: "/projects" },
+  { label: "Contact",  href: "/contact" },
+];
+
+export function AppNavbar() {
+  const pathname = usePathname();
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <nav className="bg-white border-b border-neutral-200 sticky top-0 z-50">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between h-16">
+
+          {/* Logo */}
+          <Link href="/" className="text-lg font-bold text-neutral-900">
+            🧠 DevBrain
+          </Link>
+
+          {/* Desktop links */}
+          <div className="hidden md:flex items-center gap-6">
+            {links.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className={
+                  pathname === link.href
+                    ? "text-sm font-medium text-blue-600"
+                    : "text-sm font-medium text-neutral-600 hover:text-neutral-900 transition-colors"
+                }
+              >
+                {link.label}
+              </Link>
+            ))}
+
+            {/* CTA Button */}
+            <Link
+              href="/get-started"
+              className="text-sm font-medium bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Get Started
+            </Link>
+          </div>
+
+          {/* Mobile hamburger */}
+          <button
+            onClick={() => setIsOpen(!isOpen)}
+            className="md:hidden p-2 rounded-lg text-neutral-600 hover:bg-neutral-100 transition-colors"
+            aria-expanded={isOpen}
+            aria-label="Toggle menu"
+          >
+            {isOpen ? (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            )}
+          </button>
+
+        </div>
+      </div>
+
+      {/* Mobile menu */}
+      {isOpen && (
+        <div className="md:hidden border-t border-neutral-200 bg-white">
+          <div className="px-4 py-3 space-y-1">
+            {links.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                onClick={() => setIsOpen(false)}
+                className={
+                  pathname === link.href
+                    ? "block px-3 py-2 rounded-lg text-sm font-medium bg-blue-50 text-blue-600"
+                    : "block px-3 py-2 rounded-lg text-sm font-medium text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors"
+                }
+              >
+                {link.label}
+              </Link>
+            ))}
+
+            <Link
+              href="/get-started"
+              onClick={() => setIsOpen(false)}
+              className="block px-3 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors text-center mt-2"
+            >
+              Get Started
+            </Link>
+          </div>
+        </div>
+      )}
+    </nav>
+  );
+}
+```
+
+### With dropdown menu
+
+```tsx
+// components/AppNavbar.tsx (with dropdown)
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useState, useRef, useEffect } from "react";
+
+export function AppNavbar() {
+  const pathname = usePathname();
+  const [isOpen, setIsOpen] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Close mobile menu on route change
+  useEffect(() => {
+    setIsOpen(false);
+  }, [pathname]);
+
+  return (
+    <nav className="bg-white border-b border-neutral-200 sticky top-0 z-50">
+      <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+
+        <Link href="/" className="text-lg font-bold text-neutral-900">
+          🧠 DevBrain
+        </Link>
+
+        <div className="hidden md:flex items-center gap-6">
+          <Link href="/" className="text-sm text-neutral-600 hover:text-neutral-900">
+            Home
+          </Link>
+
+          {/* Dropdown */}
+          <div className="relative" ref={dropdownRef}>
+            <button
+              onClick={() => setDropdownOpen(!dropdownOpen)}
+              className="flex items-center gap-1 text-sm text-neutral-600 hover:text-neutral-900"
+            >
+              Products
+              <svg
+                className={`w-4 h-4 transition-transform ${dropdownOpen ? "rotate-180" : ""}`}
+                fill="none" stroke="currentColor" viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {dropdownOpen && (
+              <div className="absolute top-full left-0 mt-2 w-48 bg-white rounded-xl border border-neutral-200 shadow-lg py-1 z-50">
+                {["Feature One", "Feature Two", "Feature Three"].map((item) => (
+                  <Link
+                    key={item}
+                    href="#"
+                    onClick={() => setDropdownOpen(false)}
+                    className="block px-4 py-2 text-sm text-neutral-700 hover:bg-neutral-50 transition-colors"
+                  >
+                    {item}
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <Link href="/contact" className="text-sm text-neutral-600 hover:text-neutral-900">
+            Contact
+          </Link>
+        </div>
+
+        {/* Mobile toggle */}
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className="md:hidden p-2 rounded-lg hover:bg-neutral-100"
+          aria-label="Toggle menu"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Mobile menu */}
+      {isOpen && (
+        <div className="md:hidden border-t border-neutral-200 px-4 py-3 space-y-1">
+          <Link href="/" onClick={() => setIsOpen(false)}
+            className="block px-3 py-2 rounded-lg text-sm text-neutral-600 hover:bg-neutral-100">
+            Home
+          </Link>
+          <Link href="/contact" onClick={() => setIsOpen(false)}
+            className="block px-3 py-2 rounded-lg text-sm text-neutral-600 hover:bg-neutral-100">
+            Contact
+          </Link>
+        </div>
+      )}
+    </nav>
+  );
+}
+```
+
+### How to use it in your layout
+
+```tsx
+// app/layout.tsx
+import { AppNavbar } from "@/components/AppNavbar";
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <AppNavbar />
+        <main>{children}</main>
+      </body>
+    </html>
+  );
+}
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```tsx
+// Using "use client" on layout.tsx just for the navbar
+// This turns your entire layout into a client component
+export default function RootLayout({ children }) {
+  const [isOpen, setIsOpen] = useState(false) // ❌ forces client
+  return (
+    <html>
+      <body>...</body>
+    </html>
+  )
+}
+```
+</Wrong>
+<Right>
+```tsx
+// Extract the navbar into its own "use client" component
+// Keep layout.tsx as a server component
+// app/layout.tsx — stays server component ✅
+import { AppNavbar } from "@/components/AppNavbar"
+
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <AppNavbar /> {/* only this is client */}
+        <main>{children}</main>
+      </body>
+    </html>
+  )
+}
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```tsx
+// Forgetting to close mobile menu on route change
+// User clicks a link, menu stays open on new page
+const [isOpen, setIsOpen] = useState(false)
+```
+</Wrong>
+<Right>
+```tsx
+// useEffect closes menu automatically on every route change
+const pathname = usePathname()
+const [isOpen, setIsOpen] = useState(false)
+
+useEffect(() => {
+  setIsOpen(false)
+}, [pathname]) // runs every time URL changes
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always mark the navbar component `"use client"` — it uses `useState` and `usePathname`
+- Keep `app/layout.tsx` as a server component — extract only the interactive parts to client components
+- Use `useEffect(() => { setIsOpen(false) }, [pathname])` to auto-close menu on navigation
+- Use `useRef` + `document.addEventListener` to close dropdowns when clicking outside
+- Always add `aria-expanded` and `aria-label` to the hamburger button
+- Use `Link` from `next/link` — never `<a href>` for internal links, you lose prefetching
+
+<Callout type="note">
+  **React vs Next.js difference:** In plain React (Vite), replace `usePathname()` with `useLocation().pathname` from `react-router-dom`, and replace `Link` from `next/link` with `Link` from `react-router-dom`. The component structure and Tailwind classes stay exactly the same.
+</Callout>
+
+<Callout type="tip">
+  **Nuxt vs Vue difference:** In Nuxt, `useRoute()` and `navigateTo()` are auto-imported — you don't need to import them. Also use `NuxtLink` instead of `RouterLink`. In plain Vue with Vue Router, you import them explicitly from `vue-router`.
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="Why should you use Next.js Link instead of a regular anchor tag?" difficulty="easy">
+  Next.js `Link` enables client-side navigation — the page doesn't fully reload, only the changed parts update. It also prefetches linked pages in the background when the link is visible in the viewport, making navigation feel instant. A regular `<a href>` causes a full page reload and loses all React state.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between a Server Component and a Client Component in Next.js?" difficulty="mid">
+  Server Components run only on the server — they can fetch data, access databases, and keep sensitive logic out of the browser bundle. They cannot use hooks or browser APIs. Client Components run in the browser and can use `useState`, `useEffect`, event handlers, and browser APIs. You mark a component as client with `"use client"` at the top of the file.
+</InterviewQ>
+
+<InterviewQ question="Why do we keep layout.tsx as a server component and extract the navbar separately?" difficulty="mid">
+  If you add `"use client"` to `layout.tsx`, the entire layout and all its children become client components — you lose all server component benefits like zero JS bundle for static parts. By extracting only the interactive navbar into its own client component, the layout stays on the server and only the navbar JS is sent to the browser.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The most common mistake I make is putting `"use client"` on `layout.tsx` directly instead of extracting the navbar. Always keep layout.tsx clean as a server component.
+
+  Also — `usePathname()` returns the pathname without the query string. If you need query params too, use `useSearchParams()` separately.
+
+  For Nuxt: use `useRoute().path` instead of `usePathname()` and `NuxtLink` instead of `Link`. The rest is the same mental model.
+</MyNotes>

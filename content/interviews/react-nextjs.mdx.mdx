@@ -1,0 +1,183 @@
+---
+title: "React & Next.js Interview Questions"
+description: "Quick-review React and Next.js interview questions — hooks, rendering, state management, performance, App Router, and Server Components"
+category: interviews
+tags: [react, nextjs, interview, hooks, rendering, state, performance]
+difficulty: intermediate
+status: complete
+lastUpdated: 2026-06-06
+relatedTopics:
+  - interviews/javascript
+  - interviews/typescript
+  - interviews/vue-nuxt
+---
+
+## React Fundamentals
+
+<InterviewQ question="What is the difference between state and props?" difficulty="easy">
+  Props are read-only data passed from parent to child — the child cannot modify them. State is data owned and managed by the component itself — it can change over time using `useState` or `useReducer`. When state or props change, React re-renders the component. Rule of thumb: if data comes from outside, it's a prop. If the component manages it internally, it's state.
+</InterviewQ>
+
+<InterviewQ question="What is the virtual DOM and how does React use it?" difficulty="mid">
+  The virtual DOM is a lightweight JavaScript representation of the real DOM. When state changes, React creates a new virtual DOM tree, diffs it against the previous one (reconciliation), and only updates the real DOM nodes that actually changed. This batches and minimizes expensive DOM operations. React 18 introduced concurrent rendering which makes this process interruptible.
+</InterviewQ>
+
+<InterviewQ question="What is reconciliation in React?" difficulty="mid">
+  Reconciliation is React's algorithm for comparing the previous and new virtual DOM trees to determine the minimal set of changes needed. React uses keys to identify list items across renders — without keys it re-renders the entire list. React assumes components at the same position in the tree are the same type — if the type changes, the old tree is destroyed and a new one is created from scratch.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between controlled and uncontrolled components?" difficulty="mid">
+  A controlled component has its form input value managed by React state — `value={state}` + `onChange`. The component is the single source of truth. An uncontrolled component manages its own value internally in the DOM — accessed via `ref`. Controlled components are preferred because state is predictable and easy to validate. Uncontrolled components are used for file inputs and integration with non-React libraries.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between class components and function components?" difficulty="easy">
+  Function components are plain JavaScript functions that return JSX. They use hooks for state and lifecycle. Class components extend `React.Component` and use `this.state` and lifecycle methods like `componentDidMount`. Function components with hooks are the modern standard — simpler, less boilerplate, easier to test, and support all React features. Class components are legacy but still supported.
+</InterviewQ>
+
+---
+
+## Hooks
+
+<InterviewQ question="What is useState and how does it work?" difficulty="easy">
+  `useState(initialValue)` returns a pair — the current state value and a setter function. When the setter is called with a new value, React schedules a re-render. State updates are asynchronous and batched — you won't see the new value immediately after calling the setter. To update based on previous state always use the function form: `setCount(prev => prev + 1)`.
+</InterviewQ>
+
+<InterviewQ question="What is useEffect and when does it run?" difficulty="mid">
+  `useEffect(fn, deps)` runs a side effect after render. Dependency array controls when it runs: empty array `[]` → runs once after mount. With dependencies `[a, b]` → runs after mount and whenever `a` or `b` changes. No array → runs after every render. Return a cleanup function to run before the next effect or on unmount. Use for: data fetching, subscriptions, DOM manipulation, timers.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between useEffect and useLayoutEffect?" difficulty="hard">
+  Both run after render but at different times. `useEffect` runs asynchronously after the browser has painted — doesn't block the visual update. `useLayoutEffect` runs synchronously after DOM mutations but before the browser paints — blocks paint. Use `useLayoutEffect` when you need to measure DOM elements or make DOM changes that must be invisible to the user (prevents flash). Use `useEffect` for everything else — it's better for performance.
+</InterviewQ>
+
+<InterviewQ question="What is useCallback and when should you use it?" difficulty="mid">
+  `useCallback(fn, deps)` returns a memoized version of a function — the same function reference across renders unless dependencies change. Use it when passing a callback to a child component wrapped in `React.memo` — without it, a new function reference on every render causes the child to re-render even if nothing changed. Don't overuse — the memoization itself has a cost.
+</InterviewQ>
+
+<InterviewQ question="What is useMemo and when should you use it?" difficulty="mid">
+  `useMemo(fn, deps)` memoizes the result of an expensive computation — only recalculates when dependencies change. Use for: expensive filtering/sorting of large arrays, complex derived data, preventing unnecessary recalculations on every render. Like `useCallback` — don't overuse. Profile first, optimize second. `useCallback(fn, deps)` is equivalent to `useMemo(() => fn, deps)`.
+</InterviewQ>
+
+<InterviewQ question="What is useRef and what are its use cases?" difficulty="mid">
+  `useRef(initialValue)` returns a mutable object `{ current: value }` that persists across renders without causing re-renders when changed. Two main uses: (1) accessing DOM elements directly — `ref={myRef}` then `myRef.current.focus()`. (2) storing mutable values that don't need to trigger re-renders — like previous state values, timer IDs, or instance variables. Unlike state, mutating `ref.current` doesn't cause a re-render.
+</InterviewQ>
+
+<InterviewQ question="What is useContext and what problem does it solve?" difficulty="mid">
+  `useContext(MyContext)` reads the value from the nearest matching `Context.Provider` above in the tree. It solves prop drilling — passing props through many layers of components that don't need them just to reach a deeply nested component. Common uses: theme, locale, auth state, toast notifications. Downside: all consumers re-render when the context value changes — for frequent updates consider Zustand or other state libraries.
+</InterviewQ>
+
+<InterviewQ question="What is useReducer and when would you use it over useState?" difficulty="mid">
+  `useReducer(reducer, initialState)` manages state through a reducer function — `(state, action) => newState`. Use it when: state has multiple sub-values that update together, next state depends on previous state in complex ways, or state transitions follow specific action patterns. It makes complex state logic more predictable and testable. Redux uses the same pattern. For simple state, `useState` is cleaner.
+</InterviewQ>
+
+<InterviewQ question="What are custom hooks and why are they useful?" difficulty="mid">
+  A custom hook is a function that starts with `use` and calls other hooks inside. They extract stateful logic into reusable functions — without changing the component hierarchy. Examples: `useWindowSize`, `useFetch`, `useLocalStorage`, `useDebounce`. The same logic can be shared across components without render props or HOCs. Custom hooks can call other custom hooks.
+</InterviewQ>
+
+<InterviewQ question="What are the rules of hooks?" difficulty="easy">
+  Two rules: (1) Only call hooks at the top level — never inside loops, conditions, or nested functions. This ensures hooks are called in the same order every render. (2) Only call hooks from React function components or custom hooks — not regular JavaScript functions. ESLint's `eslint-plugin-react-hooks` enforces these rules automatically.
+</InterviewQ>
+
+---
+
+## Rendering & Performance
+
+<InterviewQ question="What is React.memo and when should you use it?" difficulty="mid">
+  `React.memo` is a HOC that wraps a component and prevents re-renders if props haven't changed (shallow comparison). Use it for pure components that render often with the same props — like list items. Combine with `useCallback` for callback props and `useMemo` for object props — otherwise new references on every render defeat the memoization. Don't wrap everything — profile first.
+</InterviewQ>
+
+<InterviewQ question="What causes unnecessary re-renders in React?" difficulty="mid">
+  Common causes: parent re-renders (child re-renders by default), new object/array/function references passed as props on every render, context value changes, `useState` setter called with same value (React still re-renders in some cases). Fix with `React.memo`, `useCallback`, `useMemo`, moving state down, or splitting context.
+</InterviewQ>
+
+<InterviewQ question="What is code splitting and how do you implement it in React?" difficulty="mid">
+  Code splitting breaks your bundle into smaller chunks loaded on demand — faster initial load. In React: `React.lazy(() => import('./Component'))` for component-level splitting. Wrap lazy components in `<Suspense fallback={<Loading/>}>`. Next.js does route-level splitting automatically. Use for heavy components, modals, charts, and admin sections not needed on first load.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between React 17 and React 18?" difficulty="mid">
+  React 18 introduced: Concurrent rendering (interruptible renders), automatic batching (state updates in async code now batch too), `useTransition` and `useDeferredValue` for marking non-urgent updates, the new `createRoot` API, and React Server Components. Concurrent mode makes the UI more responsive by letting React pause and resume rendering.
+</InterviewQ>
+
+<InterviewQ question="What is useTransition?" difficulty="hard">
+  `useTransition()` returns `[isPending, startTransition]`. Wrap non-urgent state updates in `startTransition` — React marks them as low priority and can interrupt them to handle urgent updates (like typing). `isPending` is `true` while the transition is in progress — use it to show a loading indicator. Example: marking a list filter update as a transition so typing in the search box stays responsive.
+</InterviewQ>
+
+---
+
+## Next.js
+
+<InterviewQ question="What is the difference between Server Components and Client Components in Next.js?" difficulty="mid">
+  Server Components run only on the server — they can fetch data, access databases, and don't send any JavaScript to the browser. They cannot use hooks, event handlers, or browser APIs. Client Components run in the browser — marked with `"use client"`, they support hooks and interactivity. All components in the App Router are Server Components by default. The goal: ship as little JS as possible to the browser.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between getServerSideProps, getStaticProps, and the App Router data fetching?" difficulty="mid">
+  These are Pages Router patterns. `getStaticProps` fetches at build time — fast, cached, good for content that doesn't change often. `getServerSideProps` fetches on every request — always fresh, slower. In the App Router, you just `await` fetch or database calls directly in Server Components — the rendering model (static/dynamic) is determined by whether you use dynamic functions like `cookies()` or `headers()`.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between static and dynamic rendering in Next.js App Router?" difficulty="mid">
+  Static rendering (default): pages are rendered at build time and cached. Dynamic rendering: pages are rendered on every request — triggered by using `cookies()`, `headers()`, `searchParams`, or `noStore()`. Next.js automatically chooses based on what you use. You can force dynamic with `export const dynamic = 'force-dynamic'` and force static with `generateStaticParams`.
+</InterviewQ>
+
+<InterviewQ question="What is Next.js middleware and what can it do?" difficulty="mid">
+  Middleware runs before every matched request on the Edge Runtime — before the page renders. It can redirect, rewrite, set headers, and read cookies. Common uses: auth guards (redirect unauthenticated users), locale detection, A/B testing. Limitation: runs on Edge Runtime — no Node.js-only APIs like Prisma or `fs`. Use lightweight JWT verification, not database queries.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Link prefetching and regular navigation in Next.js?" difficulty="mid">
+  Next.js `<Link>` automatically prefetches linked pages in the background when the link is visible in the viewport — on hover in development, on visibility in production. This makes navigation feel instant. Regular `<a href>` causes a full page reload. `router.push()` navigates without prefetch. Disable prefetch with `<Link prefetch={false}>` for heavy pages or auth-gated routes.
+</InterviewQ>
+
+<InterviewQ question="What is ISR (Incremental Static Regeneration) in Next.js?" difficulty="hard">
+  ISR lets you update static pages after build time without rebuilding the entire site. Add `revalidate` to your fetch: `fetch(url, { next: { revalidate: 60 } })` — the page regenerates in the background every 60 seconds. The first request after the interval triggers regeneration — visitors still get the cached version until regeneration completes. Use for content that changes occasionally — blogs, product pages, news.
+</InterviewQ>
+
+<InterviewQ question="What are Server Actions in Next.js?" difficulty="mid">
+  Server Actions are async functions that run on the server and can be called directly from Client Components — without building a separate API route. Marked with `'use server'` directive. They handle form submissions, database mutations, and file operations. They integrate with React's `useFormState` and `useFormStatus` hooks for loading and error states. Replaces many API route patterns for form handling.
+</InterviewQ>
+
+---
+
+## State Management
+
+<InterviewQ question="When should you use local state vs global state?" difficulty="mid">
+  Use local state (`useState`) when data is only needed by one component or its direct children. Use global state (Zustand, Redux, Context) when data needs to be shared across many unrelated components, or when prop drilling becomes painful. Good candidates for global state: authenticated user, theme, cart, notifications. Don't reach for global state prematurely — start local and lift up only when needed.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between Zustand, Redux, and Context API?" difficulty="mid">
+  Context API is built-in but causes all consumers to re-render on any value change — fine for infrequent updates (theme, auth). Redux is powerful with time-travel debugging and middleware but has significant boilerplate — best for complex apps with many actions. Zustand is minimal and fast — only components that access changed slices re-render. For most projects today: Zustand for client state, React Query/SWR for server state.
+</InterviewQ>
+
+<InterviewQ question="What is the difference between client state and server state?" difficulty="mid">
+  Client state is UI state that lives only in the browser — sidebar open/closed, selected tab, modal visibility. Server state is data that lives on the server and needs to be fetched, cached, and synced — users, products, posts. React Query and SWR are built specifically for server state — they handle caching, background refetching, loading/error states, and pagination automatically. Don't store server data in Zustand or Redux.
+</InterviewQ>
+
+---
+
+## Common Gotchas
+
+<InterviewQ question="Why shouldn't you mutate state directly in React?" difficulty="easy">
+  React uses reference equality to detect state changes. If you mutate an object or array directly, the reference stays the same — React thinks nothing changed and skips re-rendering. Always return a new object/array: `setItems([...items, newItem])` not `items.push(newItem)`. With `useReducer` this is especially important — always return a new state object.
+</InterviewQ>
+
+<InterviewQ question="What is the stale closure problem in React?" difficulty="hard">
+  A stale closure happens when a callback captures an old value of a state or prop from when it was created — but the state has since changed. Common with `useEffect` and event handlers. Fix: include the value in the dependency array, use the function form of setState `setCount(prev => prev + 1)`, or use `useRef` to always have the latest value without re-subscribing.
+</InterviewQ>
+
+<InterviewQ question="Why do you need keys in React lists?" difficulty="easy">
+  Keys help React identify which items changed, were added, or removed across renders. Without keys React uses index — if items reorder, React updates wrong elements causing bugs (incorrect form state, wrong animations). Keys must be unique among siblings and stable — use IDs not array indexes when items can reorder or be filtered. Keys are not passed as props to components.
+</InterviewQ>
+
+<InterviewQ question="What is prop drilling and how do you solve it?" difficulty="easy">
+  Prop drilling is passing props through multiple component layers that don't need them — just to reach a deeply nested component. Solutions: React Context (for infrequent updates), Zustand/Redux (for frequent updates), component composition (render children directly), or restructuring the component tree. Don't solve prop drilling prematurely — one or two levels of passing is fine.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The Server Components vs Client Components question comes up in every Next.js interview now. Key answer: Server Components = no JS sent to browser, can fetch data, no hooks. Client Components = `"use client"`, can use hooks, runs in browser. Default is server — only add `"use client"` when you need interactivity.
+
+  For hooks questions always know the dependency array rules cold. `useEffect` with empty array = mount only. With deps = runs when deps change. No array = every render. Interviewers love edge cases here.
+
+  The stale closure problem is a senior-level question. Prepare a clear example — timer that always shows 0 because it closed over initial count value.
+
+  When asked about performance always mention: measure first with React DevTools Profiler, then consider `memo`, `useCallback`, `useMemo`, code splitting. Never optimize blindly.
+</MyNotes>

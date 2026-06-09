@@ -1,0 +1,378 @@
+---
+title: "Laravel Routes — Basics, Groups & Named Routes"
+description: "Complete guide to Laravel routing — web and API routes, route parameters, named routes, route groups, middleware on routes, and prefix organization"
+category: routing
+tools: [laravel]
+tags: [routing, laravel, route-groups, named-routes, middleware, php]
+difficulty: beginner
+status: complete
+lastUpdated: 2026-06-06
+---
+
+## Concept explanation
+
+Laravel routing is defined in two main files — `routes/web.php` for browser-facing routes (with session, cookies, CSRF) and `routes/api.php` for stateless API routes (prefixed with `/api` automatically). Routes map HTTP verbs and URLs to controller methods or closures. Unlike Next.js and Nuxt, Laravel routing is **explicit** — you define every route manually.
+
+```
+routes/
+├── web.php      → browser routes (/login, /dashboard)
+└── api.php      → API routes (/api/users, /api/posts)
+```
+
+## Why it's used
+
+- Full control over every URL in your application
+- Middleware, prefixes, and names can be grouped and applied in bulk
+- Named routes let you generate URLs without hardcoding paths
+- Route groups keep large route files organized and DRY
+
+## Real-world use cases
+
+- Web app with authentication pages and dashboard
+- REST API with versioned endpoints
+- Multi-tenant app with subdomain routing
+- Admin panel with role-based route protection
+
+## Code example
+
+### Basic routes — web.php
+
+```php
+<?php
+// routes/web.php
+
+use App\Http\Controllers\HomeController;
+use App\Http\Controllers\BlogController;
+use Illuminate\Support\Facades\Route;
+
+// GET route — closure
+Route::get('/', function () {
+    return view('welcome');
+});
+
+// GET route — controller method
+Route::get('/about', [HomeController::class, 'about']);
+
+// All HTTP verbs
+Route::get('/posts',         [BlogController::class, 'index']);   // list
+Route::post('/posts',        [BlogController::class, 'store']);   // create
+Route::get('/posts/{id}',    [BlogController::class, 'show']);    // show one
+Route::put('/posts/{id}',    [BlogController::class, 'update']);  // full update
+Route::patch('/posts/{id}',  [BlogController::class, 'update']);  // partial update
+Route::delete('/posts/{id}', [BlogController::class, 'destroy']); // delete
+
+// Match multiple verbs
+Route::match(['get', 'post'], '/contact', [HomeController::class, 'contact']);
+
+// Match any verb
+Route::any('/webhook', [HomeController::class, 'webhook']);
+```
+
+### Route parameters
+
+```php
+// Required parameter
+Route::get('/users/{id}', function (string $id) {
+    return "User ID: {$id}";
+});
+
+// Optional parameter — has default value
+Route::get('/posts/{category?}', function (string $category = 'all') {
+    return "Category: {$category}";
+});
+
+// Multiple parameters
+Route::get('/posts/{category}/{slug}', function (string $category, string $slug) {
+    return "Category: {$category}, Post: {$slug}";
+});
+
+// Parameter constraints — only numbers
+Route::get('/users/{id}', [UserController::class, 'show'])
+    ->where('id', '[0-9]+');
+
+// Multiple constraints
+Route::get('/posts/{category}/{slug}', [PostController::class, 'show'])
+    ->where([
+        'category' => '[a-z-]+',
+        'slug'     => '[a-z0-9-]+',
+    ]);
+
+// Global constraint — applies to all routes with this param name
+// In RouteServiceProvider::boot():
+Route::pattern('id', '[0-9]+');
+```
+
+### Named routes
+
+```php
+// Name a route with ->name()
+Route::get('/dashboard', [DashboardController::class, 'index'])
+    ->name('dashboard');
+
+Route::get('/users/{id}', [UserController::class, 'show'])
+    ->name('users.show');
+
+Route::get('/posts/{category}/{slug}', [PostController::class, 'show'])
+    ->name('posts.show');
+```
+
+```php
+// Generate URLs from named routes
+$url = route('dashboard');
+// → https://myapp.com/dashboard
+
+$url = route('users.show', ['id' => 123]);
+// → https://myapp.com/users/123
+
+$url = route('posts.show', ['category' => 'tech', 'slug' => 'my-post']);
+// → https://myapp.com/posts/tech/my-post
+
+// Redirect to named route
+return redirect()->route('dashboard');
+return redirect()->route('users.show', ['id' => $user->id]);
+```
+
+```blade
+{{-- In Blade templates --}}
+<a href="{{ route('dashboard') }}">Dashboard</a>
+<a href="{{ route('users.show', ['id' => $user->id]) }}">View Profile</a>
+```
+
+### Route groups — middleware
+
+```php
+// Apply middleware to a group of routes
+Route::middleware(['auth'])->group(function () {
+    Route::get('/dashboard', [DashboardController::class, 'index']);
+    Route::get('/profile',   [ProfileController::class, 'show']);
+    Route::get('/settings',  [SettingsController::class, 'show']);
+});
+
+// Multiple middleware
+Route::middleware(['auth', 'verified'])->group(function () {
+    Route::get('/dashboard', [DashboardController::class, 'index']);
+});
+
+// Admin only routes
+Route::middleware(['auth', 'role:admin'])->group(function () {
+    Route::get('/admin',       [AdminController::class, 'index']);
+    Route::get('/admin/users', [AdminController::class, 'users']);
+});
+```
+
+### Route groups — prefix
+
+```php
+// All routes get /admin prefix
+Route::prefix('admin')->group(function () {
+    Route::get('/',       [AdminController::class, 'index']);   // /admin
+    Route::get('/users',  [AdminController::class, 'users']);  // /admin/users
+    Route::get('/orders', [AdminController::class, 'orders']); // /admin/orders
+});
+
+// Combine prefix + middleware + name prefix
+Route::prefix('admin')
+    ->middleware(['auth', 'role:admin'])
+    ->name('admin.')
+    ->group(function () {
+        Route::get('/',       [AdminController::class, 'index'])->name('index');   // admin.index
+        Route::get('/users',  [AdminController::class, 'users'])->name('users');  // admin.users
+        Route::get('/orders', [AdminController::class, 'orders'])->name('orders');// admin.orders
+    });
+
+// Generate admin URLs
+route('admin.index');   // → /admin
+route('admin.users');   // → /admin/users
+route('admin.orders');  // → /admin/orders
+```
+
+### Route groups — controller
+
+```php
+// All routes in group use the same controller
+Route::controller(UserController::class)->group(function () {
+    Route::get('/users',        'index');
+    Route::get('/users/{id}',   'show');
+    Route::post('/users',       'store');
+    Route::put('/users/{id}',   'update');
+    Route::delete('/users/{id}','destroy');
+});
+```
+
+### Combining everything
+
+```php
+// routes/web.php — organized structure
+use Illuminate\Support\Facades\Route;
+
+// Public routes
+Route::get('/',       [HomeController::class, 'index'])->name('home');
+Route::get('/about',  [HomeController::class, 'about'])->name('about');
+Route::get('/contact',[HomeController::class, 'contact'])->name('contact');
+
+// Auth routes — guest only
+Route::middleware('guest')->group(function () {
+    Route::get('/login',    [AuthController::class, 'showLogin'])->name('login');
+    Route::post('/login',   [AuthController::class, 'login']);
+    Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
+    Route::post('/register',[AuthController::class, 'register']);
+});
+
+// Authenticated routes
+Route::middleware('auth')->group(function () {
+    Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
+
+    // Dashboard
+    Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
+
+    // Profile
+    Route::prefix('profile')->name('profile.')->group(function () {
+        Route::get('/',     [ProfileController::class, 'show'])->name('show');
+        Route::put('/',     [ProfileController::class, 'update'])->name('update');
+        Route::delete('/',  [ProfileController::class, 'destroy'])->name('destroy');
+    });
+
+    // Admin only
+    Route::prefix('admin')
+        ->name('admin.')
+        ->middleware('role:admin')
+        ->group(function () {
+            Route::get('/',       [AdminController::class, 'index'])->name('index');
+            Route::get('/users',  [AdminController::class, 'users'])->name('users');
+            Route::get('/reports',[AdminController::class, 'reports'])->name('reports');
+        });
+});
+```
+
+### View the registered routes
+
+```bash
+# List all routes
+php artisan route:list
+
+# Filter by name
+php artisan route:list --name=admin
+
+# Filter by method
+php artisan route:list --method=POST
+
+# Cache routes for production (faster)
+php artisan route:cache
+
+# Clear route cache
+php artisan route:clear
+```
+
+### Redirect routes
+
+```php
+// Simple redirect
+Route::redirect('/old-url', '/new-url');
+
+// Permanent redirect (301)
+Route::redirect('/old-url', '/new-url', 301);
+
+// Redirect to named route
+Route::get('/home', function () {
+    return redirect()->route('dashboard');
+});
+```
+
+### Fallback route — custom 404
+
+```php
+// Must be the last route in web.php
+Route::fallback(function () {
+    return response()->view('errors.404', [], 404);
+});
+```
+
+## Common mistakes
+
+<WrongRight>
+<Wrong>
+```php
+// Hardcoding URLs in controllers and views
+// Breaks when you rename or move a route
+return redirect('/dashboard');           // ❌ hardcoded
+<a href="/users/{{ $user->id }}">View</a> // ❌ hardcoded
+```
+</Wrong>
+<Right>
+```php
+// Always use named routes — safe to rename/move routes
+return redirect()->route('dashboard');                          // ✅
+return redirect()->route('users.show', ['id' => $user->id]);  // ✅
+
+{{-- In Blade --}}
+<a href="{{ route('users.show', ['id' => $user->id]) }}">View</a> // ✅
+```
+</Right>
+</WrongRight>
+
+<WrongRight>
+<Wrong>
+```php
+// Repeating middleware on every route individually
+Route::get('/dashboard', [DashboardController::class, 'index'])->middleware('auth');
+Route::get('/profile',   [ProfileController::class, 'show'])->middleware('auth');
+Route::get('/settings',  [SettingsController::class, 'show'])->middleware('auth');
+Route::get('/users',     [UserController::class, 'index'])->middleware('auth');
+// ❌ repeated middleware on every route
+```
+</Wrong>
+<Right>
+```php
+// Group related routes and apply middleware once
+Route::middleware('auth')->group(function () {
+    Route::get('/dashboard', [DashboardController::class, 'index']);
+    Route::get('/profile',   [ProfileController::class, 'show']);
+    Route::get('/settings',  [SettingsController::class, 'show']);
+    Route::get('/users',     [UserController::class, 'index']);
+}); // ✅ middleware applied once to all
+```
+</Right>
+</WrongRight>
+
+## Best practices
+
+- Always name your routes — use `->name()` on every route
+- Use route groups to apply middleware, prefix, and name prefix in bulk
+- Organize `web.php` into logical sections with comments
+- Use `php artisan route:list` to verify routes during development
+- Run `php artisan route:cache` in production for faster routing
+- Never put business logic in route closures — use controllers
+- Use `Route::fallback()` to handle 404s gracefully
+
+<Callout type="tip">
+  Use the naming convention `resource.action` for route names — `users.index`, `users.show`, `users.store`, `users.update`, `users.destroy`. This matches what `Route::resource()` generates automatically and keeps your codebase consistent.
+</Callout>
+
+## Interview questions
+
+<InterviewQ question="What is the difference between web.php and api.php in Laravel?" difficulty="easy">
+  `web.php` is for browser-facing routes — it uses the `web` middleware group which includes session management, CSRF protection, and cookie handling. `api.php` is for stateless API routes — it uses the `api` middleware group which includes rate limiting but no sessions or CSRF. Routes in `api.php` are automatically prefixed with `/api`. Use `web.php` for server-rendered pages and `api.php` for JSON API endpoints.
+</InterviewQ>
+
+<InterviewQ question="Why should you always use named routes instead of hardcoded URLs?" difficulty="easy">
+  Named routes let you generate URLs using `route('name')` helper. If you rename or move a route, you only update the route definition — every `route()` call throughout your codebase automatically uses the new URL. Hardcoded URLs break silently when routes change and require a find-and-replace across every controller, view, and redirect.
+</InterviewQ>
+
+<InterviewQ question="What does php artisan route:cache do and when should you use it?" difficulty="mid">
+  `route:cache` compiles all your routes into a single cached file that Laravel loads instead of parsing route files on every request. This significantly speeds up routing in production. You should run it during deployment after all routes are finalized. Important: route caching doesn't work if any of your routes use closures — convert all closures to controller methods before caching.
+</InterviewQ>
+
+## My notes
+
+<MyNotes>
+  The naming convention `resource.action` saved me so many times. When I used to hardcode URLs, renaming a route meant hunting through controllers, views, and redirects. Now I name everything and only ever use `route('name')`.
+
+  The order of routes matters — Laravel matches the first route that fits. Put specific routes before general ones:
+```php
+  Route::get('/users/create', ...); // ✅ specific first
+  Route::get('/users/{id}',   ...); // ✅ general after
+  // If reversed — /users/create would match {id} with id = "create"
+```
+
+  `php artisan route:list` is underrated during debugging. Filter with `--name=` or `--path=` to find exactly what you need quickly.
+</MyNotes>
