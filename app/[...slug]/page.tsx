@@ -77,10 +77,10 @@ export default async function DocPage({ params }: Props) {
           prose-code:before:content-none prose-code:after:content-none
           prose-pre:rounded-xl
         ">
-          <MDXRemote 
-            source={doc.content} 
-            components={mdxComponents} 
-            options={{ mdxOptions }} // مررنا الـ options هنا بالسحر بتاعها
+          <MDXRemote
+            source={doc.content}
+            components={mdxComponents}
+            options={{ mdxOptions: mdxOptions as any }}
           />
         </div>
       </article>
