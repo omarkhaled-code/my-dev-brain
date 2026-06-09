@@ -66,7 +66,7 @@ export default async function DocPage({ params }: Props) {
       <ReadingProgress />
 
       {/* Main content — takes all remaining space */}
-      <article className="flex-1 min-w-0 max-w-4xl">
+      <article className="flex-1 min-w-0 max-w-5xl">
         <DocHeader doc={doc} />
         {/* شيلنا الـ prose-pre:bg-neutral-900 عشان نسيب Shiki يلون الخلفية 
           بناءً على الثيم اللي اخترناه فوق وميحصلش تضارب.

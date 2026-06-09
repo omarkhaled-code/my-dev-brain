@@ -29,7 +29,7 @@ export default function RootLayout({
           <div className="flex min-h-screen">
             <Sidebar navigation={navigation} />
             <div className="flex-1 min-w-0 overflow-x-hidden">
-              <main className="px-10 py-10 max-w-5xl">
+              <main className="px-10 py-10 max-w-8xl">
                 {children}
               </main>
             </div>
