@@ -4,7 +4,6 @@ import { getAllDocs, getDocBySlug } from "@/lib/docs";
 import { mdxComponents } from "@/components/docs/mdx-components";
 import { DocHeader } from "@/components/docs/DocHeader";
 import { TableOfContents } from "@/components/docs/TableOfContents";
-import { RelatedTopics } from "@/components/docs/RelatedTopics";
 import { ReadingProgress } from "@/components/docs/ReadingProgress";
 
 // بنستورد الـ Plugins عشان نشغل تلوين الكود والعناوين تلقائياً
@@ -84,13 +83,6 @@ export default async function DocPage({ params }: Props) {
           />
         </div>
       </article>
-
-      {/* Related topics — reads from frontmatter relatedTopics[] */}
-      <RelatedTopics
-        relatedTopics={doc.relatedTopics ?? []}
-        currentSlug={doc.slug}
-      />
-
       {/* TOC — fixed narrow width, only on very wide screens */}
       <aside className="w-44 shrink-0 hidden 2xl:block">
         <TableOfContents content={doc.content} />

@@ -13,7 +13,6 @@ export type DocFrontmatter = {
   difficulty: "beginner" | "intermediate" | "advanced";
   status: "draft" | "complete" | "needs-update";
   lastUpdated?: string;
-  relatedTopics: string[];
 };
 
 
@@ -38,7 +37,6 @@ export function getDocBySlug(slug: string): Doc | null {
     ...frontmatter,
     tools: frontmatter.tools ?? [],
     tags: frontmatter.tags ?? [],
-    relatedTopics: frontmatter.relatedTopics ?? [],
     slug,
     url: `/${slug}`,
     categoryFromPath: slug.split("/")[0],
